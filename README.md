@@ -27,7 +27,9 @@ pip install -e ".[dev]"
 ### Define Your Registry
 
 ```yaml
-# registry.yml - UUID is the primary key (dictionary key)
+# registry.yml
+# - UUID is the primary key (dictionary key)
+# - Services are first-class objects with port, protocol, exposure
 hosts:
   d1b9e5d5-36b0-459d-a556-96622811fbd5:
     canonical_name: my-database
@@ -36,8 +38,18 @@ hosts:
     cloud: aws
     tailscale_ip: 100.78.109.111
     services:
-      - postgresql
-      - redis
+      postgresql:
+        port: 5432
+        protocol: postgresql
+        exposure: internal
+      redis:
+        port: 6379
+        protocol: redis
+        exposure: internal
+      node-exporter:
+        port: 9100
+        protocol: http
+        exposure: internal
 ```
 
 ### Define Your Edges

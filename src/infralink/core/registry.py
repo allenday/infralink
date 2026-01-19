@@ -70,8 +70,26 @@ class Host:
         return self._schema.public_ip
 
     @property
-    def services(self) -> list[str]:
-        return self._schema.services
+    def services(self) -> dict[str, Any]:
+        """Service configurations keyed by service name."""
+        return {name: cfg.model_dump() for name, cfg in self._schema.services.items()}
+
+    @property
+    def service_names(self) -> list[str]:
+        """List of service names running on this host."""
+        return list(self._schema.services.keys())
+
+    def get_service(self, name: str) -> dict[str, Any] | None:
+        """Get service config by name."""
+        if name in self._schema.services:
+            return self._schema.services[name].model_dump()
+        return None
+
+    def get_service_port(self, name: str) -> int | None:
+        """Get port for a service."""
+        if name in self._schema.services:
+            return self._schema.services[name].port
+        return None
 
     @property
     def roles(self) -> dict[str, dict[str, Any]]:
@@ -81,7 +99,7 @@ class Host:
         return role in self._schema.roles
 
     def has_service(self, service: str) -> bool:
-        return service in self._schema.services
+        return service in self._schema.services.keys()
 
     def get_ip(self, prefer: str = "tailscale") -> str | None:
         """Get IP address with preference order."""

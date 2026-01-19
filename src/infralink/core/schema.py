@@ -27,13 +27,45 @@ class NetworkConfig(BaseModel):
     private_ip: str | None = None
 
 
-class ServiceConfig(BaseModel):
-    """Service declaration on a host."""
+class ServiceProtocol(str, Enum):
+    """Common service protocols."""
 
-    name: str
+    TCP = "tcp"
+    HTTP = "http"
+    HTTPS = "https"
+    POSTGRESQL = "postgresql"
+    MYSQL = "mysql"
+    REDIS = "redis"
+    GRPC = "grpc"
+    FASTCGI = "fastcgi"
+    SMTP = "smtp"
+    IRC = "irc"
+    WEBSOCKET = "websocket"
+
+
+class ServiceExposure(str, Enum):
+    """How a service is exposed."""
+
+    INTERNAL = "internal"  # Only accessible via tailscale/private network
+    PUBLIC = "public"  # Exposed to internet
+    LOCAL = "local"  # Only localhost
+
+
+class ServiceConfig(BaseModel):
+    """Service declaration on a host.
+
+    Services are first-class objects with their own properties,
+    enabling self-documenting registries, better health checks,
+    and richer diagrams.
+    """
+
     port: int | None = None
     protocol: str = "tcp"
-    healthcheck_path: str | None = None
+    exposure: ServiceExposure = ServiceExposure.INTERNAL
+    healthcheck_path: str | None = None  # For HTTP services
+    healthcheck_query: str | None = None  # For database services (e.g., "SELECT 1")
+    depends_on: list[str] = Field(default_factory=list)  # Local service dependencies
+    notes: str | None = None
 
 
 class ObservabilityConfig(BaseModel):
@@ -74,9 +106,20 @@ class HostSchema(BaseModel):
     public_ipv6: str | None = None
     private_ip: str | None = None
 
-    # Services
-    services: list[str] = Field(default_factory=list)
+    # Services - dict mapping service name to config
+    # Supports both new format (dict) and legacy format (list of strings)
+    services: dict[str, ServiceConfig] = Field(default_factory=dict)
     roles: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("services", mode="before")
+    @classmethod
+    def normalize_services(cls, v: Any) -> dict[str, ServiceConfig]:
+        """Convert legacy list format to dict format."""
+        if isinstance(v, list):
+            # Legacy format: ["nginx", "postgresql"]
+            # Convert to: {"nginx": {}, "postgresql": {}}
+            return {name: {} for name in v}
+        return v
 
     # Secrets
     bws_project: str | None = None
