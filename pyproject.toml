@@ -71,11 +71,8 @@ Documentation = "https://github.com/example/infralink#readme"
 Repository = "https://github.com/example/infralink"
 Issues = "https://github.com/example/infralink/issues"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/infralink"]
-
-[tool.hatch.build.targets.wheel.sources]
-"src" = ""
+[tool.hatch.build]
+sources = ["src"]
 
 [tool.hatch.build.targets.sdist]
 include = [
