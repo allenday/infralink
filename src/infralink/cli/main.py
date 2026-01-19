@@ -94,12 +94,14 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool) -> None:
 
 
 # Import and register subcommands
+from infralink.cli.analyze import analyze
 from infralink.cli.check import check
 from infralink.cli.diagram import diagram
 from infralink.cli.docs import docs
 from infralink.cli.resolve import resolve
 from infralink.cli.validate import validate
 
+cli.add_command(analyze)
 cli.add_command(check)
 cli.add_command(diagram)
 cli.add_command(docs)
