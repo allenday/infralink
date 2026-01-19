@@ -1,0 +1,103 @@
+# Example Infrastructure Registry
+# This file defines infrastructure hosts with UUID primary keys
+
+hosts:
+  # Database server
+  production_database:
+    uuid: d1b9e5d5-36b0-459d-a556-96622811fbd5
+    canonical_name: prod-database
+    status: active
+    group: production
+    cloud: hetzner-cloud
+    tailscale_ip: 100.78.109.111
+    tailscale_name: prod-database
+    public_ip: 91.99.122.86
+    services:
+      - postgresql
+      - redis
+      - mariadb
+    observability:
+      ready: true
+      managed_services:
+        - node-exporter
+        - postgres-exporter
+        - redis-exporter
+
+  # Application server 1
+  production_app_1:
+    uuid: fa2b9872-d94c-4b20-a73a-57a205560769
+    canonical_name: prod-app-1
+    status: active
+    group: production
+    cloud: hetzner-cloud
+    tailscale_ip: 100.69.66.115
+    tailscale_name: prod-app-1
+    public_ip: 162.55.23.32
+    services:
+      - nginx
+      - app-worker
+    roles:
+      app-worker:
+        concurrency: 10
+    observability:
+      ready: true
+      managed_services:
+        - node-exporter
+        - cadvisor
+
+  # Application server 2
+  production_app_2:
+    uuid: b1a554f8-76ed-4d98-91bb-f0fbfc2818d1
+    canonical_name: prod-app-2
+    status: active
+    group: production
+    cloud: hetzner-cloud
+    tailscale_ip: 100.82.220.106
+    tailscale_name: prod-app-2
+    public_ip: 78.46.72.53
+    services:
+      - nginx
+      - app-worker
+    roles:
+      app-worker:
+        concurrency: 10
+    observability:
+      ready: true
+      managed_services:
+        - node-exporter
+        - cadvisor
+
+  # Monitoring server
+  monitoring_bastion:
+    uuid: 97da6b29-9b36-4d78-999d-739e6529f17d
+    canonical_name: monitoring-bastion
+    status: active
+    group: infrastructure
+    cloud: hetzner-cloud
+    tailscale_ip: 100.91.20.46
+    tailscale_name: monitoring-bastion
+    public_ip: 91.99.181.74
+    services:
+      - prometheus
+      - grafana
+      - otel-collector
+    observability:
+      ready: true
+      managed_services:
+        - node-exporter
+
+  # Staging database (terminated)
+  staging_database:
+    uuid: e1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c
+    canonical_name: staging-database
+    status: terminated
+    group: staging
+    cloud: gcp
+    public_ip: 34.66.108.223
+    services:
+      - postgresql
+
+# Ansible defaults
+ansible_defaults:
+  ansible_user: root
+  ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new

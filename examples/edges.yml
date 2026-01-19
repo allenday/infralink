@@ -1,0 +1,122 @@
+# Example Edge Declarations
+# This file defines connections between infrastructure nodes
+
+schema_version: "1.0"
+
+edge_types:
+  database:
+    healthcheck_default: tcp
+    protocols: [postgresql, mysql, mongodb]
+  queue:
+    healthcheck_default: ping
+    protocols: [redis, rabbitmq, kafka]
+  monitoring:
+    healthcheck_default: http
+    protocols: [http/prometheus]
+
+edges:
+  # Application to PostgreSQL
+  - id: app-to-postgres
+    type: database
+    from:
+      hosts:
+        - fa2b9872-d94c-4b20-a73a-57a205560769  # prod-app-1
+        - b1a554f8-76ed-4d98-91bb-f0fbfc2818d1  # prod-app-2
+      service: app-worker
+    to:
+      host: d1b9e5d5-36b0-459d-a556-96622811fbd5  # prod-database
+      service: postgresql
+      port: 5432
+    protocol: postgresql+psycopg2
+    auth:
+      type: password
+      secret_ref: app_postgresql_password
+    healthcheck:
+      type: tcp
+      interval: 60s
+      timeout: 5s
+    metadata:
+      purpose: Application database for user data
+      criticality: critical
+      owner: platform-team
+      runbook: docs/runbooks/app-database.md
+
+  # Application to Redis (cache/queue)
+  - id: app-to-redis
+    type: queue
+    from:
+      hosts:
+        - fa2b9872-d94c-4b20-a73a-57a205560769
+        - b1a554f8-76ed-4d98-91bb-f0fbfc2818d1
+      service: app-worker
+    to:
+      host: d1b9e5d5-36b0-459d-a556-96622811fbd5
+      service: redis
+      port: 6379
+    protocol: redis
+    auth:
+      type: password
+      secret_ref: app_redis_password
+    healthcheck:
+      type: ping
+      interval: 30s
+    metadata:
+      purpose: Cache and job queue
+      criticality: critical
+
+  # Prometheus scraping all nodes
+  - id: prometheus-to-exporters
+    type: monitoring
+    from:
+      host: 97da6b29-9b36-4d78-999d-739e6529f17d  # monitoring-bastion
+      service: prometheus
+    to:
+      selector:
+        observability.ready: true
+      services:
+        - service: node-exporter
+          port: 9100
+    protocol: http/prometheus
+    auth:
+      type: basic
+      secret_ref: node_exporter_password
+    metadata:
+      purpose: Infrastructure metrics collection
+      criticality: high
+
+  # OTEL telemetry collection
+  - id: otel-to-collector
+    type: telemetry
+    from:
+      hosts: "*"  # All hosts with OTEL instrumentation
+      service: otel-client
+    to:
+      host: 97da6b29-9b36-4d78-999d-739e6529f17d
+      service: otel-collector
+      port: 4317
+    protocol: otlp/grpc
+    healthcheck:
+      type: tcp
+      interval: 60s
+    metadata:
+      purpose: Centralized telemetry collection
+      criticality: medium
+
+  # Grafana to database (for dashboards)
+  - id: grafana-to-postgres
+    type: database
+    from:
+      hosts:
+        - 97da6b29-9b36-4d78-999d-739e6529f17d
+      service: grafana
+    to:
+      host: d1b9e5d5-36b0-459d-a556-96622811fbd5
+      service: postgresql
+      port: 5432
+    protocol: postgresql
+    auth:
+      type: password
+      secret_ref: grafana_postgresql_password
+    metadata:
+      purpose: Grafana metrics database
+      criticality: medium

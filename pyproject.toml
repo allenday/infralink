@@ -1,0 +1,111 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infralink"
+version = "0.1.0"
+description = "Infrastructure topology modeling with UUID-based nodes and typed edges"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Infrastructure Team" }
+]
+keywords = [
+    "infrastructure",
+    "topology",
+    "graph",
+    "gitops",
+    "monitoring",
+    "documentation",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "click>=8.0",
+    "rich>=13.0",
+    "jinja2>=3.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+    "types-PyYAML",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+]
+
+[project.scripts]
+infralink = "infralink.cli.main:cli"
+
+[project.entry-points."infralink.commands"]
+check = "infralink.cli.check:check"
+diagram = "infralink.cli.diagram:diagram"
+docs = "infralink.cli.docs:docs"
+validate = "infralink.cli.validate:validate"
+resolve = "infralink.cli.resolve:resolve"
+
+[project.urls]
+Homepage = "https://github.com/example/infralink"
+Documentation = "https://github.com/example/infralink#readme"
+Repository = "https://github.com/example/infralink"
+Issues = "https://github.com/example/infralink/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infralink"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/examples",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --cov=infralink --cov-report=term-missing"
