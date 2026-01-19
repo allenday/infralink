@@ -11,28 +11,38 @@ from infralink.core.schema import HostSchema, HostStatus, RegistrySchema
 
 
 class Host:
-    """Represents an infrastructure host."""
+    """
+    Represents an infrastructure host.
 
-    def __init__(self, name: str, data: dict[str, Any]) -> None:
-        self._name = name
+    The UUID is the primary identifier (immutable), passed separately
+    from the host data since it's the dictionary key in the registry.
+    """
+
+    def __init__(self, uuid: str, data: dict[str, Any]) -> None:
+        """
+        Initialize a host.
+
+        Args:
+            uuid: The host's UUID (primary key from registry)
+            data: Host configuration data (without uuid field)
+        """
+        self._uuid = uuid
         self._data = data
-        self._schema = HostSchema(canonical_name=data.get("canonical_name", name), **data)
+        self._schema = HostSchema(**data)
 
     @property
     def uuid(self) -> str:
-        return self._schema.uuid
+        """The host's UUID (primary identifier, immutable)."""
+        return self._uuid
 
     @property
     def uuid_prefix(self) -> str:
         """First 8 characters of UUID."""
-        return self.uuid[:8]
-
-    @property
-    def name(self) -> str:
-        return self._name
+        return self._uuid[:8]
 
     @property
     def canonical_name(self) -> str:
+        """Human-readable name for the host."""
         return self._schema.canonical_name
 
     @property
@@ -84,7 +94,10 @@ class Host:
         return self.tailscale_ip
 
     def to_dict(self) -> dict[str, Any]:
-        return self._data.copy()
+        """Return host data as dictionary (includes uuid)."""
+        result = self._data.copy()
+        result["uuid"] = self._uuid
+        return result
 
     def __repr__(self) -> str:
         return f"Host({self.canonical_name}, uuid={self.uuid_prefix}..., status={self.status.value})"
@@ -95,12 +108,22 @@ class Registry:
     Infrastructure host registry.
 
     Loads and manages host definitions from a YAML registry file.
+    Uses UUID as the primary key for each host.
     """
 
     def __init__(self, hosts: dict[str, Host], defaults: dict[str, Any] | None = None) -> None:
-        self._hosts = hosts
+        """
+        Initialize registry.
+
+        Args:
+            hosts: Dictionary mapping UUID -> Host
+            defaults: Ansible defaults configuration
+        """
+        self._hosts = hosts  # UUID -> Host
         self._defaults = defaults or {}
-        self._uuid_index: dict[str, Host] = {h.uuid: h for h in hosts.values()}
+        # Secondary index: canonical_name -> Host
+        self._name_index: dict[str, Host] = {h.canonical_name: h for h in hosts.values()}
+        # Secondary index: uuid_prefix -> Host
         self._uuid_prefix_index: dict[str, Host] = {h.uuid_prefix: h for h in hosts.values()}
 
     @classmethod
@@ -113,7 +136,8 @@ class Registry:
         # Validate with schema
         schema = RegistrySchema(**data)
 
-        hosts = {name: Host(name, host.model_dump()) for name, host in schema.hosts.items()}
+        # UUID is the key, data is the value
+        hosts = {uuid: Host(uuid, host.model_dump()) for uuid, host in schema.hosts.items()}
 
         return cls(hosts, schema.ansible_defaults)
 
@@ -121,12 +145,13 @@ class Registry:
     def from_dict(cls, data: dict[str, Any]) -> Registry:
         """Create registry from dictionary."""
         hosts_data = data.get("hosts", {})
-        hosts = {name: Host(name, h) for name, h in hosts_data.items()}
+        # UUID is the key
+        hosts = {uuid: Host(uuid, h) for uuid, h in hosts_data.items()}
         return cls(hosts, data.get("ansible_defaults"))
 
     def get_by_uuid(self, uuid: str) -> Host | None:
-        """Get host by full UUID."""
-        return self._uuid_index.get(uuid)
+        """Get host by full UUID (primary lookup)."""
+        return self._hosts.get(uuid)
 
     def get_by_uuid_prefix(self, prefix: str) -> Host | None:
         """Get host by UUID prefix (first 8 chars)."""
@@ -134,29 +159,24 @@ class Registry:
         if prefix in self._uuid_prefix_index:
             return self._uuid_prefix_index[prefix]
         # Try partial match
-        for full_uuid, host in self._uuid_index.items():
+        for full_uuid, host in self._hosts.items():
             if full_uuid.startswith(prefix):
                 return host
         return None
 
     def get_by_name(self, name: str) -> Host | None:
-        """Get host by registry name or canonical name."""
-        if name in self._hosts:
-            return self._hosts[name]
-        for host in self._hosts.values():
-            if host.canonical_name == name:
-                return host
-        return None
+        """Get host by canonical name."""
+        return self._name_index.get(name)
 
     def get(self, identifier: str) -> Host | None:
-        """Get host by UUID, UUID prefix, or name."""
-        # Try UUID first
+        """Get host by UUID, UUID prefix, or canonical name."""
+        # Try UUID first (most specific)
         if host := self.get_by_uuid(identifier):
             return host
         # Try UUID prefix
         if host := self.get_by_uuid_prefix(identifier):
             return host
-        # Try name
+        # Try canonical name
         return self.get_by_name(identifier)
 
     def filter(

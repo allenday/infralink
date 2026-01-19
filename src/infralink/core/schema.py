@@ -46,10 +46,22 @@ class ObservabilityConfig(BaseModel):
     notes: str | None = None
 
 
-class HostSchema(BaseModel):
-    """Schema for a host in the registry."""
+def validate_uuid_format(uuid: str) -> bool:
+    """Validate UUID format (loose check)."""
+    parts = uuid.split("-")
+    return len(parts) == 5
 
-    uuid: str
+
+class HostSchema(BaseModel):
+    """
+    Schema for a host in the registry.
+
+    Note: The UUID is the dictionary key, not a field in the schema.
+    This ensures UUID-as-primary-key semantics where the identity
+    is immutable and separate from mutable fields like canonical_name.
+    """
+
+    # Identity (canonical_name is the human-readable identifier)
     canonical_name: str
     status: HostStatus = HostStatus.ACTIVE
     group: str | None = None
@@ -80,21 +92,27 @@ class HostSchema(BaseModel):
     created: str | None = None
     updated: str | None = None
 
-    @field_validator("uuid")
-    @classmethod
-    def validate_uuid_format(cls, v: str) -> str:
-        """Validate UUID format (loose check)."""
-        parts = v.split("-")
-        if len(parts) != 5:
-            raise ValueError(f"Invalid UUID format: {v}")
-        return v
-
 
 class RegistrySchema(BaseModel):
-    """Schema for the complete host registry."""
+    """
+    Schema for the complete host registry.
+
+    The hosts dictionary uses UUID as the key (primary identifier).
+    This ensures immutable identity - renaming a host only changes
+    the canonical_name field, not the key.
+    """
 
     hosts: dict[str, HostSchema]
     ansible_defaults: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("hosts")
+    @classmethod
+    def validate_host_uuids(cls, v: dict[str, HostSchema]) -> dict[str, HostSchema]:
+        """Validate that all host keys are valid UUIDs."""
+        for key in v.keys():
+            if not validate_uuid_format(key):
+                raise ValueError(f"Invalid UUID format for host key: {key}")
+        return v
 
 
 # --- Edge Schemas ---

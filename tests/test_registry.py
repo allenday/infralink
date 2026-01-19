@@ -9,11 +9,15 @@ from infralink.core.schema import HostStatus
 
 @pytest.fixture
 def sample_registry_data():
-    """Sample registry data for testing."""
+    """Sample registry data for testing.
+
+    UUID is the dictionary key (primary identifier).
+    canonical_name is the human-readable identifier inside the host data.
+    """
     return {
         "hosts": {
-            "test_host_1": {
-                "uuid": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+            # UUID is the key
+            "d1b9e5d5-36b0-459d-a556-96622811fbd5": {
                 "canonical_name": "test-host-1",
                 "status": "active",
                 "group": "production",
@@ -21,8 +25,7 @@ def sample_registry_data():
                 "tailscale_ip": "100.78.109.111",
                 "services": ["postgresql", "redis"],
             },
-            "test_host_2": {
-                "uuid": "fa2b9872-d94c-4b20-a73a-57a205560769",
+            "fa2b9872-d94c-4b20-a73a-57a205560769": {
                 "canonical_name": "test-host-2",
                 "status": "active",
                 "group": "production",
@@ -30,8 +33,7 @@ def sample_registry_data():
                 "tailscale_ip": "100.69.66.115",
                 "services": ["nginx", "app"],
             },
-            "terminated_host": {
-                "uuid": "e1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
+            "e1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c": {
                 "canonical_name": "terminated-host",
                 "status": "terminated",
                 "group": "staging",
@@ -47,8 +49,9 @@ class TestHost:
 
     def test_host_properties(self, sample_registry_data):
         """Test basic host properties."""
-        data = sample_registry_data["hosts"]["test_host_1"]
-        host = Host("test_host_1", data)
+        uuid = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
+        data = sample_registry_data["hosts"][uuid]
+        host = Host(uuid, data)
 
         assert host.uuid == "d1b9e5d5-36b0-459d-a556-96622811fbd5"
         assert host.uuid_prefix == "d1b9e5d5"
@@ -61,20 +64,23 @@ class TestHost:
 
     def test_host_services(self, sample_registry_data):
         """Test host service queries."""
-        data = sample_registry_data["hosts"]["test_host_1"]
-        host = Host("test_host_1", data)
+        uuid = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
+        data = sample_registry_data["hosts"][uuid]
+        host = Host(uuid, data)
 
         assert host.has_service("postgresql")
         assert host.has_service("redis")
         assert not host.has_service("nginx")
 
     def test_host_get_ip(self, sample_registry_data):
-        """Test IP address retrieval."""
-        data = sample_registry_data["hosts"]["test_host_1"]
-        host = Host("test_host_1", data)
+        """Test IP address retrieval with fallback."""
+        uuid = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
+        data = sample_registry_data["hosts"][uuid]
+        host = Host(uuid, data)
 
         assert host.get_ip("tailscale") == "100.78.109.111"
-        assert host.get_ip("public") is None  # No public IP defined
+        # Falls back to tailscale_ip when public_ip is not defined
+        assert host.get_ip("public") == "100.78.109.111"
 
 
 class TestRegistry:

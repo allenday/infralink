@@ -9,19 +9,21 @@ from infralink.core.resolver import EdgeResolver, ResolutionError
 
 @pytest.fixture
 def registry():
-    """Create a test registry."""
+    """Create a test registry.
+
+    UUID is the dictionary key (primary identifier).
+    """
     return Registry.from_dict({
         "hosts": {
-            "database": {
-                "uuid": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+            # UUID is the key
+            "d1b9e5d5-36b0-459d-a556-96622811fbd5": {
                 "canonical_name": "prod-database",
                 "status": "active",
                 "tailscale_ip": "100.78.109.111",
                 "public_ip": "91.99.122.86",
                 "services": ["postgresql", "redis"],
             },
-            "app": {
-                "uuid": "fa2b9872-d94c-4b20-a73a-57a205560769",
+            "fa2b9872-d94c-4b20-a73a-57a205560769": {
                 "canonical_name": "prod-app",
                 "status": "active",
                 "tailscale_ip": "100.69.66.115",

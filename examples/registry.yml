@@ -1,10 +1,10 @@
 # Example Infrastructure Registry
-# This file defines infrastructure hosts with UUID primary keys
+# UUID is the primary key (immutable identity)
+# canonical_name is the human-readable identifier (can be renamed)
 
 hosts:
   # Database server
-  production_database:
-    uuid: d1b9e5d5-36b0-459d-a556-96622811fbd5
+  d1b9e5d5-36b0-459d-a556-96622811fbd5:
     canonical_name: prod-database
     status: active
     group: production
@@ -24,8 +24,7 @@ hosts:
         - redis-exporter
 
   # Application server 1
-  production_app_1:
-    uuid: fa2b9872-d94c-4b20-a73a-57a205560769
+  fa2b9872-d94c-4b20-a73a-57a205560769:
     canonical_name: prod-app-1
     status: active
     group: production
@@ -46,8 +45,7 @@ hosts:
         - cadvisor
 
   # Application server 2
-  production_app_2:
-    uuid: b1a554f8-76ed-4d98-91bb-f0fbfc2818d1
+  b1a554f8-76ed-4d98-91bb-f0fbfc2818d1:
     canonical_name: prod-app-2
     status: active
     group: production
@@ -68,8 +66,7 @@ hosts:
         - cadvisor
 
   # Monitoring server
-  monitoring_bastion:
-    uuid: 97da6b29-9b36-4d78-999d-739e6529f17d
+  97da6b29-9b36-4d78-999d-739e6529f17d:
     canonical_name: monitoring-bastion
     status: active
     group: infrastructure
@@ -87,8 +84,7 @@ hosts:
         - node-exporter
 
   # Staging database (terminated)
-  staging_database:
-    uuid: e1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c
+  e1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c:
     canonical_name: staging-database
     status: terminated
     group: staging
