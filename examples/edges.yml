@@ -64,18 +64,17 @@ edges:
       purpose: Cache and job queue
       criticality: critical
 
-  # Prometheus scraping all nodes
-  - id: prometheus-to-exporters
+  # Prometheus scraping database node-exporter
+  - id: prometheus-to-database-exporter
     type: monitoring
     from:
-      host: 97da6b29-9b36-4d78-999d-739e6529f17d  # monitoring-bastion
+      hosts:
+        - 97da6b29-9b36-4d78-999d-739e6529f17d  # monitoring-bastion
       service: prometheus
     to:
-      selector:
-        observability.ready: true
-      services:
-        - service: node-exporter
-          port: 9100
+      host: d1b9e5d5-36b0-459d-a556-96622811fbd5  # prod-database
+      service: node-exporter
+      port: 9100
     protocol: http/prometheus
     auth:
       type: basic

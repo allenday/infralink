@@ -13,8 +13,8 @@ from infralink import __version__
 console = Console()
 
 # Default paths (can be overridden)
-DEFAULT_REGISTRY = "ansible/inventory/uuid_registry.yml"
-DEFAULT_EDGES = "ansible/inventory/edges.yml"
+DEFAULT_REGISTRY = "examples/registry.yml"
+DEFAULT_EDGES = "examples/edges.yml"
 
 
 class Context:

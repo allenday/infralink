@@ -27,10 +27,9 @@ pip install -e ".[dev]"
 ### Define Your Registry
 
 ```yaml
-# registry.yml
+# registry.yml - UUID is the primary key (dictionary key)
 hosts:
-  database_server:
-    uuid: d1b9e5d5-36b0-459d-a556-96622811fbd5
+  d1b9e5d5-36b0-459d-a556-96622811fbd5:
     canonical_name: my-database
     status: active
     group: production
@@ -151,8 +150,8 @@ print(f"Healthy: {result.healthy}, Latency: {result.latency_ms}ms")
 ## Configuration
 
 Default paths (can be overridden with CLI options):
-- Registry: `ansible/inventory/uuid_registry.yml`
-- Edges: `ansible/inventory/edges.yml`
+- Registry: `examples/registry.yml`
+- Edges: `examples/edges.yml`
 
 ```bash
 # Custom paths
