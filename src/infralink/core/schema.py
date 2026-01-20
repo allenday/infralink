@@ -62,19 +62,44 @@ class ServiceConfig(BaseModel):
     port: int | None = None
     protocol: str = "tcp"
     exposure: ServiceExposure = ServiceExposure.INTERNAL
-    healthcheck_path: str | None = None  # For HTTP services
-    healthcheck_query: str | None = None  # For database services (e.g., "SELECT 1")
     depends_on: list[str] = Field(default_factory=list)  # Local service dependencies
     notes: str | None = None
 
 
-class ObservabilityConfig(BaseModel):
-    """Observability configuration for a host."""
+class RoleConfig(BaseModel):
+    """Role definition - a contract for what a host should have.
 
-    ready: bool = False
-    managed_services: list[str] = Field(default_factory=list)
-    unmanaged_services: list[str] = Field(default_factory=list)
-    port_overrides: dict[str, int] = Field(default_factory=dict)
+    Roles define expected services, exporters, and secrets.
+    Hosts declare roles; services are derived from roles.
+    """
+
+    services: dict[str, ServiceConfig] = Field(default_factory=dict)
+    required_secrets: list[str] = Field(default_factory=list)
+    description: str | None = None
+
+
+class ProviderMetadata(BaseModel):
+    """Cloud provider-specific metadata.
+
+    Generic key-value for provider-specific fields like
+    hcloud_project, robot_id, scaleway_server_id, etc.
+    """
+
+    model_config = {"extra": "allow"}  # Allow arbitrary fields
+
+
+class ObservabilityConfig(BaseModel):
+    """Observability configuration for a host.
+
+    Tracks what's monitored vs what should be monitored.
+    Health is derived from prometheus scrape success, not explicit probes.
+    """
+
+    ready: bool = False  # Is this host fully observable?
+    managed_services: list[str] = Field(default_factory=list)  # Monitored by prometheus
+    unmanaged_services: list[str] = Field(default_factory=list)  # Not yet monitored
+    missing_exporters: list[str] = Field(default_factory=list)  # Known gaps
+    port_overrides: dict[str, int] = Field(default_factory=dict)  # Non-standard ports
     notes: str | None = None
 
 
@@ -91,6 +116,12 @@ class HostSchema(BaseModel):
     Note: The UUID is the dictionary key, not a field in the schema.
     This ensures UUID-as-primary-key semantics where the identity
     is immutable and separate from mutable fields like canonical_name.
+
+    Design principles:
+    - Roles define expected services (contracts)
+    - Services are derived from roles, explicit only for one-offs
+    - Provider-specific metadata in generic bucket
+    - Health derived from prometheus scrape success
     """
 
     # Identity (canonical_name is the human-readable identifier)
@@ -103,13 +134,20 @@ class HostSchema(BaseModel):
     tailscale_ip: str | None = None
     tailscale_name: str | None = None
     public_ip: str | None = None
+    public_ip_secondary: str | None = None  # Failover/additional IP
     public_ipv6: str | None = None
     private_ip: str | None = None
+    use_exit_node: bool = False  # Routes traffic through tailscale exit node
+    dns_hostnames: list[str] = Field(default_factory=list)
 
-    # Services - dict mapping service name to config
+    # Roles - declare what contracts this host fulfills
+    # Services are derived from roles; role_overrides for customization
+    roles: list[str] = Field(default_factory=list)
+    role_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    # Services - explicit services not covered by roles (one-offs)
     # Supports both new format (dict) and legacy format (list of strings)
     services: dict[str, ServiceConfig] = Field(default_factory=dict)
-    roles: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator("services", mode="before")
     @classmethod
@@ -121,19 +159,36 @@ class HostSchema(BaseModel):
             return {name: {} for name in v}
         return v
 
+    @field_validator("roles", mode="before")
+    @classmethod
+    def normalize_roles(cls, v: Any) -> list[str]:
+        """Convert legacy dict format to list format."""
+        if isinstance(v, dict):
+            # Legacy format: {"airflow-worker": {"concurrency": 10}}
+            # Convert to list, store config in role_overrides via separate validator
+            return list(v.keys())
+        return v
+
     # Secrets
     bws_project: str | None = None
     bws_machine_account: str | None = None
     bws_extra_projects: list[str] = Field(default_factory=list)
 
-    # Observability
+    # Provider-specific metadata (hcloud_project, robot_id, etc.)
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    # Mounts (storagebox, gcsfuse, etc.)
+    mounts: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    # Observability config (what should be monitored)
     observability: ObservabilityConfig | None = None
 
     # Metadata
-    dns_hostnames: list[str] = Field(default_factory=list)
     docker_version: str | None = None
     created: str | None = None
     updated: str | None = None
+    legacy_instances: list[str] = Field(default_factory=list)  # Old ansible names
+    notes: str | None = None
 
 
 class RegistrySchema(BaseModel):

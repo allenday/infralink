@@ -92,11 +92,37 @@ class Host:
         return None
 
     @property
-    def roles(self) -> dict[str, dict[str, Any]]:
+    def roles(self) -> list[str]:
+        """List of roles this host fulfills."""
         return self._schema.roles
+
+    @property
+    def role_overrides(self) -> dict[str, dict[str, Any]]:
+        """Role-specific configuration overrides."""
+        return self._schema.role_overrides
 
     def has_role(self, role: str) -> bool:
         return role in self._schema.roles
+
+    @property
+    def public_ip_secondary(self) -> str | None:
+        return self._schema.public_ip_secondary
+
+    @property
+    def use_exit_node(self) -> bool:
+        return self._schema.use_exit_node
+
+    @property
+    def dns_hostnames(self) -> list[str]:
+        return self._schema.dns_hostnames
+
+    @property
+    def provider_metadata(self) -> dict[str, Any]:
+        return self._schema.provider_metadata
+
+    @property
+    def mounts(self) -> dict[str, dict[str, Any]]:
+        return self._schema.mounts
 
     def has_service(self, service: str) -> bool:
         return service in self._schema.services.keys()

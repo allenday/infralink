@@ -1,10 +1,14 @@
 # Example Infrastructure Registry
-# UUID is the primary key (immutable identity)
-# canonical_name is the human-readable identifier (can be renamed)
-# Services are first-class objects with port, protocol, exposure
+#
+# Design principles:
+# - UUID is the primary key (immutable identity)
+# - Roles define expected services (contracts)
+# - Services are first-class objects with port/protocol/exposure
+# - Provider-specific metadata in generic bucket
+# - Health derived from prometheus scrape success
 
 hosts:
-  # Database server
+  # Database server - declares roles, services derived
   d1b9e5d5-36b0-459d-a556-96622811fbd5:
     canonical_name: prod-database
     status: active
@@ -13,23 +17,19 @@ hosts:
     tailscale_ip: 100.78.109.111
     tailscale_name: prod-database
     public_ip: 91.99.122.86
+    use_exit_node: false
+    dns_hostnames:
+      - db.internal.example.com
+
+    # Roles this host fulfills (services derived from role definitions)
+    roles:
+      - postgresql
+      - redis
+      - mariadb
+      - node-exporter
+
+    # Explicit services (one-offs not covered by roles)
     services:
-      postgresql:
-        port: 5432
-        protocol: postgresql
-        exposure: internal
-      redis:
-        port: 6379
-        protocol: redis
-        exposure: internal
-      mariadb:
-        port: 3306
-        protocol: mysql
-        exposure: internal
-      node-exporter:
-        port: 9100
-        protocol: http
-        exposure: internal
       postgres-exporter:
         port: 9187
         protocol: http
@@ -38,6 +38,10 @@ hosts:
         port: 9121
         protocol: http
         exposure: internal
+
+    provider_metadata:
+      hcloud_project: my-project
+
     observability:
       ready: true
       managed_services:
@@ -50,35 +54,36 @@ hosts:
     canonical_name: prod-app-1
     status: active
     group: production
-    cloud: hetzner-cloud
+    cloud: hetzner-robot
     tailscale_ip: 100.69.66.115
     tailscale_name: prod-app-1
     public_ip: 162.55.23.32
-    services:
-      nginx:
-        port: 80
-        protocol: http
-        exposure: public
-      nginx-https:
-        port: 443
-        protocol: https
-        exposure: public
-      app-worker:
-        port: 8000
-        protocol: http
-        exposure: internal
-        notes: "Gunicorn/uvicorn app server"
-      node-exporter:
-        port: 9100
-        protocol: http
-        exposure: internal
-      cadvisor:
-        port: 8080
-        protocol: http
-        exposure: internal
+    public_ip_secondary: 162.55.23.33
+    use_exit_node: false
+    dns_hostnames:
+      - app1.example.com
+      - www.example.com
+
     roles:
+      - nginx
+      - app-worker
+      - node-exporter
+      - cadvisor
+    role_overrides:
       app-worker:
         concurrency: 10
+
+    provider_metadata:
+      robot_id: 2440889
+      robot_product: AX162-R
+      robot_dc: FSN1-DC19
+
+    mounts:
+      storagebox0:
+        type: cifs
+        source: //u1234.your-storagebox.de/backup
+        target: /mnt/storagebox0
+
     observability:
       ready: true
       managed_services:
@@ -90,34 +95,27 @@ hosts:
     canonical_name: prod-app-2
     status: active
     group: production
-    cloud: hetzner-cloud
+    cloud: hetzner-robot
     tailscale_ip: 100.82.220.106
     tailscale_name: prod-app-2
     public_ip: 78.46.72.53
-    services:
-      nginx:
-        port: 80
-        protocol: http
-        exposure: public
-      nginx-https:
-        port: 443
-        protocol: https
-        exposure: public
-      app-worker:
-        port: 8000
-        protocol: http
-        exposure: internal
-      node-exporter:
-        port: 9100
-        protocol: http
-        exposure: internal
-      cadvisor:
-        port: 8080
-        protocol: http
-        exposure: internal
+    use_exit_node: false
+
     roles:
+      - nginx
+      - app-worker
+      - node-exporter
+      - cadvisor
+    role_overrides:
       app-worker:
         concurrency: 10
+
+    mounts:
+      storagebox0:
+        type: cifs
+        source: //u1234.your-storagebox.de/backup
+        target: /mnt/storagebox0
+
     observability:
       ready: true
       managed_services:
@@ -133,26 +131,18 @@ hosts:
     tailscale_ip: 100.91.20.46
     tailscale_name: monitoring-bastion
     public_ip: 91.99.181.74
-    services:
-      prometheus:
-        port: 9090
-        protocol: http
-        exposure: internal
-        healthcheck_path: /-/healthy
-      grafana:
-        port: 3000
-        protocol: http
-        exposure: internal
-        healthcheck_path: /api/health
-      otel-collector:
-        port: 4317
-        protocol: grpc
-        exposure: internal
-        notes: "OTLP gRPC receiver"
-      node-exporter:
-        port: 9100
-        protocol: http
-        exposure: internal
+    use_exit_node: false
+
+    roles:
+      - prometheus
+      - grafana
+      - otel-collector
+      - node-exporter
+      - tailscale-exit-node
+
+    provider_metadata:
+      hcloud_project: my-project
+
     observability:
       ready: true
       managed_services:
@@ -165,10 +155,13 @@ hosts:
     group: staging
     cloud: gcp
     public_ip: 34.66.108.223
-    services:
-      postgresql:
-        port: 5432
-        protocol: postgresql
+
+    roles:
+      - postgresql
+
+    provider_metadata:
+      gcp_project: my-staging
+      gcp_zone: us-central1-a
 
 # Ansible defaults
 ansible_defaults:

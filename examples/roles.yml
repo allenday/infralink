@@ -1,0 +1,177 @@
+# Role Definitions
+#
+# Roles are contracts that define what services a host should have.
+# When a host declares a role, it inherits the service definitions.
+# This ensures consistency (mariadb always has mysqld-exporter).
+
+roles:
+  # Database roles
+  postgresql:
+    description: PostgreSQL database server
+    services:
+      postgresql:
+        port: 5432
+        protocol: postgresql
+        exposure: internal
+    required_secrets:
+      - postgres_password
+
+  mariadb:
+    description: MariaDB/MySQL database server
+    services:
+      mariadb:
+        port: 3306
+        protocol: mysql
+        exposure: internal
+      mysqld-exporter:
+        port: 9104
+        protocol: http
+        exposure: internal
+    required_secrets:
+      - mysql_root_password
+      - mysql_exporter_password
+
+  redis:
+    description: Redis cache/queue server
+    services:
+      redis:
+        port: 6379
+        protocol: redis
+        exposure: internal
+      redis-exporter:
+        port: 9121
+        protocol: http
+        exposure: internal
+    required_secrets:
+      - redis_password
+
+  elasticsearch:
+    description: Elasticsearch search/analytics
+    services:
+      elasticsearch:
+        port: 9200
+        protocol: http
+        exposure: internal
+      elasticsearch-exporter:
+        port: 9114
+        protocol: http
+        exposure: internal
+
+  # Application roles
+  nginx:
+    description: Nginx web server / reverse proxy
+    services:
+      nginx-http:
+        port: 80
+        protocol: http
+        exposure: public
+      nginx-https:
+        port: 443
+        protocol: https
+        exposure: public
+      nginx-exporter:
+        port: 9113
+        protocol: http
+        exposure: internal
+
+  app-worker:
+    description: Application worker (gunicorn, uvicorn, php-fpm)
+    services:
+      app-worker:
+        port: 8000
+        protocol: http
+        exposure: internal
+        notes: "Port varies by implementation"
+
+  airflow-worker:
+    description: Airflow celery worker
+    services:
+      airflow-worker:
+        port: 8793
+        protocol: http
+        exposure: internal
+      airflow-exporter:
+        port: 9112
+        protocol: http
+        exposure: internal
+
+  wordpress:
+    description: WordPress with PHP-FPM
+    services:
+      php-fpm:
+        port: 9000
+        protocol: fastcgi
+        exposure: internal
+      php-fpm-exporter:
+        port: 9253
+        protocol: http
+        exposure: internal
+
+  # Monitoring roles
+  prometheus:
+    description: Prometheus metrics server
+    services:
+      prometheus:
+        port: 9090
+        protocol: http
+        exposure: internal
+
+  grafana:
+    description: Grafana dashboards
+    services:
+      grafana:
+        port: 3000
+        protocol: http
+        exposure: internal
+
+  otel-collector:
+    description: OpenTelemetry collector
+    services:
+      otel-grpc:
+        port: 4317
+        protocol: grpc
+        exposure: internal
+      otel-http:
+        port: 4318
+        protocol: http
+        exposure: internal
+
+  # Infrastructure roles
+  node-exporter:
+    description: Prometheus node exporter (system metrics)
+    services:
+      node-exporter:
+        port: 9100
+        protocol: http
+        exposure: internal
+
+  cadvisor:
+    description: Container metrics exporter
+    services:
+      cadvisor:
+        port: 8080
+        protocol: http
+        exposure: internal
+
+  tailscale-exit-node:
+    description: Tailscale exit node for routing
+    services: {}  # No ports, just marks the host as an exit node
+
+  # Mail roles
+  postfix:
+    description: Postfix MTA
+    services:
+      smtp:
+        port: 25
+        protocol: smtp
+        exposure: public
+      submission:
+        port: 587
+        protocol: smtp
+        exposure: public
+      postfix-exporter:
+        port: 9154
+        protocol: http
+        exposure: internal
+    required_secrets:
+      - smtp_relay_password
