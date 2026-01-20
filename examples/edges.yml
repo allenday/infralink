@@ -16,7 +16,7 @@ edge_types:
 
 edges:
   # Application to PostgreSQL
-  - id: app-to-postgres
+  - id: 058e29ff-57b9-47c8-b6fa-0914ac03e25c
     type: database
     from:
       hosts:
@@ -42,7 +42,7 @@ edges:
       runbook: docs/runbooks/app-database.md
 
   # Application to Redis (cache/queue)
-  - id: app-to-redis
+  - id: 1d12ce0f-6382-459d-b3d5-a5550d3bc711
     type: queue
     from:
       hosts:
@@ -65,7 +65,7 @@ edges:
       criticality: critical
 
   # Prometheus scraping database node-exporter
-  - id: prometheus-to-database-exporter
+  - id: c26fb664-a60d-41b4-be63-9fa520d698bf
     type: monitoring
     from:
       hosts:
@@ -84,7 +84,7 @@ edges:
       criticality: high
 
   # OTEL telemetry collection
-  - id: otel-to-collector
+  - id: 0f3088c3-6b9b-4137-9b49-20448cd259de
     type: telemetry
     from:
       hosts: "*"  # All hosts with OTEL instrumentation
@@ -102,7 +102,7 @@ edges:
       criticality: medium
 
   # Grafana to database (for dashboards)
-  - id: grafana-to-postgres
+  - id: 7cfa416b-927f-4ae1-b59e-1f2df1d7220b
     type: database
     from:
       hosts:

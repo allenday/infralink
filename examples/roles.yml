@@ -157,6 +157,12 @@ roles:
     description: Tailscale exit node for routing
     services: {}  # No ports, just marks the host as an exit node
 
+  cloudflared:
+    description: Cloudflare Tunnel for secure ingress
+    services: {}  # No ports, outbound-only tunnel to Cloudflare edge
+    required_secrets:
+      - cloudflare_tunnel_token
+
   # Mail roles
   postfix:
     description: Postfix MTA
