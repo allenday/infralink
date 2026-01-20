@@ -70,25 +70,63 @@ class Host:
         return self._schema.public_ip
 
     @property
-    def services(self) -> dict[str, Any]:
-        """Service configurations keyed by service name."""
+    def managed_services(self) -> dict[str, Any]:
+        """Managed service configurations (in legacy docker-compose.yml.j2)."""
+        # Prefer managed_services, fall back to services for backward compat
+        if self._schema.managed_services:
+            return {name: cfg.model_dump() for name, cfg in self._schema.managed_services.items()}
         return {name: cfg.model_dump() for name, cfg in self._schema.services.items()}
 
     @property
+    def unmanaged_services(self) -> dict[str, Any]:
+        """Unmanaged service configurations (not in legacy docker-compose.yml.j2)."""
+        return {name: cfg.model_dump() for name, cfg in self._schema.unmanaged_services.items()}
+
+    @property
+    def unmanaged_roles(self) -> dict[str, Any]:
+        """Unmanaged roles (not in legacy docker-compose.yml.j2)."""
+        return {name: cfg.model_dump() for name, cfg in self._schema.unmanaged_roles.items()}
+
+    @property
+    def services(self) -> dict[str, Any]:
+        """All services (managed + unmanaged). Backward compatible."""
+        result = self.managed_services.copy()
+        result.update(self.unmanaged_services)
+        return result
+
+    @property
     def service_names(self) -> list[str]:
-        """List of service names running on this host."""
-        return list(self._schema.services.keys())
+        """List of all service names running on this host."""
+        return list(self.services.keys())
+
+    @property
+    def managed_service_names(self) -> list[str]:
+        """List of managed service names."""
+        return list(self.managed_services.keys())
+
+    @property
+    def unmanaged_service_names(self) -> list[str]:
+        """List of unmanaged service names."""
+        return list(self.unmanaged_services.keys())
 
     def get_service(self, name: str) -> dict[str, Any] | None:
-        """Get service config by name."""
+        """Get service config by name (checks both managed and unmanaged)."""
+        if name in self._schema.managed_services:
+            return self._schema.managed_services[name].model_dump()
         if name in self._schema.services:
             return self._schema.services[name].model_dump()
+        if name in self._schema.unmanaged_services:
+            return self._schema.unmanaged_services[name].model_dump()
         return None
 
     def get_service_port(self, name: str) -> int | None:
         """Get port for a service."""
+        if name in self._schema.managed_services:
+            return self._schema.managed_services[name].port
         if name in self._schema.services:
             return self._schema.services[name].port
+        if name in self._schema.unmanaged_services:
+            return self._schema.unmanaged_services[name].port
         return None
 
     @property
@@ -125,7 +163,12 @@ class Host:
         return self._schema.mounts
 
     def has_service(self, service: str) -> bool:
-        return service in self._schema.services.keys()
+        """Check if host has a service (managed or unmanaged)."""
+        return (
+            service in self._schema.managed_services.keys()
+            or service in self._schema.services.keys()
+            or service in self._schema.unmanaged_services.keys()
+        )
 
     def get_ip(self, prefer: str = "tailscale") -> str | None:
         """Get IP address with preference order."""

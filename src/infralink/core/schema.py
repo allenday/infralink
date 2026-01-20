@@ -66,6 +66,28 @@ class ServiceConfig(BaseModel):
     notes: str | None = None
 
 
+class UnmanagedServiceConfig(ServiceConfig):
+    """Unmanaged service - same as ServiceConfig but with source tracking.
+
+    Used for services discovered via SSH that are not in the legacy
+    docker-compose.yml.j2 template. These need to be brought under
+    gitops management.
+    """
+
+    source: str | None = None  # Path to compose file or "standalone (docker run)"
+
+
+class UnmanagedRoleConfig(BaseModel):
+    """Unmanaged role - a role not in the legacy docker-compose.yml.j2.
+
+    Used for roles discovered via SSH that exist but are defined in
+    a separate compose file. These need to be brought under gitops management.
+    """
+
+    source: str | None = None  # Path to compose file
+    notes: str | None = None
+
+
 class RoleConfig(BaseModel):
     """Role definition - a contract for what a host should have.
 
@@ -145,17 +167,36 @@ class HostSchema(BaseModel):
     roles: list[str] = Field(default_factory=list)
     role_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
-    # Services - explicit services not covered by roles (one-offs)
+    # Unmanaged roles - roles discovered via SSH but not in legacy docker-compose.yml.j2
+    # These need to be brought under gitops management
+    unmanaged_roles: dict[str, UnmanagedRoleConfig] = Field(default_factory=dict)
+
+    # Managed services - explicit services in legacy docker-compose.yml.j2 not covered by roles
     # Supports both new format (dict) and legacy format (list of strings)
+    managed_services: dict[str, ServiceConfig] = Field(default_factory=dict)
+
+    # Legacy alias for backward compatibility
     services: dict[str, ServiceConfig] = Field(default_factory=dict)
 
-    @field_validator("services", mode="before")
+    # Unmanaged services - services discovered via SSH but not in legacy docker-compose.yml.j2
+    # These need to be brought under gitops management
+    unmanaged_services: dict[str, UnmanagedServiceConfig] = Field(default_factory=dict)
+
+    @field_validator("managed_services", mode="before")
     @classmethod
-    def normalize_services(cls, v: Any) -> dict[str, ServiceConfig]:
+    def normalize_managed_services(cls, v: Any) -> dict[str, ServiceConfig]:
         """Convert legacy list format to dict format."""
         if isinstance(v, list):
             # Legacy format: ["nginx", "postgresql"]
             # Convert to: {"nginx": {}, "postgresql": {}}
+            return {name: {} for name in v}
+        return v
+
+    @field_validator("services", mode="before")
+    @classmethod
+    def normalize_services(cls, v: Any) -> dict[str, ServiceConfig]:
+        """Convert legacy list format to dict format (backward compat)."""
+        if isinstance(v, list):
             return {name: {} for name in v}
         return v
 
@@ -304,6 +345,14 @@ class EdgeSchema(BaseModel):
     metadata: EdgeMetadata = Field(default_factory=EdgeMetadata)
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("id")
+    @classmethod
+    def validate_edge_id_is_uuid(cls, v: str) -> str:
+        """Validate that edge ID is a valid UUID."""
+        if not validate_uuid_format(v):
+            raise ValueError(f"Edge ID must be a valid UUID, got: {v}")
+        return v
 
 
 class EdgeSetSchema(BaseModel):

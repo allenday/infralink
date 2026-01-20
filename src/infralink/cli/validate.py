@@ -102,6 +102,44 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
                 errors.append(f"Duplicate edge ID: {edge.id}")
             seen_ids.add(edge.id)
 
+    # Check that hosts use roles, not direct services
+    if "registry" in dir():
+        console.print("[bold]Checking role declarations...[/bold]")
+        hosts_without_roles = []
+        for host in registry:
+            if not host.is_active:
+                continue
+            # Check if host has managed_services but no roles
+            if not host.roles and host.managed_services:
+                hosts_without_roles.append(host)
+                errors.append(
+                    f"Host '{host.canonical_name}' ({host.uuid_prefix}): "
+                    f"has managed_services but no roles. Declare roles instead."
+                )
+        if hosts_without_roles:
+            console.print(
+                f"  [red]✗[/red] {len(hosts_without_roles)} host(s) use services without roles"
+            )
+        else:
+            console.print(f"  [green]✓[/green] All active hosts declare roles")
+
+        # Report on unmanaged infrastructure
+        hosts_with_unmanaged = []
+        for host in registry:
+            if not host.is_active:
+                continue
+            if host.unmanaged_services or host.unmanaged_roles:
+                hosts_with_unmanaged.append(host)
+        if hosts_with_unmanaged:
+            console.print(
+                f"  [yellow]![/yellow] {len(hosts_with_unmanaged)} host(s) have unmanaged infrastructure"
+            )
+            for h in hosts_with_unmanaged:
+                unmanaged_items = list(h.unmanaged_services.keys()) + list(h.unmanaged_roles.keys())
+                warnings.append(
+                    f"Host '{h.canonical_name}' has unmanaged: {', '.join(unmanaged_items)}"
+                )
+
     # Summary
     console.print("\n[bold]Validation Summary[/bold]")
     console.print(f"  Errors: {len(errors)}")
