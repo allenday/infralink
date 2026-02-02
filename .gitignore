@@ -46,3 +46,5 @@ Thumbs.db
 # Local working files (prod analysis, generated output)
 local/
 output/
+
+.worktrees/
