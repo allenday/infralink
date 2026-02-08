@@ -5,7 +5,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class StrictModel(BaseModel):
+    """Base model that rejects unknown fields."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class HostStatus(str, Enum):
@@ -17,7 +23,7 @@ class HostStatus(str, Enum):
     MAINTENANCE = "maintenance"
 
 
-class NetworkConfig(BaseModel):
+class NetworkConfig(StrictModel):
     """Network configuration for a host."""
 
     tailscale_ip: str | None = None
@@ -51,7 +57,7 @@ class ServiceExposure(str, Enum):
     LOCAL = "local"  # Only localhost
 
 
-class ServiceConfig(BaseModel):
+class ServiceConfig(StrictModel):
     """Service declaration on a host.
 
     Services are first-class objects with their own properties,
@@ -63,6 +69,7 @@ class ServiceConfig(BaseModel):
     protocol: str = "tcp"
     exposure: ServiceExposure = ServiceExposure.INTERNAL
     depends_on: list[str] = Field(default_factory=list)  # Local service dependencies
+    replicas: int = 1  # Number of instances (ports increment: 8983, 8984, ...)
     notes: str | None = None
 
 
@@ -77,7 +84,7 @@ class UnmanagedServiceConfig(ServiceConfig):
     source: str | None = None  # Path to compose file or "standalone (docker run)"
 
 
-class UnmanagedRoleConfig(BaseModel):
+class UnmanagedRoleConfig(StrictModel):
     """Unmanaged role - a role not in the legacy docker-compose.yml.j2.
 
     Used for roles discovered via SSH that exist but are defined in
@@ -88,7 +95,7 @@ class UnmanagedRoleConfig(BaseModel):
     notes: str | None = None
 
 
-class RoleConfig(BaseModel):
+class RoleConfig(StrictModel):
     """Role definition - a contract for what a host should have.
 
     Roles define expected services, exporters, and secrets.
@@ -110,7 +117,7 @@ class ProviderMetadata(BaseModel):
     model_config = {"extra": "allow"}  # Allow arbitrary fields
 
 
-class ObservabilityConfig(BaseModel):
+class ObservabilityConfig(StrictModel):
     """Observability configuration for a host.
 
     Tracks what's monitored vs what should be monitored.
@@ -131,7 +138,7 @@ def validate_uuid_format(uuid: str) -> bool:
     return len(parts) == 5
 
 
-class HostSchema(BaseModel):
+class HostSchema(StrictModel):
     """
     Schema for a host in the registry.
 
@@ -155,6 +162,7 @@ class HostSchema(BaseModel):
     # Network
     tailscale_ip: str | None = None
     tailscale_name: str | None = None
+    magicdns_name: str | None = None
     public_ip: str | None = None
     public_ip_secondary: str | None = None  # Failover/additional IP
     public_ipv6: str | None = None
@@ -232,7 +240,7 @@ class HostSchema(BaseModel):
     notes: str | None = None
 
 
-class RegistrySchema(BaseModel):
+class RegistrySchema(StrictModel):
     """
     Schema for the complete host registry.
 
@@ -243,6 +251,7 @@ class RegistrySchema(BaseModel):
 
     hosts: dict[str, HostSchema]
     ansible_defaults: dict[str, Any] = Field(default_factory=dict)
+    tailnet_domain: str | None = None
 
     @field_validator("hosts")
     @classmethod
@@ -289,14 +298,14 @@ class HealthCheckType(str, Enum):
     API = "api"
 
 
-class AuthConfig(BaseModel):
+class AuthConfig(StrictModel):
     """Authentication configuration for an edge."""
 
     type: Literal["none", "password", "basic", "token", "certificate"] = "none"
     secret_ref: str | None = None
 
 
-class HealthCheckConfig(BaseModel):
+class HealthCheckConfig(StrictModel):
     """Health check configuration for an edge."""
 
     type: HealthCheckType = HealthCheckType.TCP
@@ -306,7 +315,7 @@ class HealthCheckConfig(BaseModel):
     query: str | None = None  # For query checks
 
 
-class EdgeSourceSelector(BaseModel):
+class EdgeSourceSelector(StrictModel):
     """Selector for edge source hosts."""
 
     hosts: list[str] | Literal["*"] = Field(default_factory=list)
@@ -314,7 +323,7 @@ class EdgeSourceSelector(BaseModel):
     service: str | None = None
 
 
-class EdgeTarget(BaseModel):
+class EdgeTarget(StrictModel):
     """Target endpoint for an edge."""
 
     host: str  # UUID
@@ -322,17 +331,15 @@ class EdgeTarget(BaseModel):
     port: int
 
 
-class EdgeMetadata(BaseModel):
+class EdgeMetadata(StrictModel):
     """Metadata for an edge."""
 
     purpose: str | None = None
     criticality: Criticality = Criticality.MEDIUM
-    owner: str | None = None
-    runbook: str | None = None
-    documentation: str | None = None
+    notes: str | None = None
 
 
-class EdgeSchema(BaseModel):
+class EdgeSchema(StrictModel):
     """Schema for an edge between infrastructure nodes."""
 
     id: str
@@ -344,7 +351,7 @@ class EdgeSchema(BaseModel):
     healthcheck: HealthCheckConfig = Field(default_factory=HealthCheckConfig)
     metadata: EdgeMetadata = Field(default_factory=EdgeMetadata)
 
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     @field_validator("id")
     @classmethod
@@ -355,7 +362,7 @@ class EdgeSchema(BaseModel):
         return v
 
 
-class EdgeSetSchema(BaseModel):
+class EdgeSetSchema(StrictModel):
     """Schema for the complete edge set."""
 
     schema_version: str = "1.0"

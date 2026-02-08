@@ -18,7 +18,7 @@ class Host:
     from the host data since it's the dictionary key in the registry.
     """
 
-    def __init__(self, uuid: str, data: dict[str, Any]) -> None:
+    def __init__(self, uuid: str, data: dict[str, Any], tailnet_domain: str | None = None) -> None:
         """
         Initialize a host.
 
@@ -29,6 +29,7 @@ class Host:
         self._uuid = uuid
         self._data = data
         self._schema = HostSchema(**data)
+        self._tailnet_domain = tailnet_domain
 
     @property
     def uuid(self) -> str:
@@ -64,6 +65,18 @@ class Host:
     @property
     def tailscale_ip(self) -> str | None:
         return self._schema.tailscale_ip
+
+    @property
+    def tailscale_name(self) -> str | None:
+        return self._schema.tailscale_name
+
+    @property
+    def magicdns_name(self) -> str | None:
+        if self._schema.magicdns_name:
+            return self._schema.magicdns_name
+        if self.tailscale_name and self._tailnet_domain:
+            return f"{self.tailscale_name}.{self._tailnet_domain}"
+        return None
 
     @property
     def public_ip(self) -> str | None:
@@ -198,7 +211,12 @@ class Registry:
     Uses UUID as the primary key for each host.
     """
 
-    def __init__(self, hosts: dict[str, Host], defaults: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        hosts: dict[str, Host],
+        defaults: dict[str, Any] | None = None,
+        tailnet_domain: str | None = None,
+    ) -> None:
         """
         Initialize registry.
 
@@ -208,6 +226,7 @@ class Registry:
         """
         self._hosts = hosts  # UUID -> Host
         self._defaults = defaults or {}
+        self._tailnet_domain = tailnet_domain
         # Secondary index: canonical_name -> Host
         self._name_index: dict[str, Host] = {h.canonical_name: h for h in hosts.values()}
         # Secondary index: uuid_prefix -> Host
@@ -224,17 +243,21 @@ class Registry:
         schema = RegistrySchema(**data)
 
         # UUID is the key, data is the value
-        hosts = {uuid: Host(uuid, host.model_dump()) for uuid, host in schema.hosts.items()}
+        hosts = {
+            uuid: Host(uuid, host.model_dump(), schema.tailnet_domain)
+            for uuid, host in schema.hosts.items()
+        }
 
-        return cls(hosts, schema.ansible_defaults)
+        return cls(hosts, schema.ansible_defaults, schema.tailnet_domain)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Registry:
         """Create registry from dictionary."""
         hosts_data = data.get("hosts", {})
         # UUID is the key
-        hosts = {uuid: Host(uuid, h) for uuid, h in hosts_data.items()}
-        return cls(hosts, data.get("ansible_defaults"))
+        tailnet_domain = data.get("tailnet_domain")
+        hosts = {uuid: Host(uuid, h, tailnet_domain) for uuid, h in hosts_data.items()}
+        return cls(hosts, data.get("ansible_defaults"), tailnet_domain)
 
     def get_by_uuid(self, uuid: str) -> Host | None:
         """Get host by full UUID (primary lookup)."""

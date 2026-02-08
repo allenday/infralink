@@ -29,6 +29,7 @@ def generate_host_doc(
         "| Type | Address |",
         "|------|---------|",
         f"| Tailscale | `{host.tailscale_ip or 'N/A'}` |",
+        f"| MagicDNS | `{host.magicdns_name or 'N/A'}` |",
         f"| Public IPv4 | `{host.public_ip or 'N/A'}` |",
         "",
     ]
