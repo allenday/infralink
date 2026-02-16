@@ -276,6 +276,11 @@ class EdgeType(str, Enum):
     MONITORING = "monitoring"
     API = "api"
     STORAGE = "storage"
+    SSH = "ssh"
+    SECURITY = "security"
+    SMTP = "smtp"
+    IRC = "irc"
+    XMPP = "xmpp"
 
 
 class Criticality(str, Enum):
@@ -299,10 +304,20 @@ class HealthCheckType(str, Enum):
 
 
 class AuthConfig(StrictModel):
-    """Authentication configuration for an edge."""
+    """Authentication configuration for an edge.
+
+    Extended fields support real-world edge patterns:
+    - username/database/role for database edges
+    - mount_path for storage edges (sshfs, NFS)
+    - secret_ref for BWS/vault secret resolution
+    """
 
     type: Literal["none", "password", "basic", "token", "certificate"] = "none"
     secret_ref: str | None = None
+    username: str | None = None
+    database: str | None = None
+    role: Literal["ro", "rw", "admin"] | None = None
+    mount_path: str | None = None
 
 
 class HealthCheckConfig(StrictModel):
@@ -355,10 +370,14 @@ class EdgeSchema(StrictModel):
 
     @field_validator("id")
     @classmethod
-    def validate_edge_id_is_uuid(cls, v: str) -> str:
-        """Validate that edge ID is a valid UUID."""
-        if not validate_uuid_format(v):
-            raise ValueError(f"Edge ID must be a valid UUID, got: {v}")
+    def validate_edge_id(cls, v: str) -> str:
+        """Validate that edge ID is a non-empty string.
+
+        Edge IDs can be UUIDs (preferred for production) or
+        human-readable slugs (acceptable for development/testing).
+        """
+        if not v or not v.strip():
+            raise ValueError("Edge ID must be a non-empty string")
         return v
 
 

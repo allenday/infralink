@@ -177,3 +177,146 @@ class TestEdgeSet:
         monitoring = edges.get("monitoring-scrape")
         assert monitoring.is_wildcard_source()
         assert monitoring.source_hosts == []  # Empty for wildcard
+
+
+class TestNewEdgeTypes:
+    """Tests for extended edge types (ssh, security, smtp, irc, xmpp)."""
+
+    def test_ssh_edge(self):
+        """Test SSH edge type with username auth."""
+        edge = Edge({
+            "id": "bastion-to-worker-ssh",
+            "type": "ssh",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "*",
+            },
+            "to": {
+                "host": "ffff-gggg-hhhh-iiii-jjjj",
+                "service": "ssh",
+                "port": 22,
+            },
+            "protocol": "ssh",
+            "auth": {
+                "username": "devops",
+            },
+        })
+        assert edge.type == EdgeType.SSH
+        assert edge.target_port == 22
+
+    def test_security_edge(self):
+        """Test security edge type."""
+        edge = Edge({
+            "id": "nginx-tls-certs",
+            "type": "security",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "nginx",
+            },
+            "to": {
+                "host": "aaaa-bbbb-cccc-dddd-eeee",
+                "service": "tls-certs",
+                "port": 0,
+            },
+            "protocol": "internal",
+        })
+        assert edge.type == EdgeType.SECURITY
+
+    def test_smtp_edge(self):
+        """Test SMTP edge type."""
+        edge = Edge({
+            "id": "wordpress-to-postfix",
+            "type": "smtp",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "wordpress",
+            },
+            "to": {
+                "host": "ffff-gggg-hhhh-iiii-jjjj",
+                "service": "postfix",
+                "port": 587,
+            },
+            "protocol": "smtp",
+        })
+        assert edge.type == EdgeType.SMTP
+
+    def test_irc_edge(self):
+        """Test IRC edge type."""
+        edge = Edge({
+            "id": "anope-to-inspircd",
+            "type": "irc",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "anope",
+            },
+            "to": {
+                "host": "aaaa-bbbb-cccc-dddd-eeee",
+                "service": "inspircd",
+                "port": 7000,
+            },
+            "protocol": "s2s+tls",
+        })
+        assert edge.type == EdgeType.IRC
+
+    def test_xmpp_edge(self):
+        """Test XMPP edge type."""
+        edge = Edge({
+            "id": "jicofo-to-prosody",
+            "type": "xmpp",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "jicofo",
+            },
+            "to": {
+                "host": "aaaa-bbbb-cccc-dddd-eeee",
+                "service": "prosody",
+                "port": 5222,
+            },
+            "protocol": "xmpp",
+        })
+        assert edge.type == EdgeType.XMPP
+
+    def test_auth_extended_fields(self):
+        """Test extended auth fields (username, database, role, mount_path)."""
+        edge = Edge({
+            "id": "app-to-db",
+            "type": "database",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "app",
+            },
+            "to": {
+                "host": "ffff-gggg-hhhh-iiii-jjjj",
+                "service": "postgresql",
+                "port": 5432,
+            },
+            "protocol": "postgresql",
+            "auth": {
+                "username": "rw_user",
+                "database": "myapp",
+                "secret_ref": "postgresql_rw_password",
+                "role": "rw",
+            },
+        })
+        assert edge.type == EdgeType.DATABASE
+
+    def test_auth_mount_path(self):
+        """Test storage edge with mount_path auth."""
+        edge = Edge({
+            "id": "host-to-storagebox",
+            "type": "storage",
+            "from": {
+                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
+                "service": "storagebox0",
+            },
+            "to": {
+                "host": "ffff-gggg-hhhh-iiii-jjjj",
+                "service": "sshfs",
+                "port": 0,
+            },
+            "protocol": "mount",
+            "auth": {
+                "mount_path": "/mnt/storagebox0",
+            },
+        })
+        assert edge.type == EdgeType.STORAGE
