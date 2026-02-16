@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -55,6 +55,32 @@ class ServiceExposure(str, Enum):
     INTERNAL = "internal"  # Only accessible via tailscale/private network
     PUBLIC = "public"  # Exposed to internet
     LOCAL = "local"  # Only localhost
+
+
+class NodeSchema(StrictModel):
+    """Base schema for all node-like objects."""
+
+    node_type: str
+    canonical_name: str | None = None
+
+
+class ServiceSchema(NodeSchema):
+    """Service definition for catalog entries."""
+
+    name: str
+    group: str
+    compose_service: str | None = None
+    requires_secrets: list[str] = Field(default_factory=list)
+    prom_check: dict[str, Any] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    node_type: str = "service"
+
+    @model_validator(mode="after")
+    def populate_canonical_name(self) -> "ServiceSchema":
+        if self.canonical_name is None:
+            self.canonical_name = self.name
+        return self
 
 
 class ServiceConfig(StrictModel):
@@ -138,7 +164,7 @@ def validate_uuid_format(uuid: str) -> bool:
     return len(parts) == 5
 
 
-class HostSchema(StrictModel):
+class HostSchema(NodeSchema):
     """
     Schema for a host in the registry.
 
@@ -155,6 +181,7 @@ class HostSchema(StrictModel):
 
     # Identity (canonical_name is the human-readable identifier)
     canonical_name: str
+    node_type: str = "host"
     status: HostStatus = HostStatus.ACTIVE
     group: str | None = None
     cloud: str | None = None
