@@ -251,6 +251,31 @@ class Registry:
         return cls(hosts, schema.ansible_defaults, schema.tailnet_domain)
 
     @classmethod
+    def load_dir(cls, root: str | Path, pattern: str = "**/manifest.yml") -> Registry:
+        """Load registry from a directory of per-host manifest files.
+
+        Expects files named `manifest.yml` under `root` (any depth by default).
+        Each manifest should have a top-level `hosts:` mapping of UUID → host data.
+        """
+        root_path = Path(root)
+        hosts: dict[str, Host] = {}
+        tailnet_domain: str | None = None
+
+        for manifest in sorted(root_path.glob(pattern)):
+            with manifest.open() as f:
+                data = yaml.safe_load(f) or {}
+
+            # Prefer tailnet_domain if provided in any manifest
+            if not tailnet_domain:
+                tailnet_domain = data.get("tailnet_domain")
+
+            for uuid, host_data in (data.get("hosts") or {}).items():
+                host_schema = HostSchema(**host_data)
+                hosts[uuid] = Host(uuid, host_schema.model_dump(), tailnet_domain)
+
+        return cls(hosts, defaults=None, tailnet_domain=tailnet_domain)
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Registry:
         """Create registry from dictionary."""
         hosts_data = data.get("hosts", {})

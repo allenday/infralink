@@ -2,6 +2,7 @@
 
 import pytest
 from pathlib import Path
+import yaml
 
 from infralink.core.registry import Registry, Host
 from infralink.core.schema import HostStatus
@@ -166,3 +167,39 @@ class TestRegistry:
         assert "d1b9e5d5-36b0-459d-a556-96622811fbd5" in registry
         assert "test-host-1" in registry
         assert "nonexistent" not in registry
+
+def test_load_dir(tmp_path):
+    """Load per-host manifests from a directory."""
+    manifests = [
+        (
+            "3dd6fbff-a23f-4e0c-bbd5-b3e800451c84",
+            {
+                "canonical_name": "infralink0",
+                "status": "active",
+                "group": "infralink-dev",
+                "cloud": "hetzner-cloud",
+                "services": {"prometheus": {"port": 9090}},
+            },
+        ),
+        (
+            "949fd148-40e7-437b-9adc-b3e800454bf3",
+            {
+                "canonical_name": "infralink1",
+                "status": "active",
+                "group": "infralink-dev",
+                "cloud": "hetzner-cloud",
+                "services": {"woodpecker-agent": {"port": 3000}},
+            },
+        ),
+    ]
+
+    for uuid, host_data in manifests:
+        host_dir = tmp_path / uuid
+        host_dir.mkdir(parents=True)
+        (host_dir / "manifest.yml").write_text(yaml.safe_dump({"hosts": {uuid: host_data}}))
+
+    registry = Registry.load_dir(tmp_path)
+
+    assert len(registry.active_hosts()) == 2
+    assert registry.get_by_name("infralink0").uuid == "3dd6fbff-a23f-4e0c-bbd5-b3e800451c84"
+    assert registry.get_by_name("infralink1").uuid == "949fd148-40e7-437b-9adc-b3e800454bf3"
