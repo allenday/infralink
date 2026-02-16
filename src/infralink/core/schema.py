@@ -276,6 +276,11 @@ class EdgeType(str, Enum):
     MONITORING = "monitoring"
     API = "api"
     STORAGE = "storage"
+    SSH = "ssh"
+    SECURITY = "security"
+    SMTP = "smtp"
+    IRC = "irc"
+    XMPP = "xmpp"
 
 
 class Criticality(str, Enum):
@@ -299,10 +304,20 @@ class HealthCheckType(str, Enum):
 
 
 class AuthConfig(StrictModel):
-    """Authentication configuration for an edge."""
+    """Authentication configuration for an edge.
+
+    Extended fields support real-world edge patterns:
+    - username/database/role for database edges
+    - mount_path for storage edges (sshfs, NFS)
+    - secret_ref for BWS/vault secret resolution
+    """
 
     type: Literal["none", "password", "basic", "token", "certificate"] = "none"
     secret_ref: str | None = None
+    username: str | None = None
+    database: str | None = None
+    role: Literal["ro", "rw", "admin"] | None = None
+    mount_path: str | None = None
 
 
 class HealthCheckConfig(StrictModel):

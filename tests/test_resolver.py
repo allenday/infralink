@@ -40,7 +40,7 @@ def edges():
     return EdgeSet.from_dict({
         "edges": [
             {
-                "id": "app-to-postgres",
+                "id": "e28f39b6-8389-45b1-93bd-579a18388df2",
                 "type": "database",
                 "from": {
                     "hosts": ["fa2b9872-d94c-4b20-a73a-57a205560769"],
@@ -54,7 +54,7 @@ def edges():
                 "protocol": "postgresql+psycopg2",
             },
             {
-                "id": "app-to-redis",
+                "id": "c1d51ce4-083e-4910-ae0f-f98b7b342b1c",
                 "type": "queue",
                 "from": {
                     "hosts": ["fa2b9872-d94c-4b20-a73a-57a205560769"],
@@ -78,46 +78,46 @@ class TestEdgeResolver:
         """Test getting edge by ID."""
         resolver = EdgeResolver(registry, edges)
 
-        edge = resolver.get_edge("app-to-postgres")
-        assert edge.id == "app-to-postgres"
+        edge = resolver.get_edge("e28f39b6-8389-45b1-93bd-579a18388df2")
+        assert edge.id == "e28f39b6-8389-45b1-93bd-579a18388df2"
 
     def test_get_edge_not_found(self, registry, edges):
         """Test getting nonexistent edge."""
         resolver = EdgeResolver(registry, edges)
 
         with pytest.raises(ResolutionError) as exc_info:
-            resolver.get_edge("nonexistent")
+            resolver.get_edge("nonexistent-0000-0000-0000-000000000000")
         assert "Edge not found" in str(exc_info.value)
 
     def test_get_target_host(self, registry, edges):
         """Test getting target host."""
         resolver = EdgeResolver(registry, edges)
 
-        host = resolver.get_target_host("app-to-postgres")
+        host = resolver.get_target_host("e28f39b6-8389-45b1-93bd-579a18388df2")
         assert host.canonical_name == "prod-database"
 
     def test_get_target_ip(self, registry, edges):
         """Test getting target IP."""
         resolver = EdgeResolver(registry, edges)
 
-        ip = resolver.get_target_ip("app-to-postgres")
+        ip = resolver.get_target_ip("e28f39b6-8389-45b1-93bd-579a18388df2")
         assert ip == "100.78.109.111"
 
-        ip_public = resolver.get_target_ip("app-to-postgres", prefer="public")
+        ip_public = resolver.get_target_ip("e28f39b6-8389-45b1-93bd-579a18388df2", prefer="public")
         assert ip_public == "91.99.122.86"
 
     def test_get_target_port(self, registry, edges):
         """Test getting target port."""
         resolver = EdgeResolver(registry, edges)
 
-        port = resolver.get_target_port("app-to-postgres")
+        port = resolver.get_target_port("e28f39b6-8389-45b1-93bd-579a18388df2")
         assert port == 5432
 
     def test_get_target_endpoint(self, registry, edges):
         """Test getting target endpoint."""
         resolver = EdgeResolver(registry, edges)
 
-        endpoint = resolver.get_target_endpoint("app-to-postgres")
+        endpoint = resolver.get_target_endpoint("e28f39b6-8389-45b1-93bd-579a18388df2")
         assert endpoint == "100.78.109.111:5432"
 
     def test_get_url(self, registry, edges):
@@ -125,7 +125,7 @@ class TestEdgeResolver:
         resolver = EdgeResolver(registry, edges)
 
         url = resolver.get_url(
-            "app-to-postgres",
+            "e28f39b6-8389-45b1-93bd-579a18388df2",
             user="myuser",
             password="mypass",
             database="mydb",
@@ -137,7 +137,7 @@ class TestEdgeResolver:
         resolver = EdgeResolver(registry, edges)
 
         url = resolver.get_url(
-            "app-to-postgres",
+            "e28f39b6-8389-45b1-93bd-579a18388df2",
             user="myuser",
             password="pass@word!",
             database="mydb",
@@ -149,7 +149,7 @@ class TestEdgeResolver:
         resolver = EdgeResolver(registry, edges)
 
         url = resolver.get_postgres_url(
-            "app-to-postgres",
+            "e28f39b6-8389-45b1-93bd-579a18388df2",
             user="myuser",
             password="mypass",
             database="mydb",
@@ -164,7 +164,7 @@ class TestEdgeResolver:
         resolver = EdgeResolver(registry, edges)
 
         url = resolver.get_redis_url(
-            "app-to-redis",
+            "c1d51ce4-083e-4910-ae0f-f98b7b342b1c",
             password="mypass",
             db=1,
         )
@@ -174,9 +174,9 @@ class TestEdgeResolver:
         """Test template context generation."""
         resolver = EdgeResolver(registry, edges)
 
-        context = resolver.to_template_context("app-to-postgres")
+        context = resolver.to_template_context("e28f39b6-8389-45b1-93bd-579a18388df2")
 
-        assert context["edge_id"] == "app-to-postgres"
+        assert context["edge_id"] == "e28f39b6-8389-45b1-93bd-579a18388df2"
         assert context["target_ip"] == "100.78.109.111"
         assert context["target_port"] == 5432
         assert context["target_service"] == "postgresql"
@@ -194,7 +194,7 @@ class TestEdgeResolver:
         edges = EdgeSet.from_dict({
             "edges": [
                 {
-                    "id": "broken-edge",
+                    "id": "455d79a8-f146-4cc7-8792-7d4d908ffdad",
                     "type": "database",
                     "from": {"hosts": [], "service": "app"},
                     "to": {
