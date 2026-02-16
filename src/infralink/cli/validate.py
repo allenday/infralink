@@ -37,6 +37,7 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
         infralink validate --strict --check-resolution
     """
     from infralink.core.resolver import EdgeResolver
+    from infralink.core.validator import validate_edges_against_registry
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -59,28 +60,21 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
         errors.append(f"Edge validation failed: {e}")
         console.print(f"  [red]✗[/red] Edge validation failed: {e}")
 
-    # Check edge target references
+    # Cross-validate edges against registry
     if "registry" in dir() and "edges" in dir() and len(edges) > 0:
-        console.print("[bold]Checking edge references...[/bold]")
-        for edge in edges:
-            # Check target host exists
-            target = registry.get_by_uuid(edge.target_host)
-            if not target:
-                errors.append(f"Edge '{edge.id}': target host not found: {edge.target_host}")
-                console.print(f"  [red]✗[/red] Edge '{edge.id}': target host not found")
-            elif not target.is_active:
-                warnings.append(f"Edge '{edge.id}': target host is not active: {target.canonical_name}")
-                console.print(f"  [yellow]![/yellow] Edge '{edge.id}': target host not active")
+        console.print("[bold]Cross-validating edges against registry...[/bold]")
+        cross_result = validate_edges_against_registry(registry, edges)
+        if cross_result.errors:
+            for err in cross_result.errors:
+                console.print(f"  [red]✗[/red] {err}")
+        if cross_result.warnings:
+            for warn in cross_result.warnings:
+                console.print(f"  [yellow]![/yellow] {warn}")
+        if not cross_result.errors and not cross_result.warnings:
+            console.print(f"  [green]✓[/green] Cross-validation passed")
 
-            # Check source hosts exist
-            for source_uuid in edge.source_hosts:
-                source = registry.get_by_uuid(source_uuid)
-                if not source:
-                    errors.append(f"Edge '{edge.id}': source host not found: {source_uuid}")
-                    console.print(f"  [red]✗[/red] Edge '{edge.id}': source not found: {source_uuid[:8]}...")
-
-        if not errors:
-            console.print(f"  [green]✓[/green] All edge references valid")
+        errors.extend(cross_result.errors)
+        warnings.extend(cross_result.warnings)
 
     # Check edge resolution
     if check_resolution and "registry" in dir() and "edges" in dir():
