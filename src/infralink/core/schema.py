@@ -121,6 +121,22 @@ class UnmanagedRoleConfig(StrictModel):
     notes: str | None = None
 
 
+class SlotConfig(StrictModel):
+    """Role slot definition."""
+
+    type: str
+    required: bool = True
+    description: str | None = None
+
+
+class SlotBinding(StrictModel):
+    """Binding for a role slot."""
+
+    host: str
+    service: str
+    role: str | None = None
+
+
 class RoleConfig(StrictModel):
     """Role definition - a contract for what a host should have.
 
@@ -129,6 +145,7 @@ class RoleConfig(StrictModel):
     """
 
     services: dict[str, ServiceConfig] = Field(default_factory=dict)
+    slots: dict[str, SlotConfig] = Field(default_factory=dict)
     required_secrets: list[str] = Field(default_factory=list)
     description: str | None = None
 
