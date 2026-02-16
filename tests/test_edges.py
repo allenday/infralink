@@ -10,7 +10,7 @@ from infralink.core.schema import EdgeType, Criticality
 def sample_edge_data():
     """Sample edge data for testing."""
     return {
-        "id": "app-to-postgres",
+        "id": "e28f39b6-8389-45b1-93bd-579a18388df2",
         "type": "database",
         "from": {
             "hosts": [
@@ -40,7 +40,7 @@ def sample_edges_data(sample_edge_data):
         "edges": [
             sample_edge_data,
             {
-                "id": "app-to-redis",
+                "id": "c1d51ce4-083e-4910-ae0f-f98b7b342b1c",
                 "type": "queue",
                 "from": {
                     "hosts": ["fa2b9872-d94c-4b20-a73a-57a205560769"],
@@ -57,7 +57,7 @@ def sample_edges_data(sample_edge_data):
                 },
             },
             {
-                "id": "monitoring-scrape",
+                "id": "aa3b8439-563c-4deb-a020-833da41a6b37",
                 "type": "monitoring",
                 "from": {
                     "hosts": "*",
@@ -83,7 +83,7 @@ class TestEdge:
         """Test basic edge properties."""
         edge = Edge(sample_edge_data)
 
-        assert edge.id == "app-to-postgres"
+        assert edge.id == "e28f39b6-8389-45b1-93bd-579a18388df2"
         assert edge.type == EdgeType.DATABASE
         assert edge.target_host == "d1b9e5d5-36b0-459d-a556-96622811fbd5"
         assert edge.target_service == "postgresql"
@@ -127,7 +127,7 @@ class TestEdgeSet:
         """Test edge lookup by ID."""
         edges = EdgeSet.from_dict(sample_edges_data)
 
-        edge = edges.get("app-to-postgres")
+        edge = edges.get("e28f39b6-8389-45b1-93bd-579a18388df2")
         assert edge is not None
         assert edge.type == EdgeType.DATABASE
 
@@ -147,7 +147,7 @@ class TestEdgeSet:
 
         critical = edges.critical_edges()
         assert len(critical) == 1
-        assert critical[0].id == "app-to-postgres"
+        assert critical[0].id == "e28f39b6-8389-45b1-93bd-579a18388df2"
 
     def test_targeting_host(self, sample_edges_data):
         """Test getting edges targeting a host."""
@@ -167,14 +167,14 @@ class TestEdgeSet:
         """Test __contains__ method."""
         edges = EdgeSet.from_dict(sample_edges_data)
 
-        assert "app-to-postgres" in edges
-        assert "nonexistent" not in edges
+        assert "e28f39b6-8389-45b1-93bd-579a18388df2" in edges
+        assert "nonexistent-0000-0000-0000-000000000000" not in edges
 
     def test_wildcard_source(self, sample_edges_data):
         """Test wildcard source handling."""
         edges = EdgeSet.from_dict(sample_edges_data)
 
-        monitoring = edges.get("monitoring-scrape")
+        monitoring = edges.get("aa3b8439-563c-4deb-a020-833da41a6b37")
         assert monitoring.is_wildcard_source()
         assert monitoring.source_hosts == []  # Empty for wildcard
 
@@ -185,7 +185,7 @@ class TestNewEdgeTypes:
     def test_ssh_edge(self):
         """Test SSH edge type with username auth."""
         edge = Edge({
-            "id": "bastion-to-worker-ssh",
+            "id": "2d2f78ba-458f-48f9-9959-eca8b5600fb4",
             "type": "ssh",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
@@ -207,7 +207,7 @@ class TestNewEdgeTypes:
     def test_security_edge(self):
         """Test security edge type."""
         edge = Edge({
-            "id": "nginx-tls-certs",
+            "id": "a394b8dd-bcea-47f4-a2f8-7498cc1bd5ab",
             "type": "security",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
@@ -225,7 +225,7 @@ class TestNewEdgeTypes:
     def test_smtp_edge(self):
         """Test SMTP edge type."""
         edge = Edge({
-            "id": "wordpress-to-postfix",
+            "id": "60fce49c-3df0-4433-981b-47ca3f848115",
             "type": "smtp",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
@@ -243,7 +243,7 @@ class TestNewEdgeTypes:
     def test_irc_edge(self):
         """Test IRC edge type."""
         edge = Edge({
-            "id": "anope-to-inspircd",
+            "id": "6c63aef6-841d-4354-a404-9ff2361e9e35",
             "type": "irc",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
@@ -261,7 +261,7 @@ class TestNewEdgeTypes:
     def test_xmpp_edge(self):
         """Test XMPP edge type."""
         edge = Edge({
-            "id": "jicofo-to-prosody",
+            "id": "75b5de43-573f-4243-94b3-1195acfe9fbd",
             "type": "xmpp",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
@@ -279,7 +279,7 @@ class TestNewEdgeTypes:
     def test_auth_extended_fields(self):
         """Test extended auth fields (username, database, role, mount_path)."""
         edge = Edge({
-            "id": "app-to-db",
+            "id": "fe33d192-8b6a-4b73-a269-eb64814c72a0",
             "type": "database",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
@@ -303,7 +303,7 @@ class TestNewEdgeTypes:
     def test_auth_mount_path(self):
         """Test storage edge with mount_path auth."""
         edge = Edge({
-            "id": "host-to-storagebox",
+            "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
             "type": "storage",
             "from": {
                 "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],

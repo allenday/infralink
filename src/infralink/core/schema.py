@@ -370,14 +370,10 @@ class EdgeSchema(StrictModel):
 
     @field_validator("id")
     @classmethod
-    def validate_edge_id(cls, v: str) -> str:
-        """Validate that edge ID is a non-empty string.
-
-        Edge IDs can be UUIDs (preferred for production) or
-        human-readable slugs (acceptable for development/testing).
-        """
-        if not v or not v.strip():
-            raise ValueError("Edge ID must be a non-empty string")
+    def validate_edge_id_is_uuid(cls, v: str) -> str:
+        """Validate that edge ID is a valid UUID."""
+        if not validate_uuid_format(v):
+            raise ValueError(f"Edge ID must be a valid UUID, got: {v}")
         return v
 
 
