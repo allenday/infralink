@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 import yaml
 
-from infralink.core.schema import HostSchema, HostStatus, RegistrySchema
+from infralink.core.schema import HostSchema, HostStatus, RegistrySchema, RoleConfig, SlotBinding
 
 
 class Host:
@@ -370,3 +370,55 @@ class Registry:
 
     def __contains__(self, item: str) -> bool:
         return self.get(item) is not None
+
+
+def _service_names_for_host(host: HostSchema) -> set[str]:
+    return set(host.managed_services.keys()) | set(host.services.keys()) | set(
+        host.unmanaged_services.keys()
+    )
+
+
+def validate_role_slots(
+    hosts: dict[str, HostSchema], roles: dict[str, RoleConfig]
+) -> list[str]:
+    errors: list[str] = []
+    for host_id, host in hosts.items():
+        for role_name in host.roles:
+            role = roles.get(role_name)
+            if role is None:
+                continue
+            overrides = host.role_overrides.get(role_name, {})
+            slot_bindings = overrides.get("slots", {})
+            for slot_name, slot in role.slots.items():
+                if not slot.required:
+                    continue
+                binding_data = slot_bindings.get(slot_name)
+                if not binding_data:
+                    errors.append(
+                        f"Host {host.canonical_name} role {role_name} missing required slot {slot_name}"
+                    )
+                    continue
+                try:
+                    binding = (
+                        binding_data
+                        if isinstance(binding_data, SlotBinding)
+                        else SlotBinding(**binding_data)
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"Host {host.canonical_name} role {role_name} slot {slot_name} invalid: {exc}"
+                    )
+                    continue
+                target_host = hosts.get(binding.host)
+                if target_host is None:
+                    errors.append(
+                        f"Host {host.canonical_name} role {role_name} slot {slot_name} "
+                        f"targets unknown host {binding.host}"
+                    )
+                    continue
+                if binding.service not in _service_names_for_host(target_host):
+                    errors.append(
+                        f"Host {host.canonical_name} role {role_name} slot {slot_name} "
+                        f"targets unknown service {binding.service} on {binding.host}"
+                    )
+    return errors
