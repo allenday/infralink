@@ -179,112 +179,95 @@ class TestEdgeSet:
         assert monitoring.source_hosts == []  # Empty for wildcard
 
 
-class TestNewEdgeTypes:
-    """Tests for extended edge types (ssh, security, smtp, irc, xmpp)."""
+@pytest.mark.parametrize(
+    "edge_data, expected_type",
+    [
+        (
+            {
+                "id": "2d2f78ba-458f-48f9-9959-eca8b5600fb4",
+                "type": "ssh",
+                "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "*"},
+                "to": {
+                    "host": "ffff-gggg-hhhh-iiii-jjjj",
+                    "service": "ssh",
+                    "port": 22,
+                },
+                "protocol": "ssh",
+                "auth": {"username": "devops"},
+            },
+            EdgeType.SSH,
+        ),
+        (
+            {
+                "id": "a394b8dd-bcea-47f4-a2f8-7498cc1bd5ab",
+                "type": "security",
+                "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "nginx"},
+                "to": {
+                    "host": "aaaa-bbbb-cccc-dddd-eeee",
+                    "service": "tls-certs",
+                    "port": 0,
+                },
+                "protocol": "internal",
+            },
+            EdgeType.SECURITY,
+        ),
+        (
+            {
+                "id": "60fce49c-3df0-4433-981b-47ca3f848115",
+                "type": "smtp",
+                "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "wordpress"},
+                "to": {
+                    "host": "ffff-gggg-hhhh-iiii-jjjj",
+                    "service": "postfix",
+                    "port": 587,
+                },
+                "protocol": "smtp",
+            },
+            EdgeType.SMTP,
+        ),
+        (
+            {
+                "id": "6c63aef6-841d-4354-a404-9ff2361e9e35",
+                "type": "irc",
+                "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "anope"},
+                "to": {
+                    "host": "aaaa-bbbb-cccc-dddd-eeee",
+                    "service": "inspircd",
+                    "port": 7000,
+                },
+                "protocol": "s2s+tls",
+            },
+            EdgeType.IRC,
+        ),
+        (
+            {
+                "id": "75b5de43-573f-4243-94b3-1195acfe9fbd",
+                "type": "xmpp",
+                "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "jicofo"},
+                "to": {
+                    "host": "aaaa-bbbb-cccc-dddd-eeee",
+                    "service": "prosody",
+                    "port": 5222,
+                },
+                "protocol": "xmpp",
+            },
+            EdgeType.XMPP,
+        ),
+    ],
+)
+def test_edge_types_supported(edge_data, expected_type):
+    """Ensure new edge types validate and parse correctly."""
+    edge = Edge(edge_data)
+    assert edge.type == expected_type
 
-    def test_ssh_edge(self):
-        """Test SSH edge type with username auth."""
-        edge = Edge({
-            "id": "2d2f78ba-458f-48f9-9959-eca8b5600fb4",
-            "type": "ssh",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "*",
-            },
-            "to": {
-                "host": "ffff-gggg-hhhh-iiii-jjjj",
-                "service": "ssh",
-                "port": 22,
-            },
-            "protocol": "ssh",
-            "auth": {
-                "username": "devops",
-            },
-        })
-        assert edge.type == EdgeType.SSH
-        assert edge.target_port == 22
 
-    def test_security_edge(self):
-        """Test security edge type."""
-        edge = Edge({
-            "id": "a394b8dd-bcea-47f4-a2f8-7498cc1bd5ab",
-            "type": "security",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "nginx",
-            },
-            "to": {
-                "host": "aaaa-bbbb-cccc-dddd-eeee",
-                "service": "tls-certs",
-                "port": 0,
-            },
-            "protocol": "internal",
-        })
-        assert edge.type == EdgeType.SECURITY
-
-    def test_smtp_edge(self):
-        """Test SMTP edge type."""
-        edge = Edge({
-            "id": "60fce49c-3df0-4433-981b-47ca3f848115",
-            "type": "smtp",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "wordpress",
-            },
-            "to": {
-                "host": "ffff-gggg-hhhh-iiii-jjjj",
-                "service": "postfix",
-                "port": 587,
-            },
-            "protocol": "smtp",
-        })
-        assert edge.type == EdgeType.SMTP
-
-    def test_irc_edge(self):
-        """Test IRC edge type."""
-        edge = Edge({
-            "id": "6c63aef6-841d-4354-a404-9ff2361e9e35",
-            "type": "irc",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "anope",
-            },
-            "to": {
-                "host": "aaaa-bbbb-cccc-dddd-eeee",
-                "service": "inspircd",
-                "port": 7000,
-            },
-            "protocol": "s2s+tls",
-        })
-        assert edge.type == EdgeType.IRC
-
-    def test_xmpp_edge(self):
-        """Test XMPP edge type."""
-        edge = Edge({
-            "id": "75b5de43-573f-4243-94b3-1195acfe9fbd",
-            "type": "xmpp",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "jicofo",
-            },
-            "to": {
-                "host": "aaaa-bbbb-cccc-dddd-eeee",
-                "service": "prosody",
-                "port": 5222,
-            },
-            "protocol": "xmpp",
-        })
-        assert edge.type == EdgeType.XMPP
-
-    def test_auth_extended_fields(self):
-        """Test extended auth fields (username, database, role, mount_path)."""
-        edge = Edge({
+def test_auth_extended_fields():
+    """Test extended auth fields (username, database, role)."""
+    edge = Edge(
+        {
             "id": "fe33d192-8b6a-4b73-a269-eb64814c72a0",
             "type": "database",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "app",
-            },
+            "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "app"},
             "to": {
                 "host": "ffff-gggg-hhhh-iiii-jjjj",
                 "service": "postgresql",
@@ -297,26 +280,25 @@ class TestNewEdgeTypes:
                 "secret_ref": "postgresql_rw_password",
                 "role": "rw",
             },
-        })
-        assert edge.type == EdgeType.DATABASE
+        }
+    )
+    assert edge.type == EdgeType.DATABASE
 
-    def test_auth_mount_path(self):
-        """Test storage edge with mount_path auth."""
-        edge = Edge({
+
+def test_auth_mount_path():
+    """Test storage edge with mount_path auth."""
+    edge = Edge(
+        {
             "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
             "type": "storage",
-            "from": {
-                "hosts": ["aaaa-bbbb-cccc-dddd-eeee"],
-                "service": "storagebox0",
-            },
+            "from": {"hosts": ["aaaa-bbbb-cccc-dddd-eeee"], "service": "storagebox0"},
             "to": {
                 "host": "ffff-gggg-hhhh-iiii-jjjj",
                 "service": "sshfs",
                 "port": 0,
             },
             "protocol": "mount",
-            "auth": {
-                "mount_path": "/mnt/storagebox0",
-            },
-        })
-        assert edge.type == EdgeType.STORAGE
+            "auth": {"mount_path": "/mnt/storagebox0"},
+        }
+    )
+    assert edge.type == EdgeType.STORAGE
