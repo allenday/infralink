@@ -406,6 +406,8 @@ class EdgeMetadata(StrictModel):
     dns_name: str | None = None
     notes: str | None = None
 
+    model_config = ConfigDict(extra="allow")
+
 
 class EdgeSchema(StrictModel):
     """Schema for an edge between infrastructure nodes."""
