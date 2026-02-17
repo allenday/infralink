@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+
 import click
-from rich.console import Console
 
 from infralink.cli.main import Context, pass_context
-
-console = Console()
+from infralink.cli.output import error_envelope, ok_envelope
 
 
 @click.command()
@@ -75,16 +76,21 @@ def resolve(
         # Output as environment variables
         infralink resolve airflow-to-postgres --format env
     """
-    import json
-    import os
-
     from infralink.core.resolver import EdgeResolver, ResolutionError
 
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         registry = ctx.registry
         edges = ctx.edges
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "RESOLVE_FAILED",
+            "Ensure registry/edges paths are correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
         raise SystemExit(1)
 
     resolver = EdgeResolver(registry, edges)
@@ -93,7 +99,14 @@ def resolve(
     if password_env:
         password = os.environ.get(password_env)
         if not password:
-            console.print(f"[red]Error:[/red] Environment variable not set: {password_env}")
+            payload = error_envelope(
+                command,
+                f"Environment variable not set: {password_env}",
+                "RESOLVE_PASSWORD_ENV_MISSING",
+                f"Export {password_env} and re-run.",
+                [{"command": "env | grep PASSWORD", "description": "Inspect environment vars"}],
+            )
+            click.echo(json.dumps(payload))
             raise SystemExit(1)
 
     try:
@@ -101,11 +114,9 @@ def resolve(
         target_host = resolver.get_target_host(edge_id)
 
         if output_format == "ip":
-            console.print(resolver.get_target_ip(edge_id, prefer_ip))
-
+            result = {"ip": resolver.get_target_ip(edge_id, prefer_ip)}
         elif output_format == "endpoint":
-            console.print(resolver.get_target_endpoint(edge_id, prefer_ip))
-
+            result = {"endpoint": resolver.get_target_endpoint(edge_id, prefer_ip)}
         elif output_format == "url":
             url = resolver.get_url(
                 edge_id,
@@ -114,10 +125,9 @@ def resolve(
                 database=database,
                 prefer_ip=prefer_ip,
             )
-            console.print(url)
-
+            result = {"url": url}
         elif output_format == "json":
-            data = {
+            result = {
                 "edge_id": edge.id,
                 "type": edge.type.value,
                 "target": {
@@ -133,20 +143,40 @@ def resolve(
                 "protocol": edge.protocol,
                 "criticality": edge.criticality.value,
             }
-            console.print(json.dumps(data, indent=2))
-
         elif output_format == "env":
             prefix = edge_id.upper().replace("-", "_")
             ip = resolver.get_target_ip(edge_id, prefer_ip)
             port = edge.target_port
-            console.print(f"export {prefix}_HOST={ip}")
-            console.print(f"export {prefix}_PORT={port}")
-            console.print(f"export {prefix}_ENDPOINT={ip}:{port}")
+            env_vars = {
+                f"{prefix}_HOST": ip,
+                f"{prefix}_PORT": port,
+                f"{prefix}_ENDPOINT": f"{ip}:{port}",
+            }
             if user:
-                console.print(f"export {prefix}_USER={user}")
+                env_vars[f"{prefix}_USER"] = user
             if database:
-                console.print(f"export {prefix}_DATABASE={database}")
+                env_vars[f"{prefix}_DATABASE"] = database
+            result = {"env": env_vars}
+        else:
+            result = {}
+
+        payload = ok_envelope(
+            command,
+            result,
+            [
+                {"command": "infralink edges-list", "description": "List all edges"},
+                {"command": f"infralink resolve {edge_id} --format json", "description": "Resolve as JSON"},
+            ],
+        )
+        click.echo(json.dumps(payload))
 
     except ResolutionError as e:
-        console.print(f"[red]Resolution error:[/red] {e}")
+        payload = error_envelope(
+            command,
+            str(e),
+            "RESOLUTION_FAILED",
+            "Verify edge ID and registry/edges consistency.",
+            [{"command": "infralink edges-list", "description": "List all edges"}],
+        )
+        click.echo(json.dumps(payload))
         raise SystemExit(1)

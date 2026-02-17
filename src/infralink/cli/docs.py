@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
-from rich.console import Console
 
 from infralink.cli.main import Context, pass_context
-
-console = Console()
+from infralink.cli.output import error_envelope, ok_envelope
 
 
 @click.command()
@@ -69,25 +68,37 @@ def docs(
         generate_edge_index,
     )
 
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         registry = ctx.registry
         edges = ctx.edges
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "DOCS_FAILED",
+            "Ensure registry/edges paths are correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
         raise SystemExit(1)
 
     output.mkdir(parents=True, exist_ok=True)
-    generated_count = 0
+    outputs: list[str] = []
 
     # Generate index
     index_content = generate_index(registry, edges)
     index_file = output / "index.md"
     index_file.write_text(index_content)
-    generated_count += 1
-    console.print(f"[green]Generated:[/green] {index_file}")
+    outputs.append(str(index_file))
 
     if index_only:
-        console.print(f"\n[bold]Generated {generated_count} file(s)[/bold]")
+        payload = ok_envelope(
+            command,
+            {"outputs": outputs, "count": len(outputs)},
+            [{"command": "infralink docs", "description": "Generate full docs"}],
+        )
+        click.echo(json.dumps(payload))
         return
 
     # Generate per-host documentation
@@ -95,7 +106,14 @@ def docs(
     if host_filter:
         host = registry.get(host_filter)
         if not host:
-            console.print(f"[red]Host not found:[/red] {host_filter}")
+            payload = error_envelope(
+                command,
+                f"Host not found: {host_filter}",
+                "DOCS_HOST_NOT_FOUND",
+                "Use infralink hosts to list available hosts.",
+                [{"command": "infralink hosts", "description": "List all hosts"}],
+            )
+            click.echo(json.dumps(payload))
             raise SystemExit(1)
         hosts = [host]
 
@@ -103,10 +121,7 @@ def docs(
         doc_content = generate_host_doc(host, edges, registry)
         doc_file = output / f"{host.canonical_name}.md"
         doc_file.write_text(doc_content)
-        generated_count += 1
-
-        if ctx.verbose:
-            console.print(f"[dim]Generated:[/dim] {doc_file}")
+        outputs.append(str(doc_file))
 
     # Generate edge index
     if len(edges) > 0:
@@ -115,7 +130,14 @@ def docs(
         edge_index = generate_edge_index(edges, registry)
         edge_file = edge_dir / "index.md"
         edge_file.write_text(edge_index)
-        generated_count += 1
-        console.print(f"[green]Generated:[/green] {edge_file}")
+        outputs.append(str(edge_file))
 
-    console.print(f"\n[bold]Generated {generated_count} file(s) in {output}[/bold]")
+    payload = ok_envelope(
+        command,
+        {"outputs": outputs, "count": len(outputs)},
+        [
+            {"command": "infralink diagram", "description": "Generate diagrams"},
+            {"command": "infralink analyze", "description": "Analyze topology coverage"},
+        ],
+    )
+    click.echo(json.dumps(payload))
