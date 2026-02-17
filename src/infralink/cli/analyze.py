@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import click
 import yaml
-from rich.console import Console
-from rich.table import Table
 
-console = Console()
+from infralink.cli.output import error_envelope, ok_envelope
 
 
-def convert_to_uuid_primary(data: dict[str, Any]) -> dict[str, Any]:
+def convert_to_uuid_primary(data: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
     """Convert old format (name key + uuid field) to UUID-as-primary format."""
     new_hosts = {}
     for name, host_data in data.get("hosts", {}).items():
         uuid = host_data.get("uuid")
         if not uuid:
-            console.print(f"[yellow]Warning: Host {name} has no UUID, skipping[/yellow]")
+            warnings.append(f"Host {name} has no UUID, skipping")
             continue
         # Remove uuid from data since it's now the key
         host_copy = {k: v for k, v in host_data.items() if k != "uuid"}
@@ -205,43 +204,51 @@ def analyze(
     - local/edges.yml - Inferred edges from service_dependencies
     - local/diagram.mmd - Mermaid diagram
     """
-    # Load prod registry
-    console.print(f"[cyan]Loading registry from {registry}[/cyan]")
-    with registry.open() as f:
-        data = yaml.safe_load(f)
+    command = click.get_current_context().command_path.replace("cli", "infralink")
+    warnings: list[str] = []
+
+    try:
+        with registry.open() as f:
+            data = yaml.safe_load(f)
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "ANALYZE_LOAD_FAILED",
+            "Ensure registry path is correct and readable.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
+        raise SystemExit(1)
 
     # Stats
     total_hosts = len(data.get("hosts", {}))
     active_hosts = sum(1 for h in data.get("hosts", {}).values() if h.get("status") == "active")
-    console.print(f"  Total hosts: {total_hosts}")
-    console.print(f"  Active hosts: {active_hosts}")
 
     # Find prometheus host
     prometheus_uuid = None
     for name, host_data in data.get("hosts", {}).items():
         if "prometheus" in host_data.get("services", []):
             prometheus_uuid = host_data.get("uuid")
-            console.print(f"  Prometheus host: {host_data.get('canonical_name')} ({prometheus_uuid[:8]}...)")
             break
 
     # Create output directory
     output.mkdir(parents=True, exist_ok=True)
 
+    edge_list: list[dict[str, Any]] = []
+    mon_edges: list[dict[str, Any]] = []
+
     # Convert to UUID-primary format
-    converted = convert_to_uuid_primary(data)
+    converted = convert_to_uuid_primary(data, warnings)
     converted_path = output / "registry.yml"
     with converted_path.open("w") as f:
         yaml.dump(converted, f, default_flow_style=False, sort_keys=False)
-    console.print(f"[green]Wrote {converted_path}[/green]")
 
     # Generate edges
     if edges:
         edge_list = infer_edges_from_dependencies(data)
-        console.print(f"  Inferred {len(edge_list)} edges from service_dependencies")
-
         if monitoring and prometheus_uuid:
             mon_edges = infer_monitoring_edges(data, prometheus_uuid)
-            console.print(f"  Inferred {len(mon_edges)} monitoring edges")
             edge_list.extend(mon_edges)
 
         edges_data = {
@@ -251,26 +258,6 @@ def analyze(
         edges_path = output / "edges.yml"
         with edges_path.open("w") as f:
             yaml.dump(edges_data, f, default_flow_style=False, sort_keys=False)
-        console.print(f"[green]Wrote {edges_path}[/green]")
-
-        # Show edge summary
-        if edge_list:
-            table = Table(title="Inferred Edges")
-            table.add_column("ID")
-            table.add_column("Type")
-            table.add_column("Target")
-            table.add_column("Source")
-
-            for e in edge_list[:20]:  # Show first 20
-                table.add_row(
-                    e["id"][:40],
-                    e["type"],
-                    f"{e['to']['service']}:{e['to']['port']}",
-                    e.get("metadata", {}).get("source", ""),
-                )
-            console.print(table)
-            if len(edge_list) > 20:
-                console.print(f"  ... and {len(edge_list) - 20} more")
 
     # Generate diagram
     if diagram:
@@ -278,23 +265,15 @@ def analyze(
         diagram_path = output / "diagram.mmd"
         with diagram_path.open("w") as f:
             f.write(mermaid)
-        console.print(f"[green]Wrote {diagram_path}[/green]")
 
     # Summary of gaps
-    console.print("\n[bold]Gap Analysis:[/bold]")
-
     # Hosts without observability.ready
     not_ready = [
         h.get("canonical_name", n)
         for n, h in data.get("hosts", {}).items()
         if h.get("status") == "active" and not h.get("observability", {}).get("ready")
     ]
-    if not_ready:
-        console.print(f"  [yellow]Hosts not observability-ready ({len(not_ready)}):[/yellow]")
-        for name in not_ready[:10]:
-            console.print(f"    - {name}")
-        if len(not_ready) > 10:
-            console.print(f"    ... and {len(not_ready) - 10} more")
+    not_ready_preview = not_ready[:10]
 
     # Hosts with unmanaged services
     unmanaged = []
@@ -305,10 +284,7 @@ def analyze(
         if um:
             unmanaged.append((h.get("canonical_name", n), um))
 
-    if unmanaged:
-        console.print(f"  [yellow]Hosts with unmanaged services ({len(unmanaged)}):[/yellow]")
-        for name, services in unmanaged[:10]:
-            console.print(f"    - {name}: {', '.join(services)}")
+    unmanaged_preview = unmanaged[:10]
 
     # Missing exporters
     missing_exp = []
@@ -319,7 +295,39 @@ def analyze(
         if me:
             missing_exp.append((h.get("canonical_name", n), me))
 
-    if missing_exp:
-        console.print(f"  [yellow]Hosts with missing exporters ({len(missing_exp)}):[/yellow]")
-        for name, exporters in missing_exp:
-            console.print(f"    - {name}: {', '.join(exporters)}")
+    missing_exp_preview = missing_exp[:10]
+
+    result = {
+        "registry": {
+            "path": str(registry),
+            "total_hosts": total_hosts,
+            "active_hosts": active_hosts,
+            "prometheus_uuid": prometheus_uuid,
+        },
+        "outputs": {
+            "registry": str(converted_path),
+            "edges": str(output / "edges.yml") if edges else None,
+            "diagram": str(output / "diagram.mmd") if diagram else None,
+        },
+        "edges": {
+            "total": len(edge_list) if edges else 0,
+            "monitoring_edges": len(mon_edges) if edges and monitoring and prometheus_uuid else 0,
+            "preview": edge_list[:20] if edges else [],
+        },
+        "gaps": {
+            "not_observability_ready": {"total": len(not_ready), "items": not_ready_preview},
+            "unmanaged_services": {"total": len(unmanaged), "items": unmanaged_preview},
+            "missing_exporters": {"total": len(missing_exp), "items": missing_exp_preview},
+        },
+        "warnings": warnings,
+    }
+
+    payload = ok_envelope(
+        command,
+        result,
+        [
+            {"command": "infralink validate", "description": "Validate registry and edges"},
+            {"command": "infralink diagram", "description": "Generate diagram outputs"},
+        ],
+    )
+    click.echo(json.dumps(payload))

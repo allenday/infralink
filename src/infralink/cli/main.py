@@ -9,7 +9,7 @@ from typing import Any
 import click
 
 from infralink import __version__
-from infralink.cli.output import ok_envelope
+from infralink.cli.output import error_envelope, ok_envelope
 
 
 # Default paths (can be overridden)
@@ -216,118 +216,139 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool) -> None:
 @pass_context
 def info(ctx: Context) -> None:
     """Show registry and edge summary."""
-    from rich.table import Table
-
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         registry = ctx.registry
         edges = ctx.edges
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "INFO_FAILED",
+            "Ensure registry/edges paths are correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
+        raise SystemExit(1)
 
-    console.print(f"\n[bold]Infralink v{__version__}[/bold]\n")
+    from infralink.core.schema import EdgeType
 
-    # Registry summary
-    console.print("[bold cyan]Registry Summary[/bold cyan]")
-    console.print(f"  Path: {ctx.registry_path}")
-    console.print(f"  Total hosts: {len(registry)}")
-    console.print(f"  Active hosts: {len(registry.active_hosts())}")
-    console.print(f"  Groups: {', '.join(sorted(registry.groups()))}")
-    console.print(f"  Clouds: {', '.join(sorted(registry.clouds()))}")
+    edge_types = []
+    for etype in EdgeType:
+        count = len(edges.by_type(etype))
+        if count > 0:
+            edge_types.append({"type": etype.value, "count": count})
 
-    # Edge summary
-    console.print(f"\n[bold cyan]Edge Summary[/bold cyan]")
-    console.print(f"  Path: {ctx.edges_path}")
-    console.print(f"  Total edges: {len(edges)}")
-    console.print(f"  Critical edges: {len(edges.critical_edges())}")
-
-    # Edge type breakdown
-    if len(edges) > 0:
-        table = Table(title="Edges by Type")
-        table.add_column("Type", style="cyan")
-        table.add_column("Count", justify="right")
-
-        from infralink.core.schema import EdgeType
-
-        for etype in EdgeType:
-            count = len(edges.by_type(etype))
-            if count > 0:
-                table.add_row(etype.value, str(count))
-
-        console.print(table)
+    result = {
+        "version": __version__,
+        "registry": {
+            "path": str(ctx.registry_path),
+            "total_hosts": len(registry),
+            "active_hosts": len(registry.active_hosts()),
+            "groups": sorted(registry.groups()),
+            "clouds": sorted(registry.clouds()),
+        },
+        "edges": {
+            "path": str(ctx.edges_path),
+            "total_edges": len(edges),
+            "critical_edges": len(edges.critical_edges()),
+            "by_type": edge_types,
+        },
+    }
+    payload = ok_envelope(
+        command,
+        result,
+        [
+            {"command": "infralink hosts", "description": "List all hosts"},
+            {"command": "infralink edges-list", "description": "List all edges"},
+        ],
+    )
+    click.echo(json.dumps(payload))
 
 
 @cli.command()
 @pass_context
 def hosts(ctx: Context) -> None:
     """List all hosts in registry."""
-    from rich.table import Table
-
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         registry = ctx.registry
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "HOSTS_FAILED",
+            "Ensure registry path is correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
+        raise SystemExit(1)
 
-    table = Table(title="Infrastructure Hosts")
-    table.add_column("Name", style="cyan")
-    table.add_column("UUID", style="dim")
-    table.add_column("Status")
-    table.add_column("Group")
-    table.add_column("Cloud")
-    table.add_column("Tailscale IP")
-
+    hosts_payload = []
     for host in sorted(registry, key=lambda h: h.canonical_name):
-        status_style = "green" if host.is_active else "red"
-        table.add_row(
-            host.canonical_name,
-            host.uuid_prefix + "...",
-            f"[{status_style}]{host.status.value}[/{status_style}]",
-            host.group or "-",
-            host.cloud or "-",
-            host.tailscale_ip or "-",
+        hosts_payload.append(
+            {
+                "name": host.canonical_name,
+                "uuid": host.uuid,
+                "status": host.status.value,
+                "group": host.group,
+                "cloud": host.cloud,
+                "tailscale_ip": host.tailscale_ip,
+            }
         )
 
-    console.print(table)
+    payload = ok_envelope(
+        command,
+        {"hosts": hosts_payload, "count": len(hosts_payload)},
+        [
+            {"command": "infralink info", "description": "Show registry summary"},
+            {"command": "infralink edges-list", "description": "List all edges"},
+        ],
+    )
+    click.echo(json.dumps(payload))
 
 
 @cli.command()
 @pass_context
 def edges_list(ctx: Context) -> None:
     """List all declared edges."""
-    from rich.table import Table
-
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         edges = ctx.edges
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "EDGES_FAILED",
+            "Ensure edges path is correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
+        raise SystemExit(1)
 
-    if len(edges) == 0:
-        console.print("[yellow]No edges declared[/yellow]")
-        return
-
-    table = Table(title="Infrastructure Edges")
-    table.add_column("ID", style="cyan")
-    table.add_column("Type")
-    table.add_column("Target")
-    table.add_column("Port", justify="right")
-    table.add_column("Criticality")
-    table.add_column("Sources")
-
+    edge_payload = []
     for edge in edges:
-        crit_style = "red" if edge.is_critical else "yellow" if edge.criticality.value == "high" else "dim"
         sources = len(edge.source_hosts) if not edge.is_wildcard_source() else "*"
-        table.add_row(
-            edge.id,
-            edge.type.value,
-            edge.target_service,
-            str(edge.target_port),
-            f"[{crit_style}]{edge.criticality.value}[/{crit_style}]",
-            str(sources),
+        edge_payload.append(
+            {
+                "id": edge.id,
+                "type": edge.type.value,
+                "target_service": edge.target_service,
+                "target_port": edge.target_port,
+                "criticality": edge.criticality.value,
+                "sources": sources,
+            }
         )
 
-    console.print(table)
+    payload = ok_envelope(
+        command,
+        {"edges": edge_payload, "count": len(edge_payload)},
+        [
+            {"command": "infralink info", "description": "Show registry summary"},
+            {"command": "infralink resolve <edge-id>", "description": "Resolve an edge"},
+        ],
+    )
+    click.echo(json.dumps(payload))
 
 
 if __name__ == "__main__":
