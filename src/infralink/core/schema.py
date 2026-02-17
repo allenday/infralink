@@ -276,6 +276,13 @@ class HostSchema(NodeSchema):
     # Observability config (what should be monitored)
     observability: ObservabilityConfig | None = None
 
+    # Probes and TLS
+    probe_path: str | None = None
+    tls_certs: list[dict[str, Any]] = Field(default_factory=list)
+
+    # WordPress email check configuration (pass-through)
+    wordpress_email_check: dict[str, Any] | None = None
+
     # Metadata
     docker_version: str | None = None
     probe_path: str | None = None  # Health check endpoint path
@@ -326,6 +333,7 @@ class EdgeType(str, Enum):
     SSH = "ssh"
     SECURITY = "security"
     SMTP = "smtp"
+    EMAIL = "email"
     IRC = "irc"
     XMPP = "xmpp"
     EMAIL = "email"
@@ -391,7 +399,7 @@ class EdgeTarget(StrictModel):
 
     host: str  # UUID
     service: str
-    port: int
+    port: int | None = None
 
 
 class EdgeMetadata(StrictModel):
@@ -401,6 +409,7 @@ class EdgeMetadata(StrictModel):
     criticality: Criticality = Criticality.MEDIUM
     dns_name: str | None = None
     notes: str | None = None
+    dns_name: str | None = None
 
 
 class EdgeSchema(StrictModel):
