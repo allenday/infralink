@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 try:
@@ -12,12 +14,7 @@ except ModuleNotFoundError:
     def pass_context(func):  # type: ignore[misc]
         return func
 
-def _get_console():
-    try:
-        from rich.console import Console
-    except ModuleNotFoundError:
-        return None
-    return Console()
+from infralink.cli.output import error_envelope, ok_envelope
 
 
 def _edge_node_type_error(source_service: str | None) -> str | None:
@@ -56,73 +53,49 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
     """
     from infralink.core.resolver import EdgeResolver
 
-    console = _get_console()
     errors: list[str] = []
     warnings: list[str] = []
-
-    def emit(message: str) -> None:
-        if console:
-            console.print(message)
-        else:
-            print(message)
+    command = click.get_current_context().command_path.replace("cli", "infralink")
 
     # Load and validate registry
-    emit("[bold]Validating registry...[/bold]")
     try:
         registry = ctx.registry
-        emit(f"  [green]✓[/green] Registry loaded: {len(registry)} hosts")
     except Exception as e:
         errors.append(f"Registry validation failed: {e}")
-        emit(f"  [red]✗[/red] Registry validation failed: {e}")
 
     # Load and validate edges
-    emit("[bold]Validating edges...[/bold]")
     try:
         edges = ctx.edges
-        emit(f"  [green]✓[/green] Edges loaded: {len(edges)} edges")
     except Exception as e:
         errors.append(f"Edge validation failed: {e}")
-        emit(f"  [red]✗[/red] Edge validation failed: {e}")
 
     # Check edge target references
     if "registry" in dir() and "edges" in dir() and len(edges) > 0:
-        emit("[bold]Checking edge references...[/bold]")
         for edge in edges:
             node_type_error = _edge_node_type_error(edge.source_service)
             if node_type_error:
                 errors.append(f"Edge '{edge.id}': {node_type_error}")
-                emit(f"  [red]✗[/red] Edge '{edge.id}': {node_type_error}")
 
             # Check target host exists
             target = registry.get_by_uuid(edge.target_host)
             if not target:
                 errors.append(f"Edge '{edge.id}': target host not found: {edge.target_host}")
-                emit(f"  [red]✗[/red] Edge '{edge.id}': target host not found")
             elif not target.is_active:
                 warnings.append(f"Edge '{edge.id}': target host is not active: {target.canonical_name}")
-                emit(f"  [yellow]![/yellow] Edge '{edge.id}': target host not active")
 
             # Check source hosts exist
             for source_uuid in edge.source_hosts:
                 source = registry.get_by_uuid(source_uuid)
                 if not source:
                     errors.append(f"Edge '{edge.id}': source host not found: {source_uuid}")
-                    emit(f"  [red]✗[/red] Edge '{edge.id}': source not found: {source_uuid[:8]}...")
-
-        if not errors:
-            emit(f"  [green]✓[/green] All edge references valid")
 
     # Check edge resolution
     if check_resolution and "registry" in dir() and "edges" in dir():
-        emit("[bold]Checking edge resolution...[/bold]")
         resolver = EdgeResolver(registry, edges)
         resolution_errors = resolver.validate_all()
         if resolution_errors:
             for err in resolution_errors:
                 errors.append(err)
-                emit(f"  [red]✗[/red] {err}")
-        else:
-            emit(f"  [green]✓[/green] All edges resolvable")
 
     # Check for duplicate edge IDs
     if "edges" in dir():
@@ -134,7 +107,6 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
 
     # Check that hosts use roles, not direct services
     if "registry" in dir():
-        emit("[bold]Checking role declarations...[/bold]")
         hosts_without_roles = []
         for host in registry:
             if not host.is_active:
@@ -146,13 +118,6 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
                     f"Host '{host.canonical_name}' ({host.uuid_prefix}): "
                     f"has managed_services but no roles. Declare roles instead."
                 )
-        if hosts_without_roles:
-            emit(
-                f"  [red]✗[/red] {len(hosts_without_roles)} host(s) use services without roles"
-            )
-        else:
-            emit(f"  [green]✓[/green] All active hosts declare roles")
-
         # Report on unmanaged infrastructure
         hosts_with_unmanaged = []
         for host in registry:
@@ -161,35 +126,54 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
             if host.unmanaged_services or host.unmanaged_roles:
                 hosts_with_unmanaged.append(host)
         if hosts_with_unmanaged:
-            emit(
-                f"  [yellow]![/yellow] {len(hosts_with_unmanaged)} host(s) have unmanaged infrastructure"
-            )
             for h in hosts_with_unmanaged:
                 unmanaged_items = list(h.unmanaged_services.keys()) + list(h.unmanaged_roles.keys())
                 warnings.append(
                     f"Host '{h.canonical_name}' has unmanaged: {', '.join(unmanaged_items)}"
                 )
 
-    # Summary
-    emit("\n[bold]Validation Summary[/bold]")
-    emit(f"  Errors: {len(errors)}")
-    emit(f"  Warnings: {len(warnings)}")
+    result = {
+        "valid": len(errors) == 0 and (not strict or len(warnings) == 0),
+        "errors": errors,
+        "warnings": warnings,
+    }
 
     if errors:
-        emit("\n[red bold]Validation failed[/red bold]")
-        for err in errors:
-            emit(f"  [red]•[/red] {err}")
+        payload = error_envelope(
+            command,
+            "Validation failed",
+            "VALIDATION_FAILED",
+            "Fix registry/edge errors and re-run infralink validate.",
+            [
+                {"command": "infralink validate", "description": "Re-run validation"},
+                {"command": "infralink analyze", "description": "Inspect topology coverage"},
+            ],
+        )
+        payload["result"] = result
+        click.echo(json.dumps(payload))
         raise SystemExit(1)
 
     if warnings and strict:
-        emit("\n[yellow bold]Validation failed (strict mode)[/yellow bold]")
-        for warn in warnings:
-            emit(f"  [yellow]•[/yellow] {warn}")
+        payload = error_envelope(
+            command,
+            "Validation failed (strict mode)",
+            "VALIDATION_STRICT_FAILED",
+            "Resolve warnings or run without --strict.",
+            [
+                {"command": "infralink validate", "description": "Re-run validation"},
+                {"command": "infralink validate --strict", "description": "Re-run in strict mode"},
+            ],
+        )
+        payload["result"] = result
+        click.echo(json.dumps(payload))
         raise SystemExit(1)
 
-    if warnings:
-        emit("\n[yellow]Warnings:[/yellow]")
-        for warn in warnings:
-            emit(f"  [yellow]•[/yellow] {warn}")
-
-    emit("\n[green bold]Validation passed[/green bold]")
+    payload = ok_envelope(
+        command,
+        result,
+        [
+            {"command": "infralink check", "description": "Run edge health checks"},
+            {"command": "infralink analyze", "description": "Analyze topology coverage"},
+        ],
+    )
+    click.echo(json.dumps(payload))
