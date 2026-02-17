@@ -285,9 +285,6 @@ class HostSchema(NodeSchema):
 
     # Metadata
     docker_version: str | None = None
-    probe_path: str | None = None  # Health check endpoint path
-    tls_certs: list[dict[str, Any]] = Field(default_factory=list)  # TLS cert monitoring
-    wordpress_email_check: dict[str, Any] | None = None  # WP email monitoring config
     created: str | None = None
     updated: str | None = None
     legacy_instances: list[str] = Field(default_factory=list)  # Old ansible names
@@ -336,7 +333,6 @@ class EdgeType(str, Enum):
     EMAIL = "email"
     IRC = "irc"
     XMPP = "xmpp"
-    EMAIL = "email"
 
 
 class Criticality(str, Enum):
@@ -409,7 +405,6 @@ class EdgeMetadata(StrictModel):
     criticality: Criticality = Criticality.MEDIUM
     dns_name: str | None = None
     notes: str | None = None
-    dns_name: str | None = None
 
 
 class EdgeSchema(StrictModel):
