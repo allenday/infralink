@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,11 @@ DEFAULT_REGISTRY = "examples/registry.yml"
 DEFAULT_EDGES = "examples/edges.yml"
 
 
+def _json_out(payload: dict[str, Any]) -> None:
+    """Emit JSON to stdout (agent-first / machine-friendly)."""
+    console.print_json(json.dumps(payload), indent=2)
+
+
 class Context:
     """CLI context object passed to commands."""
 
@@ -24,6 +30,7 @@ class Context:
         self.registry_path: Path | None = None
         self.edges_path: Path | None = None
         self.verbose: bool = False
+        self.output: str = "json"
         self._registry: Any = None
         self._edges: Any = None
 
@@ -59,6 +66,12 @@ class Context:
                     self._edges = EdgeSet([])
         return self._edges
 
+    def emit(self, payload: dict[str, Any]) -> None:
+        if self.output == "json":
+            _json_out(payload)
+        else:
+            console.print(payload.get("human", ""))
+
 
 pass_context = click.make_pass_decorator(Context, ensure=True)
 
@@ -80,8 +93,16 @@ pass_context = click.make_pass_decorator(Context, ensure=True)
     help="Path to edges YAML file",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Choice(["json", "human"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="Output format (json = agent-first)",
+)
 @pass_context
-def cli(ctx: Context, registry: Path, edges: Path, verbose: bool) -> None:
+def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -> None:
     """
     Infralink - Infrastructure topology modeling.
 
@@ -91,6 +112,7 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool) -> None:
     ctx.registry_path = registry
     ctx.edges_path = edges
     ctx.verbose = verbose
+    ctx.output = output
 
 
 # Import and register subcommands
@@ -109,22 +131,54 @@ cli.add_command(resolve)
 cli.add_command(validate)
 
 
+def _links(command: str, ctx: Context) -> dict[str, str]:
+    base = "infralink"
+    return {
+        "self": f"{base} {command}",
+        "registry": str(ctx.registry_path) if ctx.registry_path else "",
+        "edges": str(ctx.edges_path) if ctx.edges_path else "",
+    }
+
+
 @cli.command()
 @pass_context
 def info(ctx: Context) -> None:
     """Show registry and edge summary."""
-    from rich.table import Table
+    from infralink.core.schema import EdgeType
 
     try:
         registry = ctx.registry
         edges = ctx.edges
     except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+        _json_out({"status": "error", "error": str(e), "links": _links("info", ctx)})
+        raise SystemExit(1)
+
+    if ctx.output == "json":
+        data = {
+            "version": __version__,
+            "registry": {
+                "path": str(ctx.registry_path),
+                "total_hosts": len(registry),
+                "active_hosts": len(registry.active_hosts()),
+                "groups": sorted(registry.groups()),
+                "clouds": sorted(registry.clouds()),
+            },
+            "edges": {
+                "path": str(ctx.edges_path),
+                "total_edges": len(edges),
+                "critical_edges": len(edges.critical_edges()),
+                "by_type": {etype.value: len(edges.by_type(etype)) for etype in EdgeType},
+            },
+            "links": _links("info", ctx),
+            "status": "ok",
+        }
+        _json_out(data)
         return
 
-    console.print(f"\n[bold]Infralink v{__version__}[/bold]\n")
+    # Human output
+    from rich.table import Table
 
-    # Registry summary
+    console.print(f"\n[bold]Infralink v{__version__}[/bold]\n")
     console.print("[bold cyan]Registry Summary[/bold cyan]")
     console.print(f"  Path: {ctx.registry_path}")
     console.print(f"  Total hosts: {len(registry)}")
@@ -132,25 +186,19 @@ def info(ctx: Context) -> None:
     console.print(f"  Groups: {', '.join(sorted(registry.groups()))}")
     console.print(f"  Clouds: {', '.join(sorted(registry.clouds()))}")
 
-    # Edge summary
     console.print(f"\n[bold cyan]Edge Summary[/bold cyan]")
     console.print(f"  Path: {ctx.edges_path}")
     console.print(f"  Total edges: {len(edges)}")
     console.print(f"  Critical edges: {len(edges.critical_edges())}")
 
-    # Edge type breakdown
     if len(edges) > 0:
         table = Table(title="Edges by Type")
         table.add_column("Type", style="cyan")
         table.add_column("Count", justify="right")
-
-        from infralink.core.schema import EdgeType
-
         for etype in EdgeType:
             count = len(edges.by_type(etype))
             if count > 0:
                 table.add_row(etype.value, str(count))
-
         console.print(table)
 
 
@@ -158,13 +206,29 @@ def info(ctx: Context) -> None:
 @pass_context
 def hosts(ctx: Context) -> None:
     """List all hosts in registry."""
-    from rich.table import Table
-
     try:
         registry = ctx.registry
     except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+        _json_out({"status": "error", "error": str(e), "links": _links("hosts", ctx)})
+        raise SystemExit(1)
+
+    if ctx.output == "json":
+        data = [
+            {
+                "canonical_name": h.canonical_name,
+                "uuid": h.uuid,
+                "status": h.status.value,
+                "group": h.group,
+                "cloud": h.cloud,
+                "tailscale_ip": h.tailscale_ip,
+                "tailscale_name": h.tailscale_name,
+            }
+            for h in sorted(registry, key=lambda h: h.canonical_name)
+        ]
+        _json_out({"status": "ok", "hosts": data, "links": _links("hosts", ctx)})
         return
+
+    from rich.table import Table
 
     table = Table(title="Infrastructure Hosts")
     table.add_column("Name", style="cyan")
@@ -188,44 +252,57 @@ def hosts(ctx: Context) -> None:
     console.print(table)
 
 
-@cli.command()
+@cli.command(name="edges")
 @pass_context
 def edges_list(ctx: Context) -> None:
     """List all declared edges."""
-    from rich.table import Table
-
     try:
         edges = ctx.edges
     except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+        _json_out({"status": "error", "error": str(e), "links": _links("edges", ctx)})
+        raise SystemExit(1)
+
+    if ctx.output == "json":
+        data = [
+            {
+                "id": edge.id,
+                "type": edge.type.value,
+                "from": {
+                    "hosts": edge.source_hosts,
+                    "service": edge.source_service,
+                },
+                "to": {
+                    "host": edge.target_host,
+                    "service": edge.target_service,
+                    "port": edge.target_port,
+                },
+                "protocol": edge.protocol,
+                "criticality": edge.criticality.value,
+            }
+            for edge in edges
+        ]
+        _json_out({"status": "ok", "edges": data, "links": _links("edges", ctx)})
         return
 
-    if len(edges) == 0:
-        console.print("[yellow]No edges declared[/yellow]")
-        return
+    from rich.table import Table
 
     table = Table(title="Infrastructure Edges")
-    table.add_column("ID", style="cyan")
+    table.add_column("ID", style="dim")
     table.add_column("Type")
-    table.add_column("Target")
-    table.add_column("Port", justify="right")
-    table.add_column("Criticality")
-    table.add_column("Sources")
+    table.add_column("From")
+    table.add_column("To")
+    table.add_column("Protocol")
 
     for edge in edges:
-        crit_style = "red" if edge.is_critical else "yellow" if edge.criticality.value == "high" else "dim"
-        sources = len(edge.source_hosts) if not edge.is_wildcard_source() else "*"
         table.add_row(
             edge.id,
             edge.type.value,
-            edge.target_service,
-            str(edge.target_port),
-            f"[{crit_style}]{edge.criticality.value}[/{crit_style}]",
-            str(sources),
+            f"{','.join(edge.source_hosts) or '*'}:{edge.source_service or '*'}",
+            f"{edge.target_host}:{edge.target_service}:{edge.target_port}",
+            edge.protocol or "-",
         )
 
     console.print(table)
 
 
-if __name__ == "__main__":
-    cli()
+# Import commands after definitions to register
