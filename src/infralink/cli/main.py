@@ -7,11 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import click
-from rich.console import Console
 
 from infralink import __version__
+from infralink.cli.output import ok_envelope
 
-console = Console()
 
 # Default paths (can be overridden)
 DEFAULT_REGISTRY = "examples/registry.yml"
@@ -76,7 +75,71 @@ class Context:
 pass_context = click.make_pass_decorator(Context, ensure=True)
 
 
-@click.group()
+COMMAND_METADATA: dict[str, dict[str, str]] = {
+    "analyze": {
+        "description": "Analyze registry and generate derived artifacts.",
+        "usage": "infralink analyze",
+    },
+    "check": {"description": "Run health checks for edges.", "usage": "infralink check"},
+    "diagram": {
+        "description": "Generate topology diagrams.",
+        "usage": "infralink diagram",
+    },
+    "docs": {"description": "Generate documentation outputs.", "usage": "infralink docs"},
+    "resolve": {"description": "Resolve an edge to targets.", "usage": "infralink resolve <edge-id>"},
+    "validate": {
+        "description": "Validate registry and edges.",
+        "usage": "infralink validate",
+    },
+    "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
+    "hosts": {"description": "List all hosts.", "usage": "infralink hosts"},
+    "edges-list": {"description": "List all edges.", "usage": "infralink edges-list"},
+}
+
+
+def _load_command(name: str):
+    if name == "analyze":
+        from infralink.cli.analyze import analyze
+
+        return analyze
+    if name == "check":
+        from infralink.cli.check import check
+
+        return check
+    if name == "diagram":
+        from infralink.cli.diagram import diagram
+
+        return diagram
+    if name == "docs":
+        from infralink.cli.docs import docs
+
+        return docs
+    if name == "resolve":
+        from infralink.cli.resolve import resolve
+
+        return resolve
+    if name == "validate":
+        from infralink.cli.validate import validate
+
+        return validate
+    if name == "info":
+        return info
+    if name == "hosts":
+        return hosts
+    if name == "edges-list":
+        return edges_list
+    return None
+
+
+class LazyGroup(click.Group):
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return sorted(COMMAND_METADATA.keys())
+
+    def get_command(self, ctx: click.Context, cmd_name: str):
+        return _load_command(cmd_name)
+
+
+@click.group(cls=LazyGroup, invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="infralink")
 @click.option(
     "-r",
@@ -114,21 +177,60 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
     ctx.verbose = verbose
     ctx.output = output
 
+    click_ctx = click.get_current_context()
+    if click_ctx.invoked_subcommand is not None:
+        return
 
-# Import and register subcommands
-from infralink.cli.analyze import analyze
-from infralink.cli.check import check
-from infralink.cli.diagram import diagram
-from infralink.cli.docs import docs
-from infralink.cli.resolve import resolve
-from infralink.cli.validate import validate
+    command_tree = []
+    for name, meta in sorted(COMMAND_METADATA.items()):
+        command_tree.append(
+            {
+                "name": name,
+                "description": meta.get("description", ""),
+                "usage": meta.get("usage", f"infralink {name}"),
+            }
+        )
 
-cli.add_command(analyze)
-cli.add_command(check)
-cli.add_command(diagram)
-cli.add_command(docs)
-cli.add_command(resolve)
-cli.add_command(validate)
+    registry_summary: dict[str, Any] = {}
+    edges_summary: dict[str, Any] = {}
+    try:
+        registry = ctx.registry
+        registry_summary = {
+            "path": str(ctx.registry_path),
+            "total_hosts": len(registry),
+            "active_hosts": len(registry.active_hosts()),
+            "groups": sorted(registry.groups()),
+            "clouds": sorted(registry.clouds()),
+        }
+    except Exception as exc:
+        registry_summary = {"error": str(exc)}
+
+    try:
+        edges_obj = ctx.edges
+        edges_summary = {
+            "path": str(ctx.edges_path),
+            "total_edges": len(edges_obj),
+            "critical_edges": len(edges_obj.critical_edges()),
+        }
+    except Exception as exc:
+        edges_summary = {"error": str(exc)}
+
+    payload = ok_envelope(
+        "infralink",
+        {
+            "description": "Infralink - Infrastructure topology modeling.",
+            "version": __version__,
+            "registry": registry_summary,
+            "edges": edges_summary,
+            "commands": command_tree,
+        },
+        [
+            {"command": "infralink validate", "description": "Validate registry and edges"},
+            {"command": "infralink analyze", "description": "Analyze topology coverage"},
+            {"command": "infralink edges-list", "description": "List all edges"},
+        ],
+    )
+    click.echo(json.dumps(payload))
 
 
 def _links(command: str, ctx: Context) -> dict[str, str]:
