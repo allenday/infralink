@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -63,3 +64,29 @@ def test_edges_list_json():
         result = runner.invoke(cli, ["--registry", "registry.yml", "--edges", "edges.yml", "edges-list"])
     payload = json.loads(result.output)
     assert payload["ok"] is True
+
+
+def test_diagram_stdout_json():
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        _write_registry("registry.yml")
+        _write_edges("edges.yml")
+
+        result = runner.invoke(
+            cli,
+            ["--registry", "registry.yml", "--edges", "edges.yml", "diagram", "--format", "d2", "--stdout"],
+        )
+
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["result"]["stdout"] is True
+
+    outputs = payload["result"]["outputs"]
+    assert len(outputs) == 1
+    assert outputs[0]["format"] == "d2"
+    assert "content" in outputs[0]
+    assert "path" not in outputs[0]
+
+    # Ensure nothing was written to the default output directory
+    assert not Path("docs/diagrams").exists()
