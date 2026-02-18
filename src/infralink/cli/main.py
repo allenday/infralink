@@ -24,6 +24,7 @@ class Context:
         self.registry_path: Path | None = None
         self.edges_path: Path | None = None
         self.verbose: bool = False
+        self.output: str = "json"
         self._registry: Any = None
         self._edges: Any = None
 
@@ -144,8 +145,16 @@ class LazyGroup(click.Group):
     help="Path to edges YAML file",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Choice(["json"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="Output format (json = agent-first)",
+)
 @pass_context
-def cli(ctx: Context, registry: Path, edges: Path, verbose: bool) -> None:
+def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -> None:
     """
     Infralink - Infrastructure topology modeling.
 
@@ -155,6 +164,7 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool) -> None:
     ctx.registry_path = registry
     ctx.edges_path = edges
     ctx.verbose = verbose
+    ctx.output = output
 
     click_ctx = click.get_current_context()
     if click_ctx.invoked_subcommand is not None:
@@ -297,14 +307,16 @@ def hosts(ctx: Context) -> None:
             }
         )
 
+    result = {"hosts": hosts_payload, "count": len(hosts_payload)}
     payload = ok_envelope(
         command,
-        {"hosts": hosts_payload, "count": len(hosts_payload)},
+        result,
         [
             {"command": "infralink info", "description": "Show registry summary"},
             {"command": "infralink edges-list", "description": "List all edges"},
         ],
     )
+    payload.update(result)
     click.echo(json.dumps(payload))
 
 

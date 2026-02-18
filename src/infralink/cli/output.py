@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 
-def ok_envelope(command: str, result: Any, next_actions: list[dict[str, str]]):
+def ok_envelope(command: str, result: Any, next_actions: list[dict[str, str]], status: str = "ok"):
     return {
-        "ok": True,
+        "status": status,
+        "ok": status == "ok",
         "command": command,
         "result": result,
         "next_actions": next_actions,
@@ -20,6 +21,7 @@ def error_envelope(
     next_actions: list[dict[str, str]],
 ):
     return {
+        "status": "error",
         "ok": False,
         "command": command,
         "error": {"message": message, "code": code},

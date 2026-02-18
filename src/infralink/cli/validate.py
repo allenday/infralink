@@ -132,6 +132,7 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
                     f"Host '{h.canonical_name}' has unmanaged: {', '.join(unmanaged_items)}"
                 )
 
+    summary = {"errors": len(errors), "warnings": len(warnings)}
     result = {
         "valid": len(errors) == 0 and (not strict or len(warnings) == 0),
         "errors": errors,
@@ -149,7 +150,10 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
                 {"command": "infralink analyze", "description": "Inspect topology coverage"},
             ],
         )
+        payload["summary"] = summary
         payload["result"] = result
+        payload["errors"] = errors
+        payload["warnings"] = warnings
         click.echo(json.dumps(payload))
         raise SystemExit(1)
 
@@ -164,10 +168,13 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
                 {"command": "infralink validate --strict", "description": "Re-run in strict mode"},
             ],
         )
+        payload["summary"] = summary
         payload["result"] = result
+        payload["warnings"] = warnings
         click.echo(json.dumps(payload))
         raise SystemExit(1)
 
+    status = "warn" if warnings else "ok"
     payload = ok_envelope(
         command,
         result,
@@ -175,5 +182,9 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
             {"command": "infralink check", "description": "Run edge health checks"},
             {"command": "infralink analyze", "description": "Analyze topology coverage"},
         ],
+        status=status,
     )
+    payload["summary"] = summary
+    payload["errors"] = errors
+    payload["warnings"] = warnings
     click.echo(json.dumps(payload))
