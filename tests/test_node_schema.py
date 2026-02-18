@@ -21,3 +21,8 @@ def test_slot_binding_schema():
     binding = SlotBinding(host="h1", service="postgres", role="rw")
     assert binding.host == "h1"
     assert binding.service == "postgres"
+
+
+def test_host_schema_allows_extra_fields():
+    host = HostSchema(canonical_name="h1", probe_path="/health", tls_certs=[{"name": "t1"}])
+    assert host.canonical_name == "h1"

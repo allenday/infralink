@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
-from rich.console import Console
 
 from infralink.cli.main import Context, pass_context
-
-console = Console()
+from infralink.cli.output import error_envelope, ok_envelope
 
 
 @click.command()
@@ -73,11 +72,19 @@ def diagram(
     from infralink.generators.d2 import generate_d2
     from infralink.generators.dot import generate_dot
 
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         registry = ctx.registry
         edges = ctx.edges
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "DIAGRAM_FAILED",
+            "Ensure registry/edges paths are correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
         raise SystemExit(1)
 
     # Filter hosts
@@ -89,7 +96,8 @@ def diagram(
         hosts = registry.active_hosts()
 
     if not hosts:
-        console.print("[yellow]No hosts match filter criteria[/yellow]")
+        payload = ok_envelope(command, {"outputs": [], "stdout": stdout}, [])
+        click.echo(json.dumps(payload))
         return
 
     # Generate diagrams
@@ -101,18 +109,35 @@ def diagram(
 
     formats_to_generate = list(generators.keys()) if output_format == "all" else [output_format]
 
+    outputs = []
+    stdout_outputs = []
+
     for fmt in formats_to_generate:
         generator, filename = generators[fmt]
         content = generator(hosts, edges, registry)
+        output_entry = {"format": fmt}
 
         if stdout:
-            console.print(f"\n[bold]--- {fmt.upper()} ---[/bold]")
-            console.print(content)
+            output_entry["content"] = content
+            stdout_outputs.append(output_entry)
         else:
             output.mkdir(parents=True, exist_ok=True)
             output_file = output / filename
             output_file.write_text(content)
-            console.print(f"[green]Generated:[/green] {output_file}")
+            output_entry["path"] = str(output_file)
 
-    if not stdout:
-        console.print(f"\n[bold]Diagrams written to:[/bold] {output}")
+        outputs.append(output_entry)
+
+    result = {"outputs": outputs, "stdout": stdout}
+    if stdout:
+        result["stdout_outputs"] = stdout_outputs
+
+    payload = ok_envelope(
+        command,
+        result,
+        [
+            {"command": "infralink docs", "description": "Generate documentation outputs"},
+            {"command": "infralink analyze", "description": "Analyze topology coverage"},
+        ],
+    )
+    click.echo(json.dumps(payload))

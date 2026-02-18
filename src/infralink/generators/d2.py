@@ -53,7 +53,7 @@ def generate_d2(
             lines.append("    shape: rectangle")
 
             # Add services as nested items (limit to 5)
-            services = host.services[:5]
+            services = list(host.services.keys())[:5]
             if services:
                 for svc in services:
                     svc_id = svc.replace("-", "_")

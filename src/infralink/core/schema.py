@@ -196,6 +196,8 @@ class HostSchema(NodeSchema):
     - Health derived from prometheus scrape success
     """
 
+    model_config = ConfigDict(extra="allow")
+
     # Identity (canonical_name is the human-readable identifier)
     canonical_name: str
     node_type: str = "host"

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import click
-from rich.console import Console
-from rich.table import Table
 
 from infralink.cli.main import Context, pass_context
-
-console = Console()
+from infralink.cli.output import error_envelope, ok_envelope
 
 
 @click.command()
@@ -43,12 +42,6 @@ console = Console()
     type=int,
     help="Health check timeout in seconds",
 )
-@click.option(
-    "--json",
-    "output_json",
-    is_flag=True,
-    help="Output results as JSON",
-)
 @pass_context
 def check(
     ctx: Context,
@@ -57,7 +50,6 @@ def check(
     criticality: str | None,
     critical_only: bool,
     timeout: int,
-    output_json: bool,
 ) -> None:
     """
     Check health of infrastructure edges.
@@ -82,15 +74,24 @@ def check(
     from infralink.core.schema import Criticality, EdgeType
     from infralink.health.checks import check_edge_health
 
+    command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
         registry = ctx.registry
         edges = ctx.edges
-    except click.ClickException as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception as exc:
+        payload = error_envelope(
+            command,
+            str(exc),
+            "CHECK_FAILED",
+            "Ensure registry/edges paths are correct.",
+            [{"command": "infralink validate", "description": "Validate registry and edges"}],
+        )
+        click.echo(json.dumps(payload))
         raise SystemExit(1)
 
     if len(edges) == 0:
-        console.print("[yellow]No edges declared[/yellow]")
+        payload = ok_envelope(command, {"results": [], "summary": {"healthy": 0, "failed": 0}}, [])
+        click.echo(json.dumps(payload))
         return
 
     resolver = EdgeResolver(registry, edges)
@@ -113,7 +114,8 @@ def check(
         edges_to_check = [e for e in edges_to_check if e.is_critical]
 
     if not edges_to_check:
-        console.print("[yellow]No edges match filter criteria[/yellow]")
+        payload = ok_envelope(command, {"results": [], "summary": {"healthy": 0, "failed": 0}}, [])
+        click.echo(json.dumps(payload))
         return
 
     # Run health checks
@@ -123,54 +125,41 @@ def check(
         results.append(result)
 
     # Output results
-    if output_json:
-        import json
-
-        console.print(json.dumps([r.to_dict() for r in results], indent=2))
-        return
-
-    # Table output
-    table = Table(title="Edge Health Check Results")
-    table.add_column("Edge ID", style="cyan")
-    table.add_column("Type")
-    table.add_column("Target")
-    table.add_column("Status")
-    table.add_column("Latency")
-    table.add_column("Message")
-
     healthy_count = 0
     failed_count = 0
+    critical_failures = 0
+    results_payload = []
 
     for result in results:
         if result.healthy:
-            status = "[green]✓ healthy[/green]"
             healthy_count += 1
         else:
-            status = "[red]✗ unhealthy[/red]"
             failed_count += 1
+            if result.criticality == "critical":
+                critical_failures += 1
 
-        latency = f"{result.latency_ms:.1f}ms" if result.latency_ms else "-"
+        results_payload.append(result.to_dict())
 
-        table.add_row(
-            result.edge_id,
-            result.edge_type,
-            result.target_endpoint,
-            status,
-            latency,
-            result.message or "",
-        )
-
-    console.print(table)
-
-    # Summary
-    console.print(f"\n[bold]Summary:[/bold] {healthy_count} healthy, {failed_count} failed")
+    summary = {"healthy": healthy_count, "failed": failed_count, "critical_failed": critical_failures}
 
     if failed_count > 0:
-        # Check for critical failures
-        critical_failures = [r for r in results if not r.healthy and r.criticality == "critical"]
-        if critical_failures:
-            console.print(
-                f"[red bold]CRITICAL:[/red bold] {len(critical_failures)} critical edge(s) unhealthy"
-            )
-            raise SystemExit(2)
-        raise SystemExit(1)
+        payload = error_envelope(
+            command,
+            "One or more edges failed health checks",
+            "CHECK_FAILED",
+            "Inspect failing edges and fix connectivity or credentials.",
+            [
+                {"command": "infralink validate", "description": "Validate registry and edges"},
+                {"command": "infralink resolve <edge-id>", "description": "Resolve a failing edge"},
+            ],
+        )
+        payload["result"] = {"results": results_payload, "summary": summary}
+        click.echo(json.dumps(payload))
+        raise SystemExit(2 if critical_failures else 1)
+
+    payload = ok_envelope(
+        command,
+        {"results": results_payload, "summary": summary},
+        [{"command": "infralink analyze", "description": "Analyze topology coverage"}],
+    )
+    click.echo(json.dumps(payload))

@@ -1,0 +1,92 @@
+import json
+from pathlib import Path
+
+from click.testing import CliRunner
+
+
+def _write_registry(path: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(
+            """
+hosts:
+  11111111-1111-1111-1111-111111111111:
+    canonical_name: test-host
+    status: active
+    tailscale_ip: 100.0.0.1
+"""
+        )
+
+
+def _write_edges(path: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(
+            """
+edges:
+  - id: 22222222-2222-2222-2222-222222222222
+    type: database
+    protocol: postgresql
+    from:
+      hosts: [11111111-1111-1111-1111-111111111111]
+    to:
+      host: 11111111-1111-1111-1111-111111111111
+      service: postgresql
+      port: 5432
+"""
+        )
+
+from infralink.cli.main import cli
+
+
+def test_info_json():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        _write_registry("registry.yml")
+        _write_edges("edges.yml")
+        result = runner.invoke(cli, ["--registry", "registry.yml", "--edges", "edges.yml", "info"])
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+
+
+def test_hosts_json():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        _write_registry("registry.yml")
+        result = runner.invoke(cli, ["--registry", "registry.yml", "hosts"])
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+
+
+def test_edges_list_json():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        _write_registry("registry.yml")
+        _write_edges("edges.yml")
+        result = runner.invoke(cli, ["--registry", "registry.yml", "--edges", "edges.yml", "edges-list"])
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+
+
+def test_diagram_stdout_json():
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        _write_registry("registry.yml")
+        _write_edges("edges.yml")
+
+        result = runner.invoke(
+            cli,
+            ["--registry", "registry.yml", "--edges", "edges.yml", "diagram", "--format", "d2", "--stdout"],
+        )
+
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["result"]["stdout"] is True
+
+    outputs = payload["result"]["outputs"]
+    assert len(outputs) == 1
+    assert outputs[0]["format"] == "d2"
+    assert "content" in outputs[0]
+    assert "path" not in outputs[0]
+
+    # Ensure nothing was written to the default output directory
+    assert not Path("docs/diagrams").exists()
