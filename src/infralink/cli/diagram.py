@@ -110,22 +110,31 @@ def diagram(
     formats_to_generate = list(generators.keys()) if output_format == "all" else [output_format]
 
     outputs = []
+    stdout_outputs = []
+
     for fmt in formats_to_generate:
         generator, filename = generators[fmt]
         content = generator(hosts, edges, registry)
+        output_entry = {"format": fmt}
 
         if stdout:
-            outputs.append({"format": fmt, "content": content})
-            continue
+            output_entry["content"] = content
+            stdout_outputs.append(output_entry)
+        else:
+            output.mkdir(parents=True, exist_ok=True)
+            output_file = output / filename
+            output_file.write_text(content)
+            output_entry["path"] = str(output_file)
 
-        output.mkdir(parents=True, exist_ok=True)
-        output_file = output / filename
-        output_file.write_text(content)
-        outputs.append({"format": fmt, "path": str(output_file)})
+        outputs.append(output_entry)
+
+    result = {"outputs": outputs, "stdout": stdout}
+    if stdout:
+        result["stdout_outputs"] = stdout_outputs
 
     payload = ok_envelope(
         command,
-        {"outputs": outputs, "stdout": stdout},
+        result,
         [
             {"command": "infralink docs", "description": "Generate documentation outputs"},
             {"command": "infralink analyze", "description": "Analyze topology coverage"},
