@@ -114,6 +114,10 @@ def diagram(
         generator, filename = generators[fmt]
         content = generator(hosts, edges, registry)
 
+        if stdout:
+            outputs.append({"format": fmt, "content": content})
+            continue
+
         output.mkdir(parents=True, exist_ok=True)
         output_file = output / filename
         output_file.write_text(content)
