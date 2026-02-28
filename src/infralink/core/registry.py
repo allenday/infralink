@@ -8,6 +8,8 @@ from typing import Any, Iterator
 import yaml
 
 from infralink.core.schema import HostSchema, HostStatus, RegistrySchema, RoleConfig, SlotBinding
+from infralink.core.application import ApplicationSet
+from infralink.core.template import ServiceTemplateSet
 
 
 class Host:
@@ -18,18 +20,27 @@ class Host:
     from the host data since it's the dictionary key in the registry.
     """
 
-    def __init__(self, uuid: str, data: dict[str, Any], tailnet_domain: str | None = None) -> None:
+    def __init__(
+        self,
+        uuid: str,
+        data: dict[str, Any],
+        tailnet_domain: str | None = None,
+        templates: ServiceTemplateSet | None = None,
+    ) -> None:
         """
         Initialize a host.
 
         Args:
             uuid: The host's UUID (primary key from registry)
             data: Host configuration data (without uuid field)
+            tailnet_domain: Optional tailnet domain
+            templates: Optional service template set
         """
         self._uuid = uuid
         self._data = data
         self._schema = HostSchema(**data)
         self._tailnet_domain = tailnet_domain
+        self._templates = templates or ServiceTemplateSet([], "1.0")
 
     @property
     def uuid(self) -> str:
@@ -101,10 +112,30 @@ class Host:
         return {name: cfg.model_dump() for name, cfg in self._schema.unmanaged_roles.items()}
 
     @property
+    def templated_services(self) -> dict[str, Any]:
+        """Services derived from host templates."""
+        result = {}
+        for template_id in self._schema.templates:
+            template = self._templates.get_template(template_id)
+            if template:
+                for name, cfg in template.schema.services.items():
+                    # Support overrides
+                    overrides = (
+                        self._schema.template_overrides.get(template_id, {})
+                        .get("services", {})
+                        .get(name, {})
+                    )
+                    data = cfg.model_dump()
+                    data.update(overrides)
+                    result[name] = data
+        return result
+
+    @property
     def services(self) -> dict[str, Any]:
-        """All services (managed + unmanaged). Backward compatible."""
+        """All services (managed + unmanaged + templated). Backward compatible."""
         result = self.managed_services.copy()
         result.update(self.unmanaged_services)
+        result.update(self.templated_services)
         return result
 
     @property
@@ -176,11 +207,12 @@ class Host:
         return self._schema.mounts
 
     def has_service(self, service: str) -> bool:
-        """Check if host has a service (managed or unmanaged)."""
+        """Check if host has a service (managed, unmanaged, or templated)."""
         return (
             service in self._schema.managed_services.keys()
             or service in self._schema.services.keys()
             or service in self._schema.unmanaged_services.keys()
+            or service in self.templated_services.keys()
         )
 
     def get_ip(self, prefer: str = "tailscale") -> str | None:
@@ -216,6 +248,8 @@ class Registry:
         hosts: dict[str, Host],
         defaults: dict[str, Any] | None = None,
         tailnet_domain: str | None = None,
+        applications: ApplicationSet | None = None,
+        templates: ServiceTemplateSet | None = None,
     ) -> None:
         """
         Initialize registry.
@@ -223,14 +257,28 @@ class Registry:
         Args:
             hosts: Dictionary mapping UUID -> Host
             defaults: Ansible defaults configuration
+            applications: Application groupings
+            templates: Reusable service templates
         """
         self._hosts = hosts  # UUID -> Host
         self._defaults = defaults or {}
         self._tailnet_domain = tailnet_domain
+        self._applications = applications or ApplicationSet([], "1.0")
+        self._templates = templates or ServiceTemplateSet([], "1.0")
         # Secondary index: canonical_name -> Host
         self._name_index: dict[str, Host] = {h.canonical_name: h for h in hosts.values()}
         # Secondary index: uuid_prefix -> Host
         self._uuid_prefix_index: dict[str, Host] = {h.uuid_prefix: h for h in hosts.values()}
+
+    @property
+    def applications(self) -> ApplicationSet:
+        """Get all application groupings."""
+        return self._applications
+
+    @property
+    def templates(self) -> ServiceTemplateSet:
+        """Get all reusable service templates."""
+        return self._templates
 
     @classmethod
     def load(cls, path: str | Path) -> Registry:
@@ -242,13 +290,23 @@ class Registry:
         # Validate with schema
         schema = RegistrySchema(**data)
 
+        # Load templates and applications from same directory if they exist
+        templates = ServiceTemplateSet.load(path.parent / "service_templates.yml")
+        apps = ApplicationSet.load(path.parent / "applications.yml")
+
         # UUID is the key, data is the value
         hosts = {
-            uuid: Host(uuid, host.model_dump(), schema.tailnet_domain)
+            uuid: Host(uuid, host.model_dump(), schema.tailnet_domain, templates)
             for uuid, host in schema.hosts.items()
         }
 
-        return cls(hosts, schema.ansible_defaults, schema.tailnet_domain)
+        return cls(
+            hosts,
+            schema.ansible_defaults,
+            schema.tailnet_domain,
+            applications=apps,
+            templates=templates,
+        )
 
     @classmethod
     def load_dir(cls, root: str | Path, pattern: str = "**/manifest.yml") -> Registry:
@@ -261,6 +319,9 @@ class Registry:
         hosts: dict[str, Host] = {}
         tailnet_domain: str | None = None
 
+        # Load service_templates.yml if it exists in root
+        templates = ServiceTemplateSet.load(root_path / "service_templates.yml")
+
         for manifest in sorted(root_path.glob(pattern)):
             with manifest.open() as f:
                 data = yaml.safe_load(f) or {}
@@ -271,18 +332,44 @@ class Registry:
 
             for uuid, host_data in (data.get("hosts") or {}).items():
                 host_schema = HostSchema(**host_data)
-                hosts[uuid] = Host(uuid, host_schema.model_dump(), tailnet_domain)
+                hosts[uuid] = Host(
+                    uuid, host_schema.model_dump(), tailnet_domain, templates
+                )
 
-        return cls(hosts, defaults=None, tailnet_domain=tailnet_domain)
+        # Load applications.yml if it exists in root
+        apps = ApplicationSet.load(root_path / "applications.yml")
+
+        return cls(
+            hosts,
+            defaults=None,
+            tailnet_domain=tailnet_domain,
+            applications=apps,
+            templates=templates,
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Registry:
         """Create registry from dictionary."""
         hosts_data = data.get("hosts", {})
-        # UUID is the key
         tailnet_domain = data.get("tailnet_domain")
-        hosts = {uuid: Host(uuid, h, tailnet_domain) for uuid, h in hosts_data.items()}
-        return cls(hosts, data.get("ansible_defaults"), tailnet_domain)
+
+        # Load templates and applications if provided in dict
+        templates_data = data.get("templates")
+        templates = (
+            ServiceTemplateSet.from_dict(templates_data) if templates_data else None
+        )
+
+        apps_data = data.get("applications")
+        apps = ApplicationSet.from_dict(apps_data) if apps_data else None
+
+        # UUID is the key
+        hosts = {
+            uuid: Host(uuid, h, tailnet_domain, templates)
+            for uuid, h in hosts_data.items()
+        }
+        return cls(
+            hosts, data.get("ansible_defaults"), tailnet_domain, apps, templates
+        )
 
     def get_by_uuid(self, uuid: str) -> Host | None:
         """Get host by full UUID (primary lookup)."""
@@ -381,6 +468,7 @@ def _service_names_for_host(host: HostSchema) -> set[str]:
 def validate_role_slots(
     hosts: dict[str, HostSchema], roles: dict[str, RoleConfig]
 ) -> list[str]:
+    """Validate that all required role slots are bound."""
     errors: list[str] = []
     for host_id, host in hosts.items():
         for role_name in host.roles:
@@ -419,6 +507,53 @@ def validate_role_slots(
                 if binding.service not in _service_names_for_host(target_host):
                     errors.append(
                         f"Host {host.canonical_name} role {role_name} slot {slot_name} "
+                        f"targets unknown service {binding.service} on {binding.host}"
+                    )
+    return errors
+
+
+def validate_template_slots(
+    hosts: dict[str, HostSchema], templates: ServiceTemplateSet
+) -> list[str]:
+    """Validate that all required template slots are bound."""
+    errors: list[str] = []
+    for host_id, host in hosts.items():
+        for template_id in host.templates:
+            template = templates.get_template(template_id)
+            if template is None:
+                continue
+            overrides = host.template_overrides.get(template_id, {})
+            slot_bindings = overrides.get("slot_bindings", {})
+            for slot_name, slot in template.schema.slots.items():
+                if not slot.required:
+                    continue
+                binding_data = slot_bindings.get(slot_name)
+                if not binding_data:
+                    errors.append(
+                        f"Host {host.canonical_name} template {template_id} missing required slot {slot_name}"
+                    )
+                    continue
+                try:
+                    binding = (
+                        binding_data
+                        if isinstance(binding_data, SlotBinding)
+                        else SlotBinding(**binding_data)
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"Host {host.canonical_name} template {template_id} slot {slot_name} invalid: {exc}"
+                    )
+                    continue
+                target_host = hosts.get(binding.host)
+                if target_host is None:
+                    errors.append(
+                        f"Host {host.canonical_name} template {template_id} slot {slot_name} "
+                        f"targets unknown host {binding.host}"
+                    )
+                    continue
+                if binding.service not in _service_names_for_host(target_host):
+                    errors.append(
+                        f"Host {host.canonical_name} template {template_id} slot {slot_name} "
                         f"targets unknown service {binding.service} on {binding.host}"
                     )
     return errors

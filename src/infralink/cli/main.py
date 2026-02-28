@@ -80,6 +80,7 @@ COMMAND_METADATA: dict[str, dict[str, str]] = {
         "description": "Validate registry and edges.",
         "usage": "infralink validate",
     },
+    "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
     "hosts": {"description": "List all hosts.", "usage": "infralink hosts"},
     "edges-list": {"description": "List all edges.", "usage": "infralink edges-list"},
@@ -111,6 +112,10 @@ def _load_command(name: str):
         from infralink.cli.validate import validate
 
         return validate
+    if name == "app":
+        from infralink.cli.app import app
+
+        return app
     if name == "info":
         return info
     if name == "hosts":

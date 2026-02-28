@@ -150,6 +150,23 @@ class RoleConfig(StrictModel):
     description: str | None = None
 
 
+class ServiceTemplateSchema(StrictModel):
+    """Template for a complex service deployment."""
+
+    description: str | None = None
+    services: dict[str, ServiceConfig] = Field(default_factory=dict)
+    slots: dict[str, SlotConfig] = Field(default_factory=dict)
+    requires_secrets: list[str] = Field(default_factory=list)
+    exporters: list[str] = Field(default_factory=list)
+
+
+class ServiceTemplateSetSchema(StrictModel):
+    """Schema for the service_templates.yml file."""
+
+    schema_version: str = "1.0"
+    templates: dict[str, ServiceTemplateSchema]
+
+
 class ProviderMetadata(BaseModel):
     """Cloud provider-specific metadata.
 
@@ -220,6 +237,10 @@ class HostSchema(NodeSchema):
     # Services are derived from roles; role_overrides for customization
     roles: list[str] = Field(default_factory=list)
     role_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    # Templates - reusable service bundles
+    templates: list[str] = Field(default_factory=list)
+    template_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Unmanaged roles - roles discovered via SSH but not in legacy docker-compose.yml.j2
     # These need to be brought under gitops management
@@ -440,3 +461,43 @@ class EdgeSetSchema(StrictModel):
     schema_version: str = "1.0"
     edge_types: dict[str, dict[str, Any]] = Field(default_factory=dict)
     edges: list[EdgeSchema]
+
+
+# --- Application Schemas ---
+
+
+class ApplicationMember(StrictModel):
+    """Member of an application."""
+
+    host: str  # UUID
+    services: list[str] = Field(default_factory=list)
+
+
+class ApplicationHealthStrategy(str, Enum):
+    """Strategy for calculating application health."""
+
+    ALL = "all"
+    ALL_CRITICAL = "all-critical"
+    ANY = "any"
+
+
+class ApplicationHealthConfig(StrictModel):
+    """Health configuration for an application."""
+
+    strategy: ApplicationHealthStrategy = ApplicationHealthStrategy.ALL_CRITICAL
+
+
+class ApplicationSchema(StrictModel):
+    """Logical grouping of hosts, services, and edges."""
+
+    description: str | None = None
+    members: list[ApplicationMember]
+    edges: Literal["auto"] | list[str] = "auto"
+    health: ApplicationHealthConfig = Field(default_factory=ApplicationHealthConfig)
+
+
+class ApplicationSetSchema(StrictModel):
+    """Schema for the applications.yml file."""
+
+    schema_version: str = "1.0"
+    applications: dict[str, ApplicationSchema]
