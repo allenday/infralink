@@ -223,6 +223,9 @@ class EdgeResolver:
             "target_host_uuid": target_host.uuid,
             "protocol": edge.protocol,
             "endpoint": f"{target_host.get_ip('tailscale')}:{edge.target_port}",
+            "auth_type": getattr(edge, "auth_type", "none"),
+            "secret_ref": getattr(edge, "secret_ref", None),
+            "username": getattr(edge._schema.auth, "username", None) if hasattr(edge, "_schema") and hasattr(edge._schema, "auth") else None,
         }
 
         # Add resolved URLs if secrets provided
