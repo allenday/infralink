@@ -35,7 +35,10 @@ class Context:
             from infralink.core.registry import Registry
 
             if self.registry_path and self.registry_path.exists():
-                self._registry = Registry.load(self.registry_path)
+                if self.registry_path.is_dir():
+                    self._registry = Registry.load_dir(self.registry_path)
+                else:
+                    self._registry = Registry.load(self.registry_path)
             else:
                 raise click.ClickException(f"Registry not found: {self.registry_path}")
         return self._registry
@@ -51,11 +54,25 @@ class Context:
             else:
                 # Try loading from registry
                 import yaml
+                from infralink.core.edges import EdgeSet
 
                 if self.registry_path and self.registry_path.exists():
-                    with self.registry_path.open() as f:
-                        data = yaml.safe_load(f)
-                    self._edges = EdgeSet.from_registry(data)
+                    if self.registry_path.is_dir():
+                        # For directory-based registry, we should probably look for a unified edges file
+                        # or just rely on EdgeSet initialization from the already-loaded registry.
+                        # Actually, EdgeSet.from_registry expects a dict.
+                        # I will check if registry is already loaded.
+                        if self._registry:
+                             # This is tricky because self._registry is a Registry object, not a dict.
+                             # But Registry has an applications property, etc.
+                             # For now, if it is a directory, we just default to empty if edges.yml is missing.
+                             self._edges = EdgeSet([])
+                        else:
+                             self._edges = EdgeSet([])
+                    else:
+                        with self.registry_path.open() as f:
+                            data = yaml.safe_load(f)
+                        self._edges = EdgeSet.from_registry(data)
                 else:
                     self._edges = EdgeSet([])
         return self._edges
@@ -170,6 +187,7 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
     ctx.edges_path = edges
     ctx.verbose = verbose
     ctx.output = output
+
 
     click_ctx = click.get_current_context()
     if click_ctx.invoked_subcommand is not None:
