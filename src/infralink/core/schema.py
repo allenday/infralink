@@ -185,6 +185,8 @@ class ObservabilityConfig(StrictModel):
     Health is derived from prometheus scrape success, not explicit probes.
     """
 
+    model_config = ConfigDict(extra="allow")
+
     ready: bool = False  # Is this host fully observable?
     managed_services: list[str] = Field(default_factory=list)  # Monitored by prometheus
     unmanaged_services: list[str] = Field(default_factory=list)  # Not yet monitored
