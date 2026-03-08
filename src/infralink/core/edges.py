@@ -82,7 +82,13 @@ class Edge:
 
     @property
     def healthcheck(self) -> HealthCheckConfig:
-        return self._schema.healthcheck
+        if self._schema.healthcheck is None:
+            hc = HealthCheckConfig()
+            setattr(hc, "explicit", False)
+            return hc
+        hc = self._schema.healthcheck
+        setattr(hc, "explicit", True)
+        return hc
 
     @property
     def auth_type(self) -> str:

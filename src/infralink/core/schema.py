@@ -421,14 +421,6 @@ class HealthCheckConfig(StrictModel):
     query: str | None = None  # For query checks
     conditions: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
-    explicit: bool = Field(default=False, exclude=True) # Track if user explicitly defined it
-
-    @model_validator(mode="before")
-    @classmethod
-    def set_explicit(cls, data: Any) -> Any:
-        if isinstance(data, dict) and data:
-            data["explicit"] = True
-        return data
 
 
 class EdgeSourceSelector(StrictModel):
@@ -468,7 +460,7 @@ class EdgeSchema(StrictModel):
     to: EdgeTarget
     protocol: str | None = None
     auth: AuthConfig = Field(default_factory=AuthConfig)
-    healthcheck: HealthCheckConfig = Field(default_factory=HealthCheckConfig)
+    healthcheck: HealthCheckConfig | None = None
     metadata: EdgeMetadata = Field(default_factory=EdgeMetadata)
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
