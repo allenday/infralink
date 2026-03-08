@@ -66,8 +66,8 @@ class Host:
         return self._schema.status == HostStatus.ACTIVE
 
     @property
-    def group(self) -> str | None:
-        return self._schema.group
+    def projects(self) -> list[str]:
+        return self._schema.projects
 
     @property
     def cloud(self) -> str | None:
@@ -227,7 +227,7 @@ class Host:
 
     def to_dict(self) -> dict[str, Any]:
         """Return host data as dictionary (includes uuid)."""
-        result = self._data.copy()
+        result = self._schema.model_dump(by_alias=True)
         result["uuid"] = self._uuid
         return result
 

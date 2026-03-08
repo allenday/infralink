@@ -219,8 +219,19 @@ class HostSchema(NodeSchema):
     canonical_name: str
     node_type: str = "host"
     status: HostStatus = HostStatus.ACTIVE
-    group: str | None = None
+    projects: list[str] = Field(default_factory=list)
     cloud: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_group_to_projects(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            group = data.pop("group", None)
+            projects = data.get("projects", [])
+            if group and group not in projects:
+                projects.append(group)
+            data["projects"] = projects
+        return data
 
     # Network
     tailscale_ip: str | None = None
@@ -437,6 +448,7 @@ class EdgeSchema(StrictModel):
 
     id: str
     type: EdgeType
+    projects: list[str] = Field(default_factory=list)
     from_: EdgeSourceSelector = Field(alias="from")
     to: EdgeTarget
     protocol: str | None = None
@@ -445,6 +457,17 @@ class EdgeSchema(StrictModel):
     metadata: EdgeMetadata = Field(default_factory=EdgeMetadata)
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_group_to_projects(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            group = data.pop("group", None)
+            projects = data.get("projects", [])
+            if group and group not in projects:
+                projects.append(group)
+            data["projects"] = projects
+        return data
 
     @field_validator("id")
     @classmethod
