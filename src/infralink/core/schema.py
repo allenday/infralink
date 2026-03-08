@@ -18,6 +18,7 @@ class HostStatus(str, Enum):
     """Host lifecycle status."""
 
     ACTIVE = "active"
+    INACTIVE = "inactive"
     TERMINATED = "terminated"
     PROVISIONING = "provisioning"
     MAINTENANCE = "maintenance"
