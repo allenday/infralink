@@ -412,11 +412,15 @@ class AuthConfig(StrictModel):
 class HealthCheckConfig(StrictModel):
     """Health check configuration for an edge."""
 
+    model_config = ConfigDict(extra="allow")
+
     type: HealthCheckType = HealthCheckType.TCP
     interval: str = "60s"
     timeout: str = "5s"
     path: str | None = None  # For HTTP checks
     query: str | None = None  # For query checks
+    conditions: list[str] = Field(default_factory=list)
+    headers: dict[str, str] = Field(default_factory=dict)
     explicit: bool = Field(default=False, exclude=True) # Track if user explicitly defined it
 
     @model_validator(mode="before")
