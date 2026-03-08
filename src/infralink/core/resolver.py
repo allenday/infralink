@@ -234,16 +234,22 @@ class EdgeResolver:
 
         return context
 
-    def validate_all(self) -> list[str]:
+    def validate_all(self) -> tuple[list[str], list[str]]:
         """
-        Validate all edges can be resolved.
+        Validate all edges can be resolved and check for best practices.
 
-        Returns list of error messages (empty if all valid).
+        Returns tuple of (errors, warnings).
         """
         errors = []
+        warnings = []
         for edge in self._edges:
             try:
                 self.get_target_host(edge.id)
             except ResolutionError as e:
                 errors.append(str(e))
-        return errors
+            
+            # Advisory: Check for explicit health checks
+            if not edge.healthcheck.explicit:
+                warnings.append(f"Edge {edge.id} ({edge.type.value}) is missing an explicit healthcheck definition.")
+                
+        return errors, warnings

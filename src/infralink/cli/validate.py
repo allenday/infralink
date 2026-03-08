@@ -92,7 +92,13 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
     # Check edge resolution
     if check_resolution and "registry" in dir() and "edges" in dir():
         resolver = EdgeResolver(registry, edges)
-        resolution_errors = resolver.validate_all()
+        resolution_errors, resolution_warnings = resolver.validate_all()
+        
+        if resolution_warnings:
+            click.echo("\nResolution Warnings:", err=True)
+            for warn in resolution_warnings:
+                click.secho(f"  - {warn}", fg="yellow", err=True)
+                
         if resolution_errors:
             for err in resolution_errors:
                 errors.append(err)

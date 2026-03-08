@@ -414,6 +414,14 @@ class HealthCheckConfig(StrictModel):
     timeout: str = "5s"
     path: str | None = None  # For HTTP checks
     query: str | None = None  # For query checks
+    explicit: bool = Field(default=False, exclude=True) # Track if user explicitly defined it
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_explicit(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data:
+            data["explicit"] = True
+        return data
 
 
 class EdgeSourceSelector(StrictModel):
