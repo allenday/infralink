@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 import click
 
 from infralink.cli.actions import action
@@ -12,7 +14,6 @@ from infralink.cli.main import (
     _context_for,
     _emit,
     _root_source_argv,
-    entity_not_found,
     pass_context,
 )
 from infralink.cli.output import ok_envelope
@@ -53,7 +54,15 @@ def resolve(
     edges = ctx.edges
     resolver = EdgeResolver(registry, edges)
     if edges.get(edge_id) is None:
-        raise entity_not_found("edge", edge_id)
+        discovery = [*_root_source_argv(ctx), "edges-list"]
+        raise CliFailure(
+            code=ErrorCode.ENTITY_NOT_FOUND,
+            message="Edge not found",
+            exit_code=3,
+            fix=f"Run {shlex.join(discovery)}",
+            details={"entity_type": "edge", "requested_id": edge_id},
+            next_actions=[action("list", discovery, "List edge records")],
+        )
 
     try:
         edge = resolver.get_edge(edge_id)

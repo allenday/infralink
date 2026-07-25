@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
 from infralink.cli.main import cli
+from infralink.core.registry import Registry
 from infralink.health.checks import HealthCheckResult
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,18 @@ def resolve(*args: str):
     assert result.stderr == ""
     assert result.output.count("\n") == 1
     return result, json.loads(result.output)
+
+
+def canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path]:
+    registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    target = registry["hosts"]["d1b9e5d5-36b0-459d-a556-96622811fbd5"]
+    target.setdefault("provider_metadata", {})["password_value"] = canary
+    registry_path = tmp_path / "registry.yml"
+    registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
+
+    edges_path = tmp_path / "edges.yml"
+    edges_path.write_text((EXAMPLES / "edges.yml").read_text(encoding="utf-8"))
+    return registry_path, edges_path
 
 
 def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
@@ -114,9 +128,6 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
     assert actions["validate"]["argv"] == [*source, "validate", "--check-resolution"]
     assert actions["check"]["argv"] == [*source, "check", "--edge", EDGE_ID]
     assert all(item["safe"] and not item["templated"] for item in actions.values())
-    assert "resolve-canary-secret-value" not in json.dumps(payload)
-
-
 def test_resolve_actions_are_executable_typed_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,6 +158,96 @@ def test_resolve_actions_are_executable_typed_commands(
             )
         )
         Draft202012Validator(schema).validate(replay_payload)
+
+
+def test_missing_edge_action_preserves_custom_sources_and_is_executable(
+    tmp_path: Path,
+) -> None:
+    registry_path, edges_path = canary_topology(tmp_path, "missing-action-secret")
+    result = invoke(
+        "--registry",
+        str(registry_path),
+        "--edges",
+        str(edges_path),
+        "resolve",
+        "absent",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 3
+    assert payload["error"]["code"] == "entity_not_found"
+    action = payload["next_actions"][0]
+    assert action["argv"] == [
+        "infralink",
+        "--registry",
+        str(registry_path),
+        "--edges",
+        str(edges_path),
+        "edges-list",
+    ]
+
+    replay = invoke(*action["argv"][1:])
+    assert replay.exit_code == 0, replay.output
+    replay_payload = json.loads(replay.output)
+    schema = json.loads(
+        (ROOT / "src/infralink/schemas/cli/v1/edges-list.json").read_text(encoding="utf-8")
+    )
+    Draft202012Validator(schema).validate(replay_payload)
+
+
+def test_live_resolve_surface_never_leaks_loaded_secret_value(
+    tmp_path: Path,
+) -> None:
+    canary = "loaded-topology-secret-value-canary"
+    registry_path, edges_path = canary_topology(tmp_path, canary)
+    loaded = Registry.load(registry_path)
+    assert (
+        loaded.get_by_uuid("d1b9e5d5-36b0-459d-a556-96622811fbd5")
+        .provider_metadata["password_value"]
+        == canary
+    )
+
+    command = cli.get_command(click.Context(cli), "resolve")
+    assert command is not None
+    option_names = {
+        parameter.name for parameter in command.params if isinstance(parameter, click.Option)
+    }
+    invocations = {
+        "default": (),
+        "user": ("--user", "reporter"),
+        "database": ("--database", "analytics"),
+        "prefer_ip:tailscale": ("--prefer-ip", "tailscale"),
+        "prefer_ip:public": ("--prefer-ip", "public"),
+        "prefer_ip:private": ("--prefer-ip", "private"),
+        "missing": ("absent",),
+    }
+    assert option_names == {"user", "database", "prefer_ip"}
+
+    for name, extra in invocations.items():
+        edge_id = EDGE_ID
+        options = extra
+        if name == "missing":
+            edge_id = extra[0]
+            options = ()
+        result = invoke(
+            "--registry",
+            str(registry_path),
+            "--edges",
+            str(edges_path),
+            "resolve",
+            edge_id,
+            *options,
+        )
+        payload = json.loads(result.output)
+        observable = "\n".join(
+            (
+                result.output,
+                result.stderr,
+                str(result.exception),
+                json.dumps(payload, sort_keys=True),
+            )
+        )
+        assert canary not in observable, name
 
 
 @pytest.mark.parametrize("prefer_ip", ["tailscale", "public"])
