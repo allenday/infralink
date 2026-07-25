@@ -55,6 +55,7 @@ def release_metadata(
                 "name": name,
                 "size": assets[name].stat().st_size,
                 "digest": "sha256:" + hashlib.sha256(assets[name].read_bytes()).hexdigest(),
+                "state": "uploaded",
             }
             for index, name in enumerate(names, 1)
         ],
@@ -123,8 +124,15 @@ def test_complete_release_is_idempotent(tmp_path: Path, draft: bool, state: str)
         lambda release: release["assets"][0].update(name="renamed"),
         lambda release: release["assets"][0].update(size=0),
         lambda release: release["assets"][0].update(digest="sha256:" + "f" * 64),
+        lambda release: release["assets"][0].update(state="new"),
         lambda release: release["assets"].append(
-            {"id": 99, "name": "extra", "size": 1, "digest": "sha256:" + "f" * 64}
+            {
+                "id": 99,
+                "name": "extra",
+                "size": 1,
+                "digest": "sha256:" + "f" * 64,
+                "state": "uploaded",
+            }
         ),
     ],
 )
@@ -169,6 +177,26 @@ def test_verify_release_assets_requires_exact_downloaded_bytes(tmp_path: Path) -
             downloaded_dir=downloaded,
             require_published=False,
             source_sha=SOURCE_SHA,
+        )
+
+
+@pytest.mark.parametrize("state", [None, "new", "processing", True, 1])
+def test_release_asset_must_be_fully_uploaded(tmp_path: Path, state: object) -> None:
+    module = load_module()
+    assets = write_assets(tmp_path / "assets")
+    metadata = release_metadata(assets)
+    asset = metadata["assets"][0]
+    if state is None:
+        del asset["state"]
+    else:
+        asset["state"] = state
+
+    with pytest.raises(module.ReleasePublicationError, match="assets"):
+        module.plan_release(
+            metadata,
+            source_sha=SOURCE_SHA,
+            notes="release notes\n",
+            asset_sources=assets,
         )
 
 

@@ -96,6 +96,7 @@ def _release_assets(
             or asset["name"] in result
             or type(asset.get("size")) is not int
             or type(asset.get("digest")) is not str
+            or asset.get("state") != "uploaded"
         ):
             raise ReleasePublicationError("invalid release assets")
         source = asset_sources[asset["name"]]
