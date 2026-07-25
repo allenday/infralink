@@ -10,6 +10,7 @@ import click
 from infralink.cli.actions import action
 from infralink.cli.artifacts import (
     artifact_fingerprint,
+    artifact_metadata,
     artifact_pages,
     artifact_usage,
     continuation_actions,
@@ -112,7 +113,7 @@ def docs(
             )
             generated.append((Path("edges") / f"index.{extension}", media_type, body))
 
-    artifacts = write_artifacts(output, generated)
+    artifacts = artifact_metadata(output, generated)
     selected = collection or "artifacts"
     fingerprint = artifact_fingerprint(
         command="docs",
@@ -133,6 +134,7 @@ def docs(
         limit=limit,
         fingerprint=fingerprint,
     )
+    write_artifacts(output, generated)
     result = ArtifactResult(
         artifacts=pages["artifacts"],
         summary={"artifact_count": len(artifacts)},

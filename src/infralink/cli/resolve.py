@@ -37,7 +37,6 @@ from infralink.cli.queries import edge_summary
     "--prefer-ip",
     type=click.Choice(["tailscale", "public", "private"]),
     default="tailscale",
-    help="Preferred IP type",
 )
 @pass_context
 def resolve(

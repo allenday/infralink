@@ -23,6 +23,7 @@ from infralink.cli.contracts import (
     EdgeSummary,
     HelpResult,
     HostSummary,
+    InfoResult,
     OptionDescriptor,
     RootResult,
     ServiceSummary,
@@ -281,7 +282,11 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
 }
 
 
-def _context_for(argv: list[str] | None = None, path: list[str] | None = None) -> CommandContext:
+def _context_for(
+    argv: list[str] | None = None,
+    path: list[str] | None = None,
+    resolved_overrides: dict[str, Any] | None = None,
+) -> CommandContext:
     active_argv = argv
     if active_argv is None:
         active_argv = _INVOCATION_ARGS.get() or []
@@ -295,6 +300,8 @@ def _context_for(argv: list[str] | None = None, path: list[str] | None = None) -
         "output": root_values.get("output", "json"),
         "verbose": bool(root_values.get("verbose", False)),
     }
+    if resolved_overrides is not None:
+        resolved.update(resolved_overrides)
     return command_context(
         ["infralink", *redacted_argv],
         path=path if path is not None else parsed_path,
@@ -1054,53 +1061,28 @@ def services(
 @pass_context
 def info(ctx: Context) -> None:
     """Show registry and edge summary."""
-    command = click.get_current_context().command_path.replace("cli", "infralink")
-    try:
-        registry = ctx.registry
-        edges = ctx.edges
-    except CliFailure:
-        raise
-    except Exception as exc:
-        payload = error_envelope(
-            command,
-            str(exc),
-            "INFO_FAILED",
-            "Ensure registry/edges paths are correct.",
-            [{"command": "infralink validate", "description": "Validate registry and edges"}],
-        )
-        _emit(payload)
-        raise SystemExit(1) from exc
+    from infralink.cli.queries import list_services
 
-    from infralink.core.schema import EdgeType
-
-    edge_types = []
-    for etype in EdgeType:
-        count = len(edges.by_type(etype))
-        if count > 0:
-            edge_types.append({"type": etype.value, "count": count})
-
-    result = {
-        "version": __version__,
-        "registry": {
-            "path": str(ctx.registry_path),
-            "total_hosts": len(registry),
-            "active_hosts": len(registry.active_hosts()),
-            "groups": sorted(registry.groups()),
-            "clouds": sorted(registry.clouds()),
+    registry = ctx.registry
+    edges = ctx.edges
+    service_count = list_services(registry, edges, limit=1).page.total
+    result = InfoResult(
+        sources={
+            "registry": str(ctx.registry_path),
+            "edges": str(ctx.edges_path),
         },
-        "edges": {
-            "path": str(ctx.edges_path),
-            "total_edges": len(edges),
-            "critical_edges": len(edges.critical_edges()),
-            "by_type": edge_types,
+        summary={
+            "host_count": len(registry),
+            "service_count": service_count or 0,
+            "edge_count": len(edges),
         },
-    }
+    )
     payload = ok_envelope(
-        command,
+        _context_for(path=["info"]),
         result,
         [
-            {"command": "infralink hosts", "description": "List all hosts"},
-            {"command": "infralink edges-list", "description": "List all edges"},
+            action("list", [*_root_source_argv(ctx), "hosts"], "List all hosts"),
+            action("list", [*_root_source_argv(ctx), "edges-list"], "List all edges"),
         ],
     )
     _emit(payload)

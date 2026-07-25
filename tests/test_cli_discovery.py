@@ -436,6 +436,60 @@ def test_advertised_typed_commands_produce_their_schemas() -> None:
         assert_schema(json.loads(result.output), schema_name)
 
 
+def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> None:
+    schema_coverage = {
+        "help": {"help"},
+        "version": {"version"},
+        "analyze": {"analyze"},
+        "check": {"check"},
+        "diagram": {"diagram"},
+        "docs": {"docs"},
+        "resolve": {"resolve"},
+        "validate": {"validate"},
+        "app": {"app-list", "app-show"},
+        "info": {"info"},
+        "hosts": {"hosts"},
+        "services": {"services"},
+        "edges-list": {"edges-list"},
+        "host": {"host-show"},
+        "edge": {"edge-show"},
+        "service": {"service-show"},
+    }
+    live_commands = {item["name"] for item in payload_for()["result"]["commands"]}
+    schema_names = {path.stem for path in (ROOT / "src/infralink/schemas/cli/v1").glob("*.json")}
+
+    assert live_commands == set(schema_coverage)
+    assert (
+        set().union(*schema_coverage.values())
+        | {
+            "root",
+            "secrets-inspect",
+            "secrets-audit",
+        }
+        == schema_names
+    )
+
+
+def test_successful_info_and_resolve_match_checked_in_schemas() -> None:
+    source_args = (
+        "--registry",
+        str(EXAMPLES / "registry.yml"),
+        "--edges",
+        str(EXAMPLES / "edges.yml"),
+    )
+    info_result = invoke(*source_args, "info")
+    resolve_result = invoke(
+        *source_args,
+        "resolve",
+        "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+    )
+
+    assert info_result.exit_code == 0
+    assert resolve_result.exit_code == 0
+    assert_schema(json.loads(info_result.output), "info")
+    assert_schema(json.loads(resolve_result.output), "resolve")
+
+
 def test_services_include_role_explicit_and_edge_target_identities() -> None:
     payload = payload_for(
         "--registry",

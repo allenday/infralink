@@ -9,6 +9,7 @@ import click
 from infralink.cli.actions import action
 from infralink.cli.artifacts import (
     artifact_fingerprint,
+    artifact_metadata,
     artifact_pages,
     continuation_actions,
     require_output,
@@ -76,7 +77,7 @@ def diagram(
         for name in formats
         for generator, filename, media_type in [generators[name]]
     ]
-    artifacts = write_artifacts(output, generated)
+    artifacts = artifact_metadata(output, generated)
     selected = collection or "artifacts"
     fingerprint = artifact_fingerprint(
         command="diagram",
@@ -97,6 +98,7 @@ def diagram(
         limit=limit,
         fingerprint=fingerprint,
     )
+    write_artifacts(output, generated)
     result = ArtifactResult(
         artifacts=pages["artifacts"],
         summary={"artifact_count": len(artifacts)},

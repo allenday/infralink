@@ -11,6 +11,7 @@ import yaml
 from infralink.cli.actions import action
 from infralink.cli.artifacts import (
     artifact_fingerprint,
+    artifact_metadata,
     artifact_pages,
     continuation_actions,
     require_output,
@@ -291,7 +292,7 @@ def analyze(
                 generate_mermaid_diagram(data, edge_list).encode("utf-8"),
             )
         )
-    artifacts = write_artifacts(output, generated)
+    artifacts = artifact_metadata(output, generated)
     collections: dict[str, list[object]] = {
         "diagnostics": diagnostics,
         "artifacts": artifacts,
@@ -316,6 +317,7 @@ def analyze(
         limit=limit,
         fingerprint=fingerprint,
     )
+    write_artifacts(output, generated)
     result = AnalyzeResult(
         analysis={
             "host_count": len(data.get("hosts", {})),
@@ -346,6 +348,13 @@ def analyze(
             },
         ),
     ]
-    payload = ok_envelope(_context_for(path=["analyze"]), result, actions)
+    payload = ok_envelope(
+        _context_for(
+            path=["analyze"],
+            resolved_overrides={"registry": str(source)},
+        ),
+        result,
+        actions,
+    )
     payload["meta"]["truncated"] = any(page.page.next_cursor is not None for page in pages.values())
     _emit(payload)

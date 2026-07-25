@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import infralink.cli.artifacts as artifact_helpers
+from infralink.cli.artifacts import write_artifacts
 from infralink.cli.main import cli
 from tests.cli_helpers import assert_schema
 
@@ -391,6 +393,188 @@ def test_analyze_cursor_requires_explicit_collection(tmp_path: Path) -> None:
     payload = _payload(replay)
     assert replay.exit_code == 2
     assert payload["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.parametrize(
+    ("command", "extra", "existing_name"),
+    [
+        ("analyze", (), "registry.yml"),
+        ("diagram", (), "infrastructure.md"),
+        ("docs", (), "index.md"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("paging_args", "error_code"),
+    [
+        (("--collection", "absent"), "invalid_cursor"),
+        (("--cursor", "bogus"), "invalid_cursor"),
+    ],
+)
+def test_invalid_paging_never_creates_or_overwrites_artifacts(
+    tmp_path: Path,
+    command: str,
+    extra: tuple[str, ...],
+    existing_name: str,
+    paging_args: tuple[str, ...],
+    error_code: str,
+) -> None:
+    registry, edges = _write_topology(tmp_path)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        output = Path("generated")
+        output.mkdir()
+        existing = output / existing_name
+        existing.write_bytes(b"sentinel")
+        result = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(registry),
+                "--edges",
+                str(edges),
+                command,
+                "--output",
+                str(output),
+                *extra,
+                *paging_args,
+            ],
+        )
+        assert existing.read_bytes() == b"sentinel"
+        assert sorted(path.relative_to(output) for path in output.rglob("*")) == [
+            Path(existing_name)
+        ]
+    payload = _payload(result)
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == error_code
+
+
+def test_stale_topology_cursor_does_not_overwrite_artifacts(tmp_path: Path) -> None:
+    registry, edges = _write_topology(tmp_path)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        first = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(registry),
+                "--edges",
+                str(edges),
+                "diagram",
+                "--output",
+                "generated",
+                "--format",
+                "all",
+                "--limit",
+                "1",
+            ],
+        )
+        cursor = _payload(first)["result"]["artifacts"]["page"]["next_cursor"]
+        protected = Path("generated/infrastructure.md")
+        protected.write_bytes(b"sentinel")
+        registry.write_text(
+            registry.read_text(encoding="utf-8") + "\n# topology changed\n",
+            encoding="utf-8",
+        )
+        stale = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(registry),
+                "--edges",
+                str(edges),
+                "diagram",
+                "--output",
+                "generated",
+                "--format",
+                "all",
+                "--limit",
+                "1",
+                "--collection",
+                "artifacts",
+                "--cursor",
+                cursor,
+            ],
+        )
+        assert protected.read_bytes() == b"sentinel"
+    payload = _payload(stale)
+    assert stale.exit_code == 2
+    assert payload["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="openat safety unavailable")
+def test_descriptor_relative_writer_contains_parent_symlink_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    outside = Path("outside")
+    outside.mkdir()
+    real_open = os.open
+    swapped = False
+
+    def swapping_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if not swapped and path == "generated" and dir_fd is not None and flags & os.O_DIRECTORY:
+            swapped = True
+            output.rename("detached")
+            output.symlink_to(outside, target_is_directory=True)
+        return descriptor
+
+    monkeypatch.setattr(artifact_helpers.os, "open", swapping_open)
+    write_artifacts(
+        output,
+        [(Path("nested/result.txt"), "text/plain", b"bounded")],
+    )
+
+    assert swapped is True
+    assert list(outside.iterdir()) == []
+    assert Path("detached/nested/result.txt").read_bytes() == b"bounded"
+
+
+def test_analyze_context_resolves_default_root_and_command_override_registry(
+    tmp_path: Path,
+) -> None:
+    from infralink.cli.main import DEFAULT_REGISTRY, _context_for
+
+    root_registry, edges = _write_topology(tmp_path)
+    override = tmp_path / "override.yml"
+    override.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
+    assert _context_for(path=["analyze"]).resolved["registry"] == DEFAULT_REGISTRY
+
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        root_result = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(root_registry),
+                "--edges",
+                str(edges),
+                "analyze",
+                "--output",
+                "root-output",
+            ],
+        )
+        override_result = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(root_registry),
+                "--edges",
+                str(edges),
+                "analyze",
+                "--registry",
+                str(override),
+                "--output",
+                "override-output",
+            ],
+        )
+
+    assert _payload(root_result)["command"]["resolved"]["registry"] == str(root_registry)
+    assert _payload(override_result)["command"]["resolved"]["registry"] == str(override)
 
 
 @pytest.mark.parametrize(
