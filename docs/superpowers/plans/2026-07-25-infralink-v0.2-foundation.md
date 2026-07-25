@@ -1682,7 +1682,7 @@ git commit -m "feat(bws): add optional read-only secrets adapter"
 
 ---
 
-### Task 10: Migrate Artifact Commands And Complete Contract Coverage
+### Task 10: Migrate Artifact Commands To `infralink.cli/v1` And Complete Contract Coverage
 
 **Files:**
 - Modify: `src/infralink/cli/analyze.py`
