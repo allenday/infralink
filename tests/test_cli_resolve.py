@@ -128,6 +128,8 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
     assert actions["validate"]["argv"] == [*source, "validate", "--check-resolution"]
     assert actions["check"]["argv"] == [*source, "check", "--edge", EDGE_ID]
     assert all(item["safe"] and not item["templated"] for item in actions.values())
+
+
 def test_resolve_actions_are_executable_typed_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -202,8 +204,9 @@ def test_live_resolve_surface_never_leaks_loaded_secret_value(
     registry_path, edges_path = canary_topology(tmp_path, canary)
     loaded = Registry.load(registry_path)
     assert (
-        loaded.get_by_uuid("d1b9e5d5-36b0-459d-a556-96622811fbd5")
-        .provider_metadata["password_value"]
+        loaded.get_by_uuid("d1b9e5d5-36b0-459d-a556-96622811fbd5").provider_metadata[
+            "password_value"
+        ]
         == canary
     )
 

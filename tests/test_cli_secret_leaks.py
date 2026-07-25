@@ -10,6 +10,7 @@ from infralink.cli.main import cli
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
 from infralink.health.checks import HealthCheckResult
+from infralink.secrets import SecretAudit
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
@@ -20,9 +21,9 @@ SOURCE_ID = "fa2b9872-d94c-4b20-a73a-57a205560769"
 
 def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path]:
     registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
-    registry["hosts"][TARGET_ID].setdefault("provider_metadata", {})[
-        "password_value"
-    ] = canary
+    for host in registry["hosts"].values():
+        host["status"] = "terminated"
+    registry["hosts"][TARGET_ID].setdefault("provider_metadata", {})["password_value"] = canary
     registry_path = tmp_path / "registry.yml"
     registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
 
@@ -65,13 +66,22 @@ def _leaf_paths(group: click.Group, prefix: tuple[str, ...] = ()) -> set[tuple[s
     return paths
 
 
-def _assert_no_canary(canary: str, label: str, result: Result) -> None:
+def _assert_no_canary(
+    canary: str,
+    label: str,
+    result: Result,
+    *,
+    expected_exit: int,
+    expected_ok: bool,
+) -> None:
     output = result.output
     stderr = result.stderr
     exception = result.exception
+    assert result.exit_code == expected_exit, (label, output, repr(exception))
     assert stderr == "", label
     assert output.count("\n") == 1, label
     payload = json.loads(output)
+    assert payload["ok"] is expected_ok, label
     observables = (
         output,
         stderr,
@@ -112,6 +122,20 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
             timestamp=0.0,
         ),
     )
+    monkeypatch.setattr(
+        "infralink.cli.secrets._build_bws_resolver",
+        lambda: type(
+            "OfflineAuditResolver",
+            (),
+            {
+                "audit": staticmethod(
+                    lambda references: [
+                        SecretAudit(item.ref, item.project, True, True) for item in references
+                    ]
+                )
+            },
+        )(),
+    )
 
     source = [
         "--registry",
@@ -120,51 +144,74 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
         str(edges_path),
     ]
     artifacts = tmp_path / "artifacts"
-    invocations: dict[tuple[str, ...], list[str]] = {
-        (): source,
-        ("analyze",): [
-            *source,
-            "analyze",
-            "--registry",
-            str(registry_path),
-            "--output",
-            str(artifacts / "analyze"),
-        ],
-        ("app", "list"): [*source, "app", "list"],
-        ("app", "show"): [*source, "app", "show", "core"],
-        ("check",): [*source, "check", "--edge", EDGE_ID],
-        ("diagram",): [
-            *source,
-            "diagram",
-            "--format",
-            "d2",
-            "--output",
-            str(artifacts / "diagrams"),
-        ],
-        ("docs",): [
-            *source,
-            "docs",
-            "--output",
-            str(artifacts / "docs"),
-        ],
-        ("edge", "show"): [*source, "edge", "show", EDGE_ID],
-        ("edges-list",): [*source, "edges-list"],
-        ("host", "show"): [*source, "host", "show", TARGET_ID],
-        ("hosts",): [*source, "hosts"],
-        ("info",): [*source, "info"],
-        ("resolve",): [*source, "resolve", EDGE_ID],
-        ("service", "show"): [*source, "service", "show", "postgresql"],
-        ("services",): [*source, "services"],
-        ("validate",): [*source, "validate", "--check-resolution"],
-        ("version",): [*source, "version"],
+    invocations: dict[tuple[str, ...], tuple[list[str], int, bool]] = {
+        (): (source, 0, True),
+        ("analyze",): (
+            [
+                *source,
+                "analyze",
+                "--registry",
+                str(registry_path),
+                "--output",
+                str(artifacts / "analyze"),
+                "--no-edges",
+                "--no-diagram",
+            ],
+            0,
+            True,
+        ),
+        ("app", "list"): ([*source, "app", "list"], 0, True),
+        ("app", "show"): ([*source, "app", "show", "core"], 0, True),
+        ("check",): ([*source, "check", "--edge", EDGE_ID], 0, True),
+        ("diagram",): (
+            [
+                *source,
+                "diagram",
+                "--format",
+                "d2",
+                "--include-terminated",
+                "--output",
+                str(artifacts / "diagrams"),
+            ],
+            0,
+            True,
+        ),
+        ("docs",): (
+            [
+                *source,
+                "docs",
+                "--output",
+                str(artifacts / "docs"),
+            ],
+            0,
+            True,
+        ),
+        ("edge", "show"): ([*source, "edge", "show", EDGE_ID], 0, True),
+        ("edges-list",): ([*source, "edges-list"], 0, True),
+        ("host", "show"): ([*source, "host", "show", TARGET_ID], 0, True),
+        ("hosts",): ([*source, "hosts"], 0, True),
+        ("info",): ([*source, "info"], 0, True),
+        ("resolve",): ([*source, "resolve", EDGE_ID], 0, True),
+        ("secrets", "audit"): ([*source, "secrets", "audit"], 0, True),
+        ("secrets", "inspect"): ([*source, "secrets", "inspect"], 0, True),
+        ("service", "show"): ([*source, "service", "show", "postgresql"], 0, True),
+        ("services",): ([*source, "services"], 0, True),
+        ("validate",): ([*source, "validate", "--check-resolution"], 0, True),
+        ("version",): ([*source, "version"], 0, True),
     }
     discovered = _leaf_paths(cli)
     assert discovered == {*(set(invocations) - {()}), ("help",)}
 
     runner = CliRunner()
-    for path, argv in invocations.items():
+    for path, (argv, expected_exit, expected_ok) in invocations.items():
         result = runner.invoke(cli, argv)
-        _assert_no_canary(canary, " ".join(path) or "root", result)
+        _assert_no_canary(
+            canary,
+            " ".join(path) or "root",
+            result,
+            expected_exit=expected_exit,
+            expected_ok=expected_ok,
+        )
 
     help_paths = {
         (),
@@ -172,11 +219,18 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
         ("app",),
         ("edge",),
         ("host",),
+        ("secrets",),
         ("service",),
     }
     for path in sorted(help_paths):
         result = runner.invoke(cli, [*source, "help", *path])
-        _assert_no_canary(canary, f"help {' '.join(path)}".rstrip(), result)
+        _assert_no_canary(
+            canary,
+            f"help {' '.join(path)}".rstrip(),
+            result,
+            expected_exit=0,
+            expected_ok=True,
+        )
 
     for artifact in artifacts.rglob("*"):
         if artifact.is_file():
