@@ -577,6 +577,63 @@ def test_analyze_context_resolves_default_root_and_command_override_registry(
     assert _payload(override_result)["command"]["resolved"]["registry"] == str(override)
 
 
+def test_analyze_invalid_cursor_context_resolves_command_registry_override(
+    tmp_path: Path,
+) -> None:
+    root_registry, edges = _write_topology(tmp_path)
+    override = tmp_path / "override.yml"
+    override.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(root_registry),
+            "--edges",
+            str(edges),
+            "analyze",
+            "--registry",
+            str(override),
+            "--output",
+            "generated",
+            "--cursor",
+            "bogus",
+        ],
+    )
+    payload = _payload(result)
+
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "invalid_cursor"
+    assert payload["command"]["resolved"]["registry"] == str(override)
+
+
+def test_analyze_input_failure_context_resolves_command_registry_override(
+    tmp_path: Path,
+) -> None:
+    root_registry, edges = _write_topology(tmp_path)
+    missing_override = tmp_path / "command-missing.yml"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(root_registry),
+            "--edges",
+            str(edges),
+            "analyze",
+            "--registry",
+            str(missing_override),
+            "--output",
+            "generated",
+        ],
+    )
+    payload = _payload(result)
+
+    assert result.exit_code == 3
+    assert payload["error"]["code"] == "input_load_failed"
+    assert payload["command"]["resolved"]["registry"] == str(missing_override)
+
+
 @pytest.mark.parametrize(
     ("command", "extra"),
     [

@@ -349,10 +349,7 @@ def analyze(
         ),
     ]
     payload = ok_envelope(
-        _context_for(
-            path=["analyze"],
-            resolved_overrides={"registry": str(source)},
-        ),
+        _context_for(path=["analyze"]),
         result,
         actions,
     )

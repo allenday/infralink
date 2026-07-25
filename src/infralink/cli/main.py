@@ -285,7 +285,6 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
 def _context_for(
     argv: list[str] | None = None,
     path: list[str] | None = None,
-    resolved_overrides: dict[str, Any] | None = None,
 ) -> CommandContext:
     active_argv = argv
     if active_argv is None:
@@ -300,8 +299,7 @@ def _context_for(
         "output": root_values.get("output", "json"),
         "verbose": bool(root_values.get("verbose", False)),
     }
-    if resolved_overrides is not None:
-        resolved.update(resolved_overrides)
+    resolved.update(_command_resolved_overrides(redacted_argv, parsed_path))
     return command_context(
         ["infralink", *redacted_argv],
         path=path if path is not None else parsed_path,
@@ -309,6 +307,30 @@ def _context_for(
         flags=[item for item in redacted_argv if item.startswith("-")],
         resolved=resolved,
     )
+
+
+def _command_resolved_overrides(
+    argv: list[str],
+    parsed_path: list[str],
+) -> dict[str, Any]:
+    """Derive command-local effective sources from the same Click parser."""
+    if parsed_path != ["analyze"]:
+        return {}
+    root_ctx = cli.make_context("infralink", list(argv), resilient_parsing=True)
+    if _protected_args(root_ctx) != ["analyze"]:
+        return {}
+    command = _load_command("analyze")
+    if command is None:
+        return {}
+    command_ctx = command.make_context(
+        "infralink analyze",
+        list(root_ctx.args),
+        resilient_parsing=True,
+    )
+    registry_override = command_ctx.params.get("registry_override")
+    if registry_override is None:
+        return {}
+    return {"registry": str(registry_override)}
 
 
 def input_load_failed(source: str, path: str) -> CliFailure:
