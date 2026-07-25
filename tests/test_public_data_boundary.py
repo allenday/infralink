@@ -26,6 +26,14 @@ ADDRESS_TOKEN = re.compile(
     r"(?![0-9A-Za-z_.:-])",
     re.IGNORECASE,
 )
+PORT_AUTHORITY_TOKEN = re.compile(
+    r"(?<![a-z0-9_.:@/-])"
+    r"(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)"
+    r":[a-z0-9-]+"
+    r"(?:/[^\s`\"'<>]*)?"
+    r"""[.,;:!?)}\]>'"]*""",
+    re.IGNORECASE,
+)
 URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
 UUID = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
@@ -94,6 +102,7 @@ BWS_PLACEHOLDERS = {
     "organization": {"<organization-id>", "<organization-uuid>"},
     "project": {"<project-id>"},
 }
+SAFE_HOST_PLACEHOLDERS = {"${host}", "${hostname}", "<host>", "<hostname>"}
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -162,21 +171,46 @@ def _address_violation(
 
 def _hostname_violation(hostname: str | None) -> str | None:
     if hostname is None:
-        return None
+        return "invalid endpoint authority"
+    address = _parse_address(hostname)
+    if address is not None:
+        return _address_violation(address)
     candidate = _normalize_prose_token(hostname).lower()
     if UUID.fullmatch(candidate):
         return None
-    try:
-        ipaddress.ip_address(candidate)
-    except ValueError:
-        pass
-    else:
-        return None
     if not HOSTNAME.fullmatch(candidate) or not any(character.isalpha() for character in candidate):
-        return None
+        return "invalid endpoint authority"
     if candidate == "example.com" or candidate.endswith(".example.com"):
         return None
     return f"non-example hostname: {candidate}"
+
+
+def _authority_violation(value: str, *, allow_placeholder: bool = False) -> str | None:
+    candidate = value.strip("`'\"")
+    if allow_placeholder and candidate.lower() in SAFE_HOST_PLACEHOLDERS:
+        return None
+    address = _parse_address(candidate)
+    if address is not None:
+        return _address_violation(address)
+
+    while candidate:
+        authority_input = (
+            candidate if "://" in candidate or candidate.startswith("//") else f"//{candidate}"
+        )
+        try:
+            parsed = urlsplit(authority_input)
+            hostname = parsed.hostname
+            _port = parsed.port
+        except ValueError:
+            if candidate[-1] in TERMINAL_PROSE_PUNCTUATION:
+                candidate = candidate[:-1]
+                continue
+            return "invalid endpoint authority"
+        netloc = parsed.netloc.rsplit("@", maxsplit=1)[-1]
+        if hostname is None or netloc.endswith(":"):
+            return "invalid endpoint authority"
+        return _hostname_violation(hostname)
+    return "invalid endpoint authority"
 
 
 def _is_safe_dotted_token(text: str, match: re.Match[str], candidate: str) -> bool:
@@ -207,15 +241,21 @@ def _dotted_token_violation(
     )
     if (
         inside_url
+        or "_" in candidate
         or VERSION_IDENTIFIER.fullmatch(candidate)
         or _is_safe_dotted_token(text, match, candidate)
     ):
         return None
-    return _hostname_violation(candidate)
+    return _authority_violation(candidate)
 
 
 def boundary_violations(text: str) -> list[str]:
     violations: list[str] = []
+
+    def record(violation: str | None) -> None:
+        if violation is not None and violation not in violations:
+            violations.append(violation)
+
     lowered = text.lower()
     if ".i.cyberstorm.dev" in lowered:
         violations.append("private suffix")
@@ -225,41 +265,36 @@ def boundary_violations(text: str) -> list[str]:
     for match in url_matches:
         raw_url = match.group(0).rstrip(".,);")
         safe_template = re.search(r":\$\{secret:[^}\s]+\}@", raw_url) is not None
-        parsed = urlsplit(re.sub(r"\$\{secret:[^}\s]+\}", "placeholder", raw_url))
-        if (parsed.username is not None or parsed.password is not None) and not safe_template:
-            violations.append("credential URL userinfo")
-        hostname_violation = _hostname_violation(parsed.hostname)
-        if hostname_violation is not None:
-            violations.append(hostname_violation)
+        sanitized_url = re.sub(r"\$\{secret:[^}\s]+\}", "placeholder", raw_url)
+        try:
+            parsed = urlsplit(sanitized_url)
+        except ValueError:
+            record("invalid endpoint authority")
+        else:
+            if (parsed.username is not None or parsed.password is not None) and not safe_template:
+                record("credential URL userinfo")
+        record(_authority_violation(sanitized_url))
 
     for value in HOST_FIELD.findall(text):
-        candidate = value.strip("'\",[]()")
-        if "://" in candidate:
-            continue
-        if candidate.startswith("//"):
-            candidate = urlsplit(f"placeholder:{candidate}").hostname or candidate
-        else:
-            candidate = candidate.split("/", maxsplit=1)[0]
-        hostname_violation = _hostname_violation(candidate)
-        if hostname_violation is not None:
-            violations.append(hostname_violation)
+        record(_authority_violation(value, allow_placeholder=True))
     for candidate in HOST_LIST_ITEM.findall(text):
-        hostname_violation = _hostname_violation(candidate)
-        if hostname_violation is not None:
-            violations.append(hostname_violation)
+        record(_authority_violation(candidate))
+
+    for match in PORT_AUTHORITY_TOKEN.finditer(text):
+        if any(
+            url_match.start() <= match.start() and match.end() <= url_match.end()
+            for url_match in url_matches
+        ):
+            continue
+        record(_authority_violation(match.group(0)))
 
     for match in DOTTED_TOKEN.finditer(text):
-        hostname_violation = _dotted_token_violation(text, match, url_matches)
-        if hostname_violation is not None:
-            violations.append(hostname_violation)
+        record(_dotted_token_violation(text, match, url_matches))
 
     for token in ADDRESS_TOKEN.findall(text):
         address = _parse_address(token)
-        if address is None:
-            continue
-        address_violation = _address_violation(address)
-        if address_violation is not None:
-            violations.append(address_violation)
+        if address is not None:
+            record(_address_violation(address))
 
     for match in GCP_KEY.finditer(text):
         project = match.group("value")
@@ -295,6 +330,10 @@ def boundary_violations(text: str) -> list[str]:
         ("endpoint: http://10.0.0.7...", "non-RFC5737 address"),
         ("endpoint: http://10.0.0.7...);!?", "non-RFC5737 address"),
         ("endpoint: http://[2001:db8::1].", "non-RFC5737 address"),
+        ("host: 10.0.0.7:5432", "non-RFC5737 address"),
+        ("host: [2001:db8::1]:5432", "non-RFC5737 address"),
+        ("endpoint: http://10.0.0.7:8080/path", "non-RFC5737 address"),
+        ("endpoint: http://[2001:db8::1]:8080/path", "non-RFC5737 address"),
         ("host: service.i.cyberstorm.dev", "private suffix"),
         ("gcp_project: production-123", "GCP project identifier"),
         ("bws_project_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2", "UUID-shaped BWS"),
@@ -304,6 +343,19 @@ def boundary_violations(text: str) -> list[str]:
         ("endpoint: https://api.relax.gg/v1", "non-example hostname"),
         ("canonical_name: private.internal", "non-example hostname"),
         ("host: localhost", "non-example hostname"),
+        ("host: privatehost", "non-example hostname"),
+        ("host: localhost:5432", "non-example hostname"),
+        ("host: privatehost:5432", "non-example hostname"),
+        ("endpoint: db.corp.invalid:443/path", "non-example hostname"),
+        ("endpoint: //db.corp.invalid:443/path", "non-example hostname"),
+        ("endpoint: https://db.corp.invalid:443/path", "non-example hostname"),
+        ("Connect to privatehost:5432.", "non-example hostname"),
+        ("Connect to db.production.internal:5432/path.", "non-example hostname"),
+        ("host: privatehost:notaport", "invalid endpoint authority"),
+        ("host: example.com:99999", "invalid endpoint authority"),
+        ("endpoint: https://example.com:notaport/path", "invalid endpoint authority"),
+        ("Connect to example.com:99999.", "invalid endpoint authority"),
+        ("host: [2001:db8::1", "invalid endpoint authority"),
         ("Dependency: db.production.internal", "non-example hostname"),
         ("See [database](db.production.internal).", "non-example hostname"),
         (
@@ -357,10 +409,18 @@ def test_boundary_detector_rejects_each_private_data_class(text: str, expected: 
 def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     text = """
     host: 192.0.2.10
+    host: 192.0.2.10:5432
+    host: <host>
+    hostname: ${hostname}
     backup: 198.51.100.5
     prose_address: 203.0.113.9...);!?
+    prose_endpoint: 192.0.2.30:5432.
+    prose_endpoint: api.example.com:443.
     source: http://192.0.2.20...);!?
     endpoint: https://api.example.com
+    endpoint: api.example.com:8443/path
+    endpoint: https://api.example.com:443/path
+    source: //storage.example.com:443/backup
     source: https://example.com/releases/package.whl?download=1
     canonical_name: db.internal.example.com
     edge_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2
