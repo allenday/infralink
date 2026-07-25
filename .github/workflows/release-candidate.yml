@@ -77,7 +77,7 @@ jobs:
           git diff --exit-code
           test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
       - name: Verify public-data boundary
-        run: python -m pytest tests/test_public_data_boundary.py -q
+        run: python -m pytest tests/test_public_data_boundary.py -q --no-cov
       - name: Install checksum-verified Gitleaks
         shell: bash
         run: |

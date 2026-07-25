@@ -72,6 +72,7 @@ def test_candidate_builds_once_after_all_nonbuild_gates() -> None:
     assert "infralink-secret-canary-47291" in run_text
     assert "tar -xzf dist/infralink-0.2.0.tar.gz" in run_text
     assert "unzip -q dist/infralink-0.2.0-py3-none-any.whl" in run_text
+    assert "pytest tests/test_public_data_boundary.py -q --no-cov" in run_text
 
     pytest_sources = list((PROJECT_ROOT / "tests").glob("test_*.py"))
     offenders = [
@@ -150,3 +151,4 @@ def test_ci_matrix_and_release_gates_are_complete() -> None:
     assert "gitleaks detect" in text
     assert "tar -xzf dist/infralink-0.2.0.tar.gz" in text
     assert "unzip -q dist/infralink-0.2.0-py3-none-any.whl" in text
+    assert "pytest tests/test_public_data_boundary.py -q --no-cov" in text
