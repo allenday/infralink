@@ -78,8 +78,6 @@ def test_resolve_rejects_password_without_leaking_it() -> None:
             str(EXAMPLES / "edges.yml"),
             "resolve",
             EXAMPLE_EDGE_ID,
-            "--format",
-            "url",
             f"--password={canary}",
         ]
     )
@@ -103,8 +101,6 @@ def test_resolve_rejects_password_env_without_reading_it(
             str(EXAMPLES / "edges.yml"),
             "resolve",
             EXAMPLE_EDGE_ID,
-            "--format",
-            "url",
             "--password-env",
             "INFRALINK_TEST_PASSWORD",
         ]
@@ -114,7 +110,7 @@ def test_resolve_rejects_password_env_without_reading_it(
     assert json.loads(result.output)["error"]["code"] == "usage_error"
 
 
-def test_resolve_url_preserves_safe_user_and_database() -> None:
+def test_resolve_template_preserves_safe_user_and_database() -> None:
     result = run_cmd(
         [
             "--registry",
@@ -123,8 +119,6 @@ def test_resolve_url_preserves_safe_user_and_database() -> None:
             str(EXAMPLES / "edges.yml"),
             "resolve",
             EXAMPLE_EDGE_ID,
-            "--format",
-            "url",
             "--user",
             "reporter",
             "--database",
@@ -133,5 +127,5 @@ def test_resolve_url_preserves_safe_user_and_database() -> None:
     )
     payload = json.loads(result.output)
     assert result.exit_code == 0
-    assert "reporter@" in payload["result"]["url"]
-    assert payload["result"]["url"].endswith("/analytics")
+    assert "reporter:" in payload["result"]["connection_template"]
+    assert payload["result"]["connection_template"].endswith("/analytics")

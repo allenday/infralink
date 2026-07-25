@@ -77,7 +77,7 @@ def test_existing_nested_help_is_json() -> None:
         (("--registry=registry.yml", "--help"), []),
         (("--registry", "registry.yml", "--edges", "edges.yml", "--help"), []),
         (("resolve", "edge-1", "--help"), ["resolve"]),
-        (("resolve", "--format", "json", "--help"), ["resolve"]),
+        (("resolve", "--prefer-ip", "public", "--help"), ["resolve"]),
         (("app", "show", "core", "--help"), ["app", "show"]),
         (("host", "show", "host-1", "--help"), ["host", "show"]),
     ],
@@ -93,12 +93,11 @@ def test_help_alias_ignores_flags_options_and_positionals(
 def test_help_describes_every_live_resolve_option() -> None:
     payload = payload_for("help", "resolve")
     option_names = {option["name"] for option in payload["result"]["options"]}
-    assert {
-        "format",
+    assert option_names == {
         "user",
         "database",
         "prefer_ip",
-    } <= option_names
+    }
     assert {"password", "password_env"}.isdisjoint(option_names)
 
 
@@ -128,7 +127,7 @@ def test_click_version_alias_is_json() -> None:
         (("not-a-command",), "usage_error"),
         (("--unknown",), "usage_error"),
         (("resolve",), "usage_error"),
-        (("resolve", "--format", "invalid", "edge-1"), "usage_error"),
+        (("resolve", "--prefer-ip", "invalid", "edge-1"), "usage_error"),
     ],
 )
 def test_malformed_invocations_are_json_usage_errors(
@@ -186,8 +185,8 @@ def test_context_reports_safe_bound_values() -> None:
         "-v",
         "resolve",
         "edge-1",
-        "--format",
-        "json",
+        "--prefer-ip",
+        "public",
         "--help",
     )
     assert payload["command"]["parsed"]["path"] == ["resolve"]
@@ -418,6 +417,17 @@ def test_advertised_typed_commands_produce_their_schemas() -> None:
         "services": (
             ("--registry", str(EXAMPLES / "registry.yml"), "services"),
             "services",
+        ),
+        "resolve": (
+            (
+                "--registry",
+                str(EXAMPLES / "registry.yml"),
+                "--edges",
+                str(EXAMPLES / "edges.yml"),
+                "resolve",
+                "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+            ),
+            "resolve",
         ),
     }
     for args, schema_name in invocations.values():

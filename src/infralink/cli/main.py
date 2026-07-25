@@ -183,10 +183,11 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "description": "Resolve an edge to its target endpoint.",
         "arguments": [{"name": "edge_id", "type": "string", "required": True}],
         "options": [
-            {"name": "format", "type": "choice", "required": False},
+            {"name": "user", "type": "string", "required": False},
+            {"name": "database", "type": "string", "required": False},
             {"name": "prefer_ip", "type": "choice", "required": False},
         ],
-        "examples": ["infralink resolve edge-1"],
+        "examples": ["infralink resolve 058e29ff-57b9-47c8-b6fa-0914ac03e25c"],
     },
     ("app", "list"): {
         "description": "List application groupings.",
