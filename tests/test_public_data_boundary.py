@@ -188,15 +188,20 @@ def _looks_like_ipv6_literal(value: str) -> bool:
 
 
 def _looks_like_bracketed_endpoint(text: str, start: int, value: str) -> bool:
-    hostname, marker, port_text = value.rpartition(":")
-    if not marker or not port_text.isdigit() or not 1 <= int(port_text) <= 65_535:
+    hostname, marker, _port_text = value.rpartition(":")
+    if not marker or not hostname:
         return False
     hostname = hostname.lower()
     if "." in hostname or "host" in hostname:
         return True
     prefix = text[max(0, start - 32) : start]
     return (
-        re.search(r"(?:host|endpoint|connect(?:\s+to)?)\s*[:=]?\s*$", prefix, re.IGNORECASE)
+        re.search(
+            r"(?:(?:the\s+)?(?:host|endpoint)(?:\s+is)?|"
+            r"connect(?:\s+securely)?(?:\s+to)?)\s*[:=]?\s*$",
+            prefix,
+            re.IGNORECASE,
+        )
         is not None
     )
 
@@ -274,14 +279,14 @@ def _authority_violation(value: str, *, allow_placeholder: bool = False) -> str 
         try:
             parsed = urlsplit(authority_input)
             hostname = parsed.hostname
-            _port = parsed.port
+            port = parsed.port
         except ValueError:
             if candidate[-1] in TERMINAL_PROSE_PUNCTUATION:
                 candidate = candidate[:-1]
                 continue
             return "invalid endpoint authority"
         netloc = parsed.netloc.rsplit("@", maxsplit=1)[-1]
-        if hostname is None or netloc.endswith(":"):
+        if hostname is None or netloc.endswith(":") or port == 0:
             return "invalid endpoint authority"
         return _hostname_violation(hostname)
     return "invalid endpoint authority"
@@ -398,7 +403,7 @@ def boundary_violations(
         return any(start <= span[0] < end for start, end in authority_spans)
 
     def inside_bracket_span(span: tuple[int, int]) -> bool:
-        return any(start <= span[0] and span[1] <= end for start, end in bracket_spans)
+        return any(start <= span[0] < end for start, end in bracket_spans)
 
     def inside_balanced_bracket_span(span: tuple[int, int]) -> bool:
         return any(start <= span[0] and span[1] <= end for start, end in balanced_bracket_spans)
@@ -527,8 +532,15 @@ def boundary_violations(
         elif (
             closing_bracket > 0
             and ":" in bracket_literal
-            and not _looks_like_bracketed_endpoint(text, match.start(), bracket_literal)
+            and _looks_like_bracketed_endpoint(text, match.start(), bracket_literal)
         ):
+            bracket_spans.append(match.span())
+            record(
+                _authority_violation(bracket_literal),
+                span=match.span(),
+                value=bracket_literal,
+            )
+        elif closing_bracket > 0 and ":" in bracket_literal:
             generic_bracket_spans.append(match.span())
         if "]" not in raw_token and ":" in token and not starts_in_authority_span(match.span()):
             bracket_spans.append(match.span())
@@ -803,6 +815,20 @@ def test_boundary_detector_reports_atomic_authority_findings() -> None:
     assert boundary_violations("Use [key:123] [year:2026] [line:12] [HTTP:200].") == []
     assert boundary_violations("Use [key:value][privatehost:5432] in prose.") == [
         "non-example hostname: privatehost"
+    ]
+    assert boundary_violations("Use [privatehost:notaport] in prose.") == [
+        "invalid endpoint authority"
+    ]
+    assert boundary_violations("Use [privatehost:0] in prose.") == ["invalid endpoint authority"]
+    assert boundary_violations("Use [privatehost:65536] in prose.") == [
+        "invalid endpoint authority"
+    ]
+    assert boundary_violations("The endpoint is [service:5432].") == [
+        "non-example hostname: service"
+    ]
+    assert boundary_violations("The host is [service:notaport].") == ["invalid endpoint authority"]
+    assert boundary_violations("Connect securely to [service:5432].") == [
+        "non-example hostname: service"
     ]
     assert boundary_violations("Use [key:value], [privatehost:5432] in prose.") == [
         "non-example hostname: privatehost"
