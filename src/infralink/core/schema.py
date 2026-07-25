@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+SAFE_SECRET_REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z", re.ASCII)
 
 
 class StrictModel(BaseModel):
@@ -78,7 +81,7 @@ class ServiceSchema(NodeSchema):
     node_type: str = "service"
 
     @model_validator(mode="after")
-    def populate_canonical_name(self) -> "ServiceSchema":
+    def populate_canonical_name(self) -> ServiceSchema:
         if self.canonical_name is None:
             self.canonical_name = self.name
         return self
@@ -407,6 +410,14 @@ class AuthConfig(StrictModel):
     database: str | None = None
     role: Literal["ro", "rw", "admin", "relay"] | None = None
     mount_path: str | None = None
+
+    @model_validator(mode="after")
+    def require_password_secret_reference(self) -> AuthConfig:
+        if self.type == "password" and (
+            self.secret_ref is None or SAFE_SECRET_REF_PATTERN.fullmatch(self.secret_ref) is None
+        ):
+            raise ValueError("password auth requires a valid nonempty secret_ref")
+        return self
 
 
 class HealthCheckConfig(StrictModel):

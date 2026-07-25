@@ -1,6 +1,9 @@
 """Tests for resolver module."""
 
+from urllib.parse import unquote, urlsplit
+
 import pytest
+from pydantic import ValidationError
 
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
@@ -13,6 +16,9 @@ OTLP_EDGE_ID = "33333333-3333-4333-8333-333333333333"
 UNSAFE_SECRET_ID = "44444444-4444-4444-8444-444444444444"
 CONTEXT_EDGE_ID = "55555555-5555-4555-8555-555555555555"
 MISSING_PORT_ID = "66666666-6666-4666-8666-666666666666"
+IPV6_POSTGRES_ID = "77777777-7777-4777-8777-777777777777"
+IPV6_REDIS_ID = "88888888-8888-4888-8888-888888888888"
+AUTHORITY_EDGE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 
 @pytest.fixture
@@ -186,6 +192,57 @@ class TestEdgeResolver:
             )
         assert url == "redis://:mypass@100.78.109.111:6379/1"
 
+    def test_deprecated_generic_url_percent_encodes_uri_components(self, registry, edges):
+        resolver = EdgeResolver(registry, edges)
+
+        with pytest.deprecated_call():
+            url = resolver.get_url(
+                "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10",
+                user="user +@",
+                password="pass +@",
+                database="db +/@",
+            )
+
+        parsed = urlsplit(url)
+        assert unquote(parsed.username or "") == "user +@"
+        assert unquote(parsed.password or "") == "pass +@"
+        assert unquote(parsed.path.removeprefix("/")) == "db +/@"
+        assert "+" not in (parsed.username or "")
+        assert "+" not in (parsed.password or "")
+
+    @pytest.mark.parametrize(
+        ("method_name", "edge_id", "kwargs"),
+        [
+            (
+                "get_postgres_url",
+                "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10",
+                {"user": "user +@", "password": "pass +@", "database": "db +/@"},
+            ),
+            (
+                "get_mysql_url",
+                "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10",
+                {"user": "user +@", "password": "pass +@", "database": "db +/@"},
+            ),
+            (
+                "get_redis_url",
+                "c8c1a6a4-55c6-4a1b-9c14-1a4e0f615d8f",
+                {"password": "pass +@"},
+            ),
+        ],
+    )
+    def test_deprecated_specific_urls_roundtrip_encoded_userinfo(
+        self, registry, edges, method_name, edge_id, kwargs
+    ):
+        with pytest.deprecated_call():
+            url = getattr(EdgeResolver(registry, edges), method_name)(edge_id, **kwargs)
+
+        parsed = urlsplit(url)
+        assert unquote(parsed.password or "") == "pass +@"
+        assert "+" not in (parsed.password or "")
+        if "user" in kwargs:
+            assert unquote(parsed.username or "") == "user +@"
+            assert unquote(parsed.path.removeprefix("/")) == "db +/@"
+
     @pytest.mark.parametrize(
         ("protocol", "port", "user", "database", "expected"),
         [
@@ -282,6 +339,204 @@ class TestEdgeResolver:
             "postgres://declared%20user:${secret:db-password}@100.78.109.111:5432/declared%2Fdb"
         )
 
+    @pytest.mark.parametrize(
+        ("protocol", "expected_scheme"),
+        [
+            ("POSTGRES", "postgres"),
+            ("POSTGRESQL+PSYCOPG2", "postgresql+psycopg2"),
+            ("MYSQL+PYMYSQL", "mysql+pymysql"),
+            ("MARIADB+CONNECTOR", "mariadb+connector"),
+            ("REDIS", "redis"),
+            ("REDISS+TLS", "rediss+tls"),
+        ],
+    )
+    def test_get_connection_template_emits_normalized_validated_scheme(
+        self, registry, protocol, expected_scheme
+    ):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": protocol,
+                        "auth": {"type": "password", "secret_ref": "db-password"},
+                    }
+                ]
+            }
+        )
+
+        result = EdgeResolver(registry, edges).get_connection_template(SECRET_EDGE_ID)
+
+        assert result is not None
+        assert result.startswith(f"{expected_scheme}://")
+
+    @pytest.mark.parametrize(
+        "protocol",
+        [
+            "postgresqlx",
+            "postgresql://attacker",
+            "postgresql+driver@attacker",
+            "postgresql\n",
+            "redis:evil",
+        ],
+    )
+    def test_get_connection_template_rejects_malformed_supported_scheme(self, registry, protocol):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": protocol,
+                        "auth": {"type": "password", "secret_ref": "db-password"},
+                    }
+                ]
+            }
+        )
+
+        with pytest.raises(ResolutionError, match="invalid connection scheme"):
+            EdgeResolver(registry, edges).get_connection_template(SECRET_EDGE_ID)
+
+    @pytest.mark.parametrize(
+        ("protocol", "edge_id", "expected"),
+        [
+            (
+                "postgresql",
+                IPV6_POSTGRES_ID,
+                "postgresql://:${secret:db-password}@[2001:db8::7]:5432",
+            ),
+            (
+                "redis",
+                IPV6_REDIS_ID,
+                "redis://:${secret:db-password}@[2001:db8::7]:6379/0",
+            ),
+        ],
+    )
+    def test_get_connection_template_brackets_ipv6_authority(self, protocol, edge_id, expected):
+        registry = Registry.from_dict(
+            {
+                "hosts": {
+                    "ipv6-host": {
+                        "canonical_name": "ipv6-host",
+                        "tailscale_ip": "2001:db8::7",
+                    }
+                }
+            }
+        )
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": edge_id,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "ipv6-host",
+                            "service": "database",
+                            "port": 6379 if protocol == "redis" else 5432,
+                        },
+                        "protocol": protocol,
+                        "auth": {"type": "password", "secret_ref": "db-password"},
+                    }
+                ]
+            }
+        )
+
+        assert EdgeResolver(registry, edges).get_connection_template(edge_id) == expected
+
+    def test_get_connection_template_normalizes_dns_authority(self):
+        registry = Registry.from_dict(
+            {
+                "hosts": {
+                    "dns-host": {
+                        "canonical_name": "dns-host",
+                        "tailscale_ip": "DB-01.Example.COM",
+                    }
+                }
+            }
+        )
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": AUTHORITY_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "dns-host",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": "postgresql",
+                    }
+                ]
+            }
+        )
+
+        assert EdgeResolver(registry, edges).get_connection_template(AUTHORITY_EDGE_ID) == (
+            "postgresql://db-01.example.com:5432"
+        )
+
+    @pytest.mark.parametrize(
+        "authority",
+        [
+            "db.example.com@attacker",
+            "db.example.com:5432",
+            "db.example.com/path",
+            "db..example.com",
+            "db example.com",
+            "db.example.com\nattacker",
+            "[2001:db8::7]",
+        ],
+    )
+    def test_get_connection_template_rejects_invalid_authority_without_echo(self, authority):
+        registry = Registry.from_dict(
+            {
+                "hosts": {
+                    "bad-host": {
+                        "canonical_name": "bad-host",
+                        "tailscale_ip": authority,
+                    }
+                }
+            }
+        )
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": AUTHORITY_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "bad-host",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": "postgresql",
+                    }
+                ]
+            }
+        )
+
+        with pytest.raises(ResolutionError) as exc_info:
+            EdgeResolver(registry, edges).get_connection_template(AUTHORITY_EDGE_ID)
+
+        assert "invalid connection host" in str(exc_info.value)
+        assert authority not in str(exc_info.value)
+
     def test_get_connection_template_without_secret_is_password_free(self, registry, edges):
         resolver = EdgeResolver(registry, edges)
 
@@ -315,32 +570,26 @@ class TestEdgeResolver:
 
         assert EdgeResolver(registry, edges).get_connection_template(OTLP_EDGE_ID) is None
 
-    @pytest.mark.parametrize(
-        "secret_ref",
-        ["bad}ref", "${nested}", "bad:ref", "bad ref", "bad@ref"],
-    )
-    def test_get_connection_template_rejects_unsafe_secret_reference(self, registry, secret_ref):
-        edges = EdgeSet.from_dict(
-            {
-                "edges": [
-                    {
-                        "id": UNSAFE_SECRET_ID,
-                        "type": "database",
-                        "from": {"hosts": [], "service": "app"},
-                        "to": {
-                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
-                            "service": "database",
-                            "port": 5432,
-                        },
-                        "protocol": "postgres",
-                        "auth": {"type": "password", "secret_ref": secret_ref},
-                    }
-                ]
-            }
-        )
-
-        with pytest.raises(ResolutionError, match="unsafe secret reference"):
-            EdgeResolver(registry, edges).get_connection_template(UNSAFE_SECRET_ID)
+    def test_password_edge_with_unsafe_secret_reference_fails_topology_validation(self, registry):
+        with pytest.raises(ValidationError, match="valid nonempty secret_ref"):
+            EdgeSet.from_dict(
+                {
+                    "edges": [
+                        {
+                            "id": UNSAFE_SECRET_ID,
+                            "type": "database",
+                            "from": {"hosts": [], "service": "app"},
+                            "to": {
+                                "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                                "service": "database",
+                                "port": 5432,
+                            },
+                            "protocol": "postgres",
+                            "auth": {"type": "password", "secret_ref": "bad}ref"},
+                        }
+                    ]
+                }
+            )
 
     @pytest.mark.parametrize(
         "method_name,kwargs",

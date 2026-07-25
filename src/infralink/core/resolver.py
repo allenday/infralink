@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import warnings
 from typing import Any
@@ -9,8 +10,23 @@ from urllib.parse import quote, quote_plus
 
 from infralink.core.edges import Edge, EdgeSet
 from infralink.core.registry import Host, Registry
+from infralink.core.schema import SAFE_SECRET_REF_PATTERN
 
-_SAFE_SECRET_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
+_CONNECTION_SCHEME = re.compile(
+    r"(?P<base>postgres|postgresql|mysql|mariadb|redis|rediss)"
+    r"(?:\+(?P<driver>[A-Za-z0-9][A-Za-z0-9._-]*))?\Z",
+    re.ASCII | re.IGNORECASE,
+)
+_GENERIC_SCHEME_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9+._-]*\Z", re.ASCII)
+_DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z", re.ASCII)
+_SUPPORTED_SCHEME_PREFIXES = (
+    "postgres",
+    "postgresql",
+    "mysql",
+    "mariadb",
+    "redis",
+    "rediss",
+)
 
 
 class ResolutionError(Exception):
@@ -94,24 +110,24 @@ class EdgeResolver:
         _warn_legacy_url_method("get_url")
         password = _require_plain_secret(password)
         edge = self.get_edge(edge_id)
-        ip = self.get_target_ip(edge_id, prefer_ip)
+        host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
         protocol = edge.protocol or "tcp"
 
         # Build URL
         if user and password:
-            # URL-encode password in case of special characters
-            encoded_password = quote_plus(password)
-            auth = f"{user}:{encoded_password}@"
+            encoded_user = _encode_uri_component(user, "user")
+            encoded_password = _encode_uri_component(password, "password")
+            auth = f"{encoded_user}:{encoded_password}@"
         elif user:
-            auth = f"{user}@"
+            auth = f"{_encode_uri_component(user, 'user')}@"
         else:
             auth = ""
 
-        url = f"{protocol}://{auth}{ip}:{port}"
+        url = f"{protocol}://{auth}{host}:{port}"
 
         if database:
-            url = f"{url}/{database}"
+            url = f"{url}/{_encode_uri_component(database, 'database')}"
 
         if path:
             url = f"{url}{path}"
@@ -133,12 +149,13 @@ class EdgeResolver:
         """Build a Redis connection URL."""
         _warn_legacy_url_method("get_redis_url")
         password = _require_plain_secret(password)
-        ip = self.get_target_ip(edge_id, prefer_ip)
+        host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
 
         if password:
-            return f"redis://:{quote_plus(password)}@{ip}:{port}/{db}"
-        return f"redis://{ip}:{port}/{db}"
+            encoded_password = _encode_uri_component(password, "password")
+            return f"redis://:{encoded_password}@{host}:{port}/{db}"
+        return f"redis://{host}:{port}/{db}"
 
     def get_postgres_url(
         self,
@@ -153,12 +170,14 @@ class EdgeResolver:
         """Build a PostgreSQL connection URL."""
         _warn_legacy_url_method("get_postgres_url")
         encoded_secret = _require_plain_secret(password)
-        ip = self.get_target_ip(edge_id, prefer_ip)
+        host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
         if encoded_secret is None:
             raise TypeError("Secret credentials must be plain strings")
-        encoded_password = quote_plus(encoded_secret)
-        return f"{driver}://{user}:{encoded_password}@{ip}:{port}/{database}"
+        encoded_user = _encode_uri_component(user, "user")
+        encoded_password = _encode_uri_component(encoded_secret, "password")
+        encoded_database = _encode_uri_component(database, "database")
+        return f"{driver}://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_database}"
 
     def get_mysql_url(
         self,
@@ -173,12 +192,14 @@ class EdgeResolver:
         """Build a MySQL/MariaDB connection URL."""
         _warn_legacy_url_method("get_mysql_url")
         encoded_secret = _require_plain_secret(password)
-        ip = self.get_target_ip(edge_id, prefer_ip)
+        host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
         if encoded_secret is None:
             raise TypeError("Secret credentials must be plain strings")
-        encoded_password = quote_plus(encoded_secret)
-        return f"{driver}://{user}:{encoded_password}@{ip}:{port}/{database}"
+        encoded_user = _encode_uri_component(user, "user")
+        encoded_password = _encode_uri_component(encoded_secret, "password")
+        encoded_database = _encode_uri_component(database, "database")
+        return f"{driver}://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_database}"
 
     def get_connection_template(
         self,
@@ -190,15 +211,13 @@ class EdgeResolver:
     ) -> str | None:
         """Build a safe connection template containing no plaintext secret."""
         edge = self.get_edge(edge_id)
-        preference = _normalize_ip_preference(prefer_ip)
-        ip = self.get_target_ip(edge_id, preference)
-        port = self.get_target_port(edge_id)
-        protocol = (edge.protocol or "").lower()
-
-        if not (
-            protocol.startswith(("postgres", "mysql", "mariadb")) or protocol in {"redis", "rediss"}
-        ):
+        scheme = _normalize_connection_scheme(edge.protocol)
+        if scheme is None:
             return None
+
+        preference = _normalize_ip_preference(prefer_ip)
+        host = _format_authority_host(self.get_target_ip(edge_id, preference))
+        port = self.get_target_port(edge_id)
 
         declared_auth = edge._schema.auth
         resolved_user = user if user is not None else declared_auth.username
@@ -207,14 +226,15 @@ class EdgeResolver:
         encoded_database = _encode_coordinate(resolved_database, "database")
         placeholder = _secret_placeholder(edge.secret_ref)
 
-        if protocol in {"redis", "rediss"}:
+        base_scheme = scheme.partition("+")[0]
+        if base_scheme in {"redis", "rediss"}:
             redis_database = encoded_database if encoded_database is not None else "0"
             auth = _template_auth(encoded_user, placeholder, password_only=True)
-            return f"{edge.protocol}://{auth}{ip}:{port}/{redis_database}"
+            return f"{scheme}://{auth}{host}:{port}/{redis_database}"
 
         auth = _template_auth(encoded_user, placeholder)
         path = f"/{encoded_database}" if encoded_database is not None else ""
-        return f"{edge.protocol}://{auth}{ip}:{port}{path}"
+        return f"{scheme}://{auth}{host}:{port}{path}"
 
     def resolve_source_hosts(self, edge_id: str) -> list[Host]:
         """
@@ -355,10 +375,51 @@ def _encode_coordinate(value: str | None, name: str) -> str | None:
     return quote(value, safe="")
 
 
+def _encode_uri_component(value: object, name: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"Connection URL {name} must be a plain string")
+    return quote(value, safe="")
+
+
+def _normalize_connection_scheme(protocol: str | None) -> str | None:
+    if protocol is None or protocol == "":
+        return None
+    match = _CONNECTION_SCHEME.fullmatch(protocol)
+    if match is not None:
+        return protocol.lower()
+
+    lowered = protocol.lower()
+    if _GENERIC_SCHEME_TOKEN.fullmatch(protocol) is None or lowered.startswith(
+        _SUPPORTED_SCHEME_PREFIXES
+    ):
+        raise ResolutionError("Edge has an invalid connection scheme")
+    return None
+
+
+def _format_authority_host(host: object) -> str:
+    if type(host) is not str or not host or "%" in host:
+        raise ResolutionError("Edge has an invalid connection host")
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            host.encode("ascii")
+        except UnicodeEncodeError:
+            raise ResolutionError("Edge has an invalid connection host") from None
+        if len(host) > 253 or any(_DNS_LABEL.fullmatch(label) is None for label in host.split(".")):
+            raise ResolutionError("Edge has an invalid connection host") from None
+        return host.lower()
+
+    if isinstance(address, ipaddress.IPv6Address):
+        return f"[{address.compressed}]"
+    return str(address)
+
+
 def _secret_placeholder(secret_ref: str | None) -> str | None:
     if secret_ref is None:
         return None
-    if not _SAFE_SECRET_REF.fullmatch(secret_ref):
+    if not SAFE_SECRET_REF_PATTERN.fullmatch(secret_ref):
         raise ResolutionError("Edge has an unsafe secret reference")
     return f"${{secret:{secret_ref}}}"
 

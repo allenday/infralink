@@ -1,4 +1,7 @@
-from infralink.core.schema import HostSchema, RoleConfig, ServiceSchema, SlotBinding
+import pytest
+from pydantic import ValidationError
+
+from infralink.core.schema import AuthConfig, HostSchema, RoleConfig, ServiceSchema, SlotBinding
 
 
 def test_host_schema_defaults_node_type():
@@ -26,3 +29,18 @@ def test_slot_binding_schema():
 def test_host_schema_allows_extra_fields():
     host = HostSchema(canonical_name="h1", probe_path="/health", tls_certs=[{"name": "t1"}])
     assert host.canonical_name == "h1"
+
+
+@pytest.mark.parametrize(
+    "secret_ref",
+    [None, "", " ", "bad}ref", "bad:ref", "bad@ref"],
+)
+def test_password_auth_requires_valid_nonempty_secret_reference(secret_ref):
+    with pytest.raises(ValidationError, match="valid nonempty secret_ref"):
+        AuthConfig(type="password", secret_ref=secret_ref)
+
+
+def test_non_password_auth_preserves_optional_secret_reference_semantics():
+    auth = AuthConfig(type="basic")
+
+    assert auth.secret_ref is None
