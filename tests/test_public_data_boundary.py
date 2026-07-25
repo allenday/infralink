@@ -175,6 +175,17 @@ def _parse_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address 
     return None
 
 
+def _looks_like_ipv6_literal(value: str) -> bool:
+    first_group, marker, _remainder = value.partition(":")
+    if not marker:
+        return False
+    return (
+        not first_group
+        or first_group.isdigit()
+        or (value.count(":") >= 2 and re.fullmatch(r"[0-9a-f]{1,4}", first_group, re.IGNORECASE))
+    )
+
+
 def _address_violation(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> str | None:
@@ -335,6 +346,7 @@ def boundary_violations(
     authority_spans: list[tuple[int, int]] = []
     bracket_spans: list[tuple[int, int]] = []
     balanced_bracket_spans: list[tuple[int, int]] = []
+    generic_bracket_spans: list[tuple[int, int]] = []
     url_source_spans: list[tuple[int, int]] = []
     url_path_spans: list[tuple[int, int]] = []
     decoded_payloads: list[tuple[tuple[int, int], str, bool]] = []
@@ -373,6 +385,9 @@ def boundary_violations(
 
     def inside_balanced_bracket_span(span: tuple[int, int]) -> bool:
         return any(start <= span[0] and span[1] <= end for start, end in balanced_bracket_spans)
+
+    def inside_generic_bracket_span(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] and span[1] <= end for start, end in generic_bracket_spans)
 
     def inside_url_path(span: tuple[int, int]) -> bool:
         return _url_path_payload or any(
@@ -483,6 +498,7 @@ def boundary_violations(
         if (
             closing_bracket > 0
             and ":" in bracket_literal
+            and _looks_like_ipv6_literal(bracket_literal)
             and not starts_in_authority_span(match.span())
         ):
             if _parse_address(f"[{bracket_literal}]") is None:
@@ -490,12 +506,18 @@ def boundary_violations(
                 record("invalid endpoint authority", span=match.span(), value=token)
             else:
                 balanced_bracket_spans.append(match.span())
+        elif closing_bracket > 0 and ":" in bracket_literal:
+            generic_bracket_spans.append(match.span())
         if "]" not in raw_token and ":" in token and not starts_in_authority_span(match.span()):
             bracket_spans.append(match.span())
             record("invalid endpoint authority", span=match.span(), value=token)
 
     for match in PORT_AUTHORITY_TOKEN.finditer(text):
-        if not inside_bracket_span(match.span()) and not inside_balanced_bracket_span(match.span()):
+        if (
+            not inside_bracket_span(match.span())
+            and not inside_balanced_bracket_span(match.span())
+            and not inside_generic_bracket_span(match.span())
+        ):
             process_authority(match.group(0), match.span())
 
     for match in DOTTED_TOKEN.finditer(text):
@@ -734,6 +756,7 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 
 
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
+    assert boundary_violations("Use [key:value] in generic prose.") == []
     assert boundary_violations("Address: [2001:db8::1]") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("Address: [2001:db8::1].") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("Address: [2001:db8::gg].") == ["invalid endpoint authority"]
