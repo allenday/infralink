@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from copy import deepcopy
 from typing import Any, cast, overload
 
 from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
@@ -12,25 +13,54 @@ SENSITIVE_OPTIONS = {
     "--password-env",
     "--token",
 }
+_REDACTED = "[REDACTED]"
+_SENSITIVE_KEYS = {"access_token", "password", "password_env", "token"}
+_SENSITIVE_ARGV_OPTIONS = SENSITIVE_OPTIONS | {"-p"}
 
 
 def redact_argv(argv: list[str]) -> list[str]:
     redacted: list[str] = []
-    redact_next = False
-    for value in argv:
-        if redact_next:
-            redacted.append("[REDACTED]")
-            redact_next = False
-            continue
-
+    index = 0
+    while index < len(argv):
+        value = argv[index]
         option, separator, _ = value.partition("=")
-        if option in SENSITIVE_OPTIONS:
-            redacted.append(f"{option}=[REDACTED]" if separator else option)
-            redact_next = not separator
+        if option in _SENSITIVE_ARGV_OPTIONS:
+            redacted.append(f"{option}={_REDACTED}" if separator else option)
+            if separator:
+                index += 1
+                continue
+
+            next_index = index + 1
+            if next_index < len(argv):
+                next_option = argv[next_index].partition("=")[0]
+                if next_option not in _SENSITIVE_ARGV_OPTIONS:
+                    redacted.append(_REDACTED)
+                    index += 2
+                    continue
+            index += 1
             continue
 
         redacted.append(value)
+        index += 1
     return redacted
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            deepcopy(key): (
+                _REDACTED
+                if isinstance(key, str)
+                and key.casefold().replace("-", "_") in _SENSITIVE_KEYS
+                else _sanitize_value(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_value(item) for item in value)
+    return deepcopy(value)
 
 
 def command_context(
@@ -42,8 +72,12 @@ def command_context(
 ) -> CommandContext:
     return CommandContext(
         raw=shlex.join(redact_argv(argv)),
-        parsed={"path": list(path), "args": dict(args), "flags": list(flags)},
-        resolved=dict(resolved),
+        parsed={
+            "path": deepcopy(path),
+            "args": _sanitize_value(args),
+            "flags": deepcopy(flags),
+        },
+        resolved=_sanitize_value(resolved),
     )
 
 
@@ -58,6 +92,16 @@ def ok_envelope(
 
 @overload
 def ok_envelope(
+    *,
+    command: str,
+    result: Any,
+    next_actions: list[dict[str, str]],
+    status: str = "ok",
+) -> dict[str, Any]: ...
+
+
+@overload
+def ok_envelope(
     context: str,
     result: Any,
     next_actions: list[dict[str, str]],
@@ -66,11 +110,20 @@ def ok_envelope(
 
 
 def ok_envelope(
-    context: CommandContext | str,
-    result: Any,
-    next_actions: list[Action] | list[dict[str, str]],
+    context: CommandContext | str | None = None,
+    result: Any = None,
+    next_actions: list[Action] | list[dict[str, str]] | None = None,
     status: str = "ok",
+    *,
+    command: str | None = None,
 ) -> dict[str, Any]:
+    if command is not None:
+        if context is not None:
+            raise TypeError("provide either context or command, not both")
+        context = command
+    if context is None or next_actions is None:
+        raise TypeError("context and next_actions are required")
+
     if isinstance(context, str):
         return {
             "status": status,
@@ -86,7 +139,10 @@ def ok_envelope(
         result=result,
         next_actions=cast(list[Action], next_actions),
     )
-    return envelope.model_dump(mode="json", exclude_none=True)
+    payload = envelope.model_dump(mode="json")
+    payload.pop("error", None)
+    payload.pop("fix", None)
+    return payload
 
 
 @overload
@@ -101,6 +157,17 @@ def error_envelope(
 
 @overload
 def error_envelope(
+    *,
+    command: str,
+    message: str,
+    code: str,
+    fix: str,
+    next_actions: list[dict[str, str]],
+) -> dict[str, Any]: ...
+
+
+@overload
+def error_envelope(
     context: str,
     failure: str,
     code: str,
@@ -110,12 +177,26 @@ def error_envelope(
 
 
 def error_envelope(
-    context: CommandContext | str,
-    failure: CliFailure | str,
+    context: CommandContext | str | None = None,
+    failure: CliFailure | str | None = None,
     code: str | None = None,
     fix: str | None = None,
     next_actions: list[dict[str, str]] | None = None,
+    *,
+    command: str | None = None,
+    message: str | None = None,
 ) -> dict[str, Any]:
+    if command is not None:
+        if context is not None:
+            raise TypeError("provide either context or command, not both")
+        context = command
+    if message is not None:
+        if failure is not None:
+            raise TypeError("provide either failure or message, not both")
+        failure = message
+    if context is None:
+        raise TypeError("context is required")
+
     if isinstance(context, str):
         if not isinstance(failure, str) or code is None or fix is None or next_actions is None:
             raise TypeError("legacy error envelope requires message, code, fix, and next_actions")
@@ -141,4 +222,6 @@ def error_envelope(
         fix=failure.fix,
         next_actions=failure.next_actions,
     )
-    return envelope.model_dump(mode="json", exclude_none=True)
+    payload = envelope.model_dump(mode="json")
+    payload.pop("result", None)
+    return payload

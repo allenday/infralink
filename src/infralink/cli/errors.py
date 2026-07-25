@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -27,3 +28,12 @@ class CliFailure(Exception):
     fix: str
     details: dict[str, Any] = field(default_factory=dict)
     next_actions: list[Action] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "details", deepcopy(self.details))
+        object.__setattr__(
+            self,
+            "next_actions",
+            [repair.model_copy(deep=True) for repair in self.next_actions],
+        )
+        object.__setattr__(self, "args", (self.message,))

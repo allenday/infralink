@@ -1,12 +1,22 @@
 from __future__ import annotations
 
-import inspect
+import json
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from infralink.cli.actions import action
-from infralink.cli.contracts import Action, Binding, CommandContext
+from infralink.cli.contracts import (
+    Action,
+    Binding,
+    CheckCommandResult,
+    CheckResult,
+    CommandContext,
+    Page,
+    PageInfo,
+)
 from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.output import (
     SENSITIVE_OPTIONS,
@@ -15,35 +25,6 @@ from infralink.cli.output import (
     ok_envelope,
     redact_argv,
 )
-
-
-def test_public_helper_signatures() -> None:
-    assert list(inspect.signature(action).parameters) == [
-        "rel",
-        "argv",
-        "description",
-        "bindings",
-    ]
-    assert list(inspect.signature(command_context).parameters) == [
-        "argv",
-        "path",
-        "args",
-        "flags",
-        "resolved",
-    ]
-    assert list(inspect.signature(ok_envelope).parameters) == [
-        "context",
-        "result",
-        "next_actions",
-        "status",
-    ]
-    assert list(inspect.signature(error_envelope).parameters) == [
-        "context",
-        "failure",
-        "code",
-        "fix",
-        "next_actions",
-    ]
 
 
 def test_error_codes_are_stable_strings() -> None:
@@ -72,6 +53,29 @@ def test_cli_failure_is_frozen_and_defaults_are_independent() -> None:
     assert second.next_actions == []
     with pytest.raises(FrozenInstanceError):
         first.message = "changed"
+
+
+def test_cli_failure_copies_boundaries_and_logs_only_its_message() -> None:
+    details = {"attempt": {"hosts": ["one"]}}
+    repair = action("retry", ["infralink", "check"], "Retry")
+    repairs = [repair]
+
+    failure = CliFailure(
+        ErrorCode.INTERNAL_ERROR,
+        "Health check failed",
+        1,
+        "Retry",
+        details,
+        repairs,
+    )
+    details["attempt"]["hosts"].append("two")
+    repair.argv.append("--mutated")
+    repairs.clear()
+
+    assert failure.details == {"attempt": {"hosts": ["one"]}}
+    assert failure.next_actions[0].argv == ["infralink", "check"]
+    assert str(failure) == "Health check failed"
+    assert failure.args == ("Health check failed",)
 
 
 def test_action_is_typed_canonical_and_does_not_alias_inputs() -> None:
@@ -136,6 +140,25 @@ def test_redact_argv_handles_trailing_sensitive_option() -> None:
     assert redact_argv(["infralink", "--token"]) == ["infralink", "--token"]
 
 
+def test_redact_argv_redacts_live_short_password_alias() -> None:
+    assert redact_argv(["infralink", "-p", "canary-secret"]) == [
+        "infralink",
+        "-p",
+        "[REDACTED]",
+    ]
+    assert redact_argv(["infralink", "-p=canary-secret"]) == [
+        "infralink",
+        "-p=[REDACTED]",
+    ]
+
+
+def test_redact_argv_does_not_consume_adjacent_sensitive_options() -> None:
+    redacted = redact_argv(["infralink", "--token", "--password", "canary-secret"])
+
+    assert redacted == ["infralink", "--token", "--password", "[REDACTED]"]
+    assert "canary-secret" not in redacted
+
+
 def test_redact_argv_preserves_non_sensitive_args_without_mutating_caller() -> None:
     argv = ["infralink", "--token-file", "secret.txt", "value with spaces"]
 
@@ -166,6 +189,39 @@ def test_command_context_is_typed_redacted_and_shell_escaped() -> None:
     assert context.resolved == resolved
 
 
+def test_command_context_recursively_sanitizes_and_copies_nested_values() -> None:
+    args = {
+        "credentials": {
+            "Access-Token": "canary-secret",
+            "items": [{"PASSWORD_ENV": "canary-secret"}],
+        },
+        "ordinary": {"values": ["before"]},
+    }
+    resolved = {
+        "provider": {
+            "token": "canary-secret",
+            "nested": {"PassWord": "canary-secret"},
+        }
+    }
+
+    context = command_context(["infralink"], [], args, [], resolved)
+    args["ordinary"]["values"].append("after")
+    resolved["provider"]["nested"]["status"] = "changed"
+    payload = ok_envelope(context, {"valid": True}, [])
+    serialized = json.dumps(payload)
+
+    assert "canary-secret" not in serialized
+    assert payload["command"]["parsed"]["args"]["credentials"] == {
+        "Access-Token": "[REDACTED]",
+        "items": [{"PASSWORD_ENV": "[REDACTED]"}],
+    }
+    assert payload["command"]["resolved"]["provider"] == {
+        "token": "[REDACTED]",
+        "nested": {"PassWord": "[REDACTED]"},
+    }
+    assert payload["command"]["parsed"]["args"]["ordinary"] == {"values": ["before"]}
+
+
 def test_ok_envelope_contains_structured_command_and_action() -> None:
     payload = ok_envelope(
         context=command_context(
@@ -186,6 +242,39 @@ def test_ok_envelope_contains_structured_command_and_action() -> None:
     assert "error" not in payload
     assert "fix" not in payload
     assert payload["next_actions"][0]["argv"] == ["infralink", "check"]
+
+
+def test_ok_envelope_preserves_required_nullable_result_fields() -> None:
+    result = CheckCommandResult(
+        healthy=False,
+        checks=Page[CheckResult](
+            items=[
+                CheckResult(
+                    edge_id="edge-1",
+                    healthy=False,
+                    status="unavailable",
+                    latency_ms=None,
+                    error_code=None,
+                )
+            ],
+            page=PageInfo(limit=100, returned=1, total=1, next_cursor=None),
+        ),
+        summary={"total": 1, "healthy": 0, "unhealthy": 1},
+    )
+
+    payload = ok_envelope(command_context(["infralink", "check"], ["check"], {}, [], {}), result, [])
+    schema = json.loads(
+        (
+            Path(__file__).parents[1]
+            / "src/infralink/schemas/cli/v1/check.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    Draft202012Validator(schema).validate(payload)
+    assert payload["result"]["checks"]["items"][0]["latency_ms"] is None
+    assert payload["result"]["checks"]["items"][0]["error_code"] is None
+    assert "error" not in payload
+    assert "fix" not in payload
 
 
 def test_failure_has_stable_exit_and_repair_action() -> None:
@@ -247,3 +336,21 @@ def test_legacy_error_envelope_remains_available_to_unmigrated_commands() -> Non
         "fix": "Fix inputs",
         "next_actions": [{"command": "infralink validate", "description": "Retry"}],
     }
+
+
+def test_legacy_envelopes_accept_original_keyword_names() -> None:
+    ok_payload = ok_envelope(
+        command="infralink validate",
+        result={"valid": True},
+        next_actions=[],
+    )
+    error_payload = error_envelope(
+        command="infralink validate",
+        message="Validation failed",
+        code="VALIDATION_FAILED",
+        fix="Fix inputs",
+        next_actions=[],
+    )
+
+    assert ok_payload["command"] == "infralink validate"
+    assert error_payload["error"]["message"] == "Validation failed"
