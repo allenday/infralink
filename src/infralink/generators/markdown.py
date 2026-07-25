@@ -44,7 +44,7 @@ def generate_host_doc(
     if host.services:
         lines.append("| Service | Status |")
         lines.append("|---------|--------|")
-        for svc in host.services:
+        for svc in sorted(host.services.keys()):
             lines.append(f"| {svc} | Active |")
     else:
         lines.append("*No services declared*")
@@ -128,7 +128,7 @@ def generate_index(registry: Registry, edges: EdgeSet) -> str:
     ]
 
     for host in sorted(registry.active_hosts(), key=lambda h: h.canonical_name):
-        service_names = sorted(host.services)
+        service_names = sorted(host.services.keys())
         services = ", ".join(service_names[:3])
         if len(service_names) > 3:
             services += "..."
