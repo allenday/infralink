@@ -267,6 +267,44 @@ def test_audit_canonicalizes_uppercase_topology_project_identity(
     assert body["result"]["references"]["items"][0]["project"] == canonical_project
 
 
+def test_audit_coalesces_references_that_share_a_canonical_project_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry, edges = write_topology(
+        tmp_path,
+        [
+            (HOST_A, "shared", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            (HOST_B, "shared", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ],
+    )
+    uppercase_project = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+    canonical_project = uppercase_project.lower()
+    raw_registry = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    raw_registry["hosts"][HOST_A]["bws_project"] = uppercase_project
+    raw_registry["hosts"][HOST_B]["bws_project"] = canonical_project
+    registry.write_text(yaml.safe_dump(raw_registry), encoding="utf-8")
+    resolver = FakeResolver([SecretAudit("shared", canonical_project, True, True)])
+    monkeypatch.setattr(secret_commands, "_build_bws_resolver", lambda: resolver)
+
+    result = invoke(registry, edges, "secrets", "audit", "--provider", "bws")
+    body = payload(result)
+
+    assert result.exit_code == 0
+    assert len(resolver.seen) == 1
+    assert resolver.seen[0].project == canonical_project
+    assert resolver.seen[0].locations == (
+        "edges.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.auth.secret_ref",
+        "edges.bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.auth.secret_ref",
+    )
+    assert body["result"]["summary"]["total"] == 1
+    reference = body["result"]["references"]["items"][0]
+    assert reference["project"] == canonical_project
+    assert reference["location_count"] == 2
+    assert [item["path"] for item in reference["location_preview"]] == list(
+        resolver.seen[0].locations
+    )
+
+
 def test_empty_audit_does_not_construct_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

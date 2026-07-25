@@ -151,22 +151,33 @@ def _provider_failure(code: ErrorCode, *, missing_sdk: bool = False) -> CliFailu
     )
 
 
-def _audit_with_bws(references: list[SecretReference]) -> list[SecretAudit]:
+def _canonical_references(references: list[SecretReference]) -> list[SecretReference]:
+    grouped: dict[tuple[str, str], tuple[set[str], bool]] = {}
     try:
-        canonical_references = [
-            SecretReference(
-                ref=reference.ref,
-                project=str(UUID(reference.project)) if reference.project is not None else None,
-                locations=reference.locations,
-                required=reference.required,
-            )
-            for reference in references
-        ]
+        for reference in references:
+            if reference.project is None:
+                raise ValueError("project required")
+            identity = (reference.ref, str(UUID(reference.project)))
+            locations, required = grouped.setdefault(identity, (set(), False))
+            locations.update(reference.locations)
+            grouped[identity] = (locations, required or reference.required)
     except (AttributeError, TypeError, ValueError):
         raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE) from None
-    if any(reference.project is None for reference in canonical_references):
-        raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
+    return [
+        SecretReference(
+            ref=ref,
+            project=project,
+            locations=tuple(sorted(locations)),
+            required=required,
+        )
+        for (ref, project), (locations, required) in sorted(grouped.items())
+    ]
 
+
+def _audit_with_bws(
+    references: list[SecretReference],
+) -> tuple[list[SecretReference], list[SecretAudit]]:
+    canonical_references = _canonical_references(references)
     try:
         resolver = _build_bws_resolver()
         audits = resolver.audit(canonical_references)
@@ -212,7 +223,10 @@ def _audit_with_bws(references: list[SecretReference]) -> list[SecretAudit]:
         indexed[identity] = audit
     if len(indexed) != len(canonical_references):
         raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
-    return [indexed[(item.ref, item.project)] for item in canonical_references]
+    return (
+        canonical_references,
+        [indexed[(item.ref, item.project)] for item in canonical_references],
+    )
 
 
 @click.group()
@@ -338,7 +352,7 @@ def audit_secrets(
         fingerprint=fingerprint,
     )
     references = _select_references(ctx, requested_ref)
-    audits = _audit_with_bws(references) if references else []
+    references, audits = _audit_with_bws(references) if references else ([], [])
     statuses = [
         _status(reference, audit, include_preview=True)
         for reference, audit in zip(references, audits, strict=True)
