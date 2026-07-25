@@ -347,6 +347,52 @@ def test_system_exit_integer_becomes_one_internal_error(
     assert json.loads(captured.out)["error"]["code"] == "internal_error"
 
 
+@pytest.mark.parametrize("failure_kind", ["cli_failure", "runtime_error"])
+def test_emitted_envelope_is_not_duplicated_by_later_failure(
+    failure_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def emit_then_fail() -> None:
+        cli_main._emit({"first": True})
+        if failure_kind == "cli_failure":
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Provider unavailable",
+                exit_code=4,
+                fix="Retry later",
+            )
+        raise RuntimeError("canary-secret")
+
+    _install_test_command(monkeypatch, emit_then_fail)
+    expected_exit = 4 if failure_kind == "cli_failure" else 70
+
+    direct = invoke("explode")
+    assert direct.exit_code == expected_exit
+    assert direct.stderr == ""
+    assert direct.output.count("\n") == 1
+    assert json.loads(direct.output) == {"first": True}
+
+    assert main(["explode"]) == expected_exit
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.count("\n") == 1
+    assert json.loads(captured.out) == {"first": True}
+
+    with pytest.raises(SystemExit) as caught:
+        run(["explode"])
+    assert caught.value.code == expected_exit
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.count("\n") == 1
+    assert json.loads(captured.out) == {"first": True}
+
+    following = invoke("--version")
+    assert following.exit_code == 0
+    assert following.output.count("\n") == 1
+    assert json.loads(following.output)["result"]["version"] == "0.2.0"
+
+
 def raise_system_exit(code: object) -> None:
     raise SystemExit(code)
 
@@ -415,6 +461,30 @@ def test_services_do_not_silently_truncate_101_records(tmp_path: Path) -> None:
     assert payload["result"]["page"]["returned"] == payload["result"]["page"]["total"]
     assert payload["result"]["page"]["next_cursor"] is None
     assert payload["meta"]["truncated"] is False
+
+
+@pytest.mark.parametrize(
+    "command_args",
+    [
+        ("check",),
+        ("diagram",),
+        ("docs",),
+        ("app", "list"),
+    ],
+)
+def test_commands_delegate_missing_registry_to_json_boundary(
+    command_args: tuple[str, ...],
+) -> None:
+    result = invoke("--registry", "missing.yml", *command_args)
+    payload = json.loads(result.output)
+    assert result.exit_code == 3
+    assert result.stderr == ""
+    assert result.output.count("\n") == 1
+    assert payload["error"]["code"] == "input_load_failed"
+    assert payload["error"]["details"] == {
+        "source": "registry",
+        "path": "missing.yml",
+    }
 
 
 def test_wrapper_and_click_object_have_identical_parse_errors(

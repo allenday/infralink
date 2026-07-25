@@ -594,10 +594,12 @@ class JsonGroup(click.Group):
                     fix="Run infralink help",
                     next_actions=[action("help", ["infralink", "help"], "Show available commands")],
                 )
-                _emit(error_envelope(_context_for(incoming), usage_failure))
+                if not _ENVELOPE_EMITTED.get():
+                    _emit(error_envelope(_context_for(incoming), usage_failure))
                 exit_code = usage_failure.exit_code
             except CliFailure as cli_failure:
-                _emit(error_envelope(_context_for(incoming), cli_failure))
+                if not _ENVELOPE_EMITTED.get():
+                    _emit(error_envelope(_context_for(incoming), cli_failure))
                 exit_code = cli_failure.exit_code
             except SystemExit as system_exit:
                 if _ENVELOPE_EMITTED.get() and isinstance(system_exit.code, int):
@@ -620,7 +622,8 @@ class JsonGroup(click.Group):
                     fix="Retry the command or report the failure",
                     next_actions=[],
                 )
-                _emit(error_envelope(_context_for(incoming), internal_failure))
+                if not _ENVELOPE_EMITTED.get():
+                    _emit(error_envelope(_context_for(incoming), internal_failure))
                 exit_code = internal_failure.exit_code
         finally:
             _ENVELOPE_EMITTED.reset(emitted_token)

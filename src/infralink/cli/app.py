@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import click
 
+from infralink.cli.errors import CliFailure
 from infralink.cli.main import Context, _emit, pass_context
 from infralink.cli.output import error_envelope, ok_envelope
 
@@ -20,6 +21,8 @@ def list_apps(ctx: Context) -> None:
     try:
         registry = ctx.registry
         apps = registry.applications
+    except CliFailure:
+        raise
     except Exception as exc:
         payload = error_envelope(
             command,
@@ -65,6 +68,8 @@ def show_app(ctx: Context, app_id: str) -> None:
             raise click.ClickException(f"Application not found: {app_id}")
 
         edges = application.resolve_edges(registry, ctx.edges)
+    except CliFailure:
+        raise
     except Exception as exc:
         payload = error_envelope(
             command,

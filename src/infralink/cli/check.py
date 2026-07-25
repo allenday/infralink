@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from infralink.cli.errors import CliFailure
 from infralink.cli.main import Context, _emit, pass_context
 from infralink.cli.output import error_envelope, ok_envelope
 
@@ -76,6 +77,8 @@ def check(
     try:
         registry = ctx.registry
         edges = ctx.edges
+    except CliFailure:
+        raise
     except Exception as exc:
         payload = error_envelope(
             command,
