@@ -113,6 +113,7 @@ SAFE_HOST_PLACEHOLDERS = {"${host}", "${hostname}", "<host>", "<hostname>"}
 PATH_FILE_SUFFIXES = (".json", ".md", ".tar.gz", ".whl", ".yaml", ".yml")
 MAX_URL_PAYLOAD_LENGTH = 16_384
 MAX_URL_DECODE_ROUNDS = 4
+MAX_NESTED_AUTHORITY_DEPTH = 4
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -186,6 +187,20 @@ def _looks_like_ipv6_literal(value: str) -> bool:
     )
 
 
+def _looks_like_bracketed_endpoint(text: str, start: int, value: str) -> bool:
+    hostname, marker, port_text = value.rpartition(":")
+    if not marker or not port_text.isdigit() or not 1 <= int(port_text) <= 65_535:
+        return False
+    hostname = hostname.lower()
+    if "." in hostname or "host" in hostname:
+        return True
+    prefix = text[max(0, start - 32) : start]
+    return (
+        re.search(r"(?:host|endpoint|connect(?:\s+to)?)\s*[:=]?\s*$", prefix, re.IGNORECASE)
+        is not None
+    )
+
+
 def _address_violation(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> str | None:
@@ -213,10 +228,10 @@ def _hostname_violation(hostname: str | None) -> str | None:
 
 
 def _authority_bounds(value: str) -> tuple[int, int]:
-    if "://" in value:
-        start = value.index("://") + 3
-    elif value.startswith("//"):
+    if value.startswith("//"):
         start = 2
+    elif "://" in value:
+        start = value.index("://") + 3
     else:
         start = 0
     secret_spans = tuple(match.span() for match in SECRET_TEMPLATE.finditer(value))
@@ -340,6 +355,7 @@ def boundary_violations(
     _semantic_source: tuple[int, int] | None = None,
     _violations: list[str] | None = None,
     _seen_findings: set[tuple[int, int, str, str]] | None = None,
+    _nested_authority_depth: int = 0,
 ) -> list[str]:
     violations = [] if _violations is None else _violations
     seen_findings = set() if _seen_findings is None else _seen_findings
@@ -349,6 +365,7 @@ def boundary_violations(
     generic_bracket_spans: list[tuple[int, int]] = []
     url_source_spans: list[tuple[int, int]] = []
     url_path_spans: list[tuple[int, int]] = []
+    raw_payloads: list[tuple[tuple[int, int], str, bool]] = []
     decoded_payloads: list[tuple[tuple[int, int], str, bool]] = []
 
     def record(
@@ -408,6 +425,7 @@ def boundary_violations(
         if len(payload) > MAX_URL_PAYLOAD_LENGTH:
             record("URL payload exceeds scan limit", span=source_span)
             return
+        raw_payloads.append((source_span, payload, path_payload))
         normalized = payload
         for _round in range(MAX_URL_DECODE_ROUNDS):
             decoded = unquote(normalized)
@@ -509,7 +527,7 @@ def boundary_violations(
         elif (
             closing_bracket > 0
             and ":" in bracket_literal
-            and not bracket_literal.rpartition(":")[-1].isdigit()
+            and not _looks_like_bracketed_endpoint(text, match.start(), bracket_literal)
         ):
             generic_bracket_spans.append(match.span())
         if "]" not in raw_token and ":" in token and not starts_in_authority_span(match.span()):
@@ -551,16 +569,37 @@ def boundary_violations(
         elif "[" in token or "]" in token:
             record("invalid endpoint authority", span=match.span(), value=token)
 
-    for source_span, decoded_payload, path_payload in decoded_payloads:
+    def scan_nested_payload(
+        source_span: tuple[int, int],
+        payload: str,
+        path_payload: bool,
+        *,
+        authority_only: bool,
+    ) -> None:
+        has_authority = (
+            URL.search(payload) is not None
+            or PROTOCOL_RELATIVE_AUTHORITY.search(payload) is not None
+        )
+        if authority_only and not has_authority:
+            return
+        if has_authority and _nested_authority_depth >= MAX_NESTED_AUTHORITY_DEPTH:
+            record("URL authority nesting exceeds scan limit", span=source_span)
+            return
         boundary_violations(
-            decoded_payload,
+            payload,
             _scan_url_like_authorities=True,
             _url_payload=True,
             _url_path_payload=path_payload,
             _semantic_source=source_span,
             _violations=violations,
             _seen_findings=seen_findings,
+            _nested_authority_depth=_nested_authority_depth + 1,
         )
+
+    for source_span, raw_payload, path_payload in raw_payloads:
+        scan_nested_payload(source_span, raw_payload, path_payload, authority_only=True)
+    for source_span, decoded_payload, path_payload in decoded_payloads:
+        scan_nested_payload(source_span, decoded_payload, path_payload, authority_only=False)
 
     for match in GCP_KEY.finditer(text):
         project = match.group("value")
@@ -761,6 +800,7 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
     assert boundary_violations("Use [key:value] in generic prose.") == []
+    assert boundary_violations("Use [key:123] [year:2026] [line:12] [HTTP:200].") == []
     assert boundary_violations("Use [key:value][privatehost:5432] in prose.") == [
         "non-example hostname: privatehost"
     ]
@@ -823,10 +863,28 @@ def test_boundary_detector_scans_recursively_decoded_authorities(
     assert boundary_violations(f"endpoint: https://example.com/?target={encoded}") == [expected]
 
 
+@pytest.mark.parametrize(
+    "outer_url",
+    [
+        "https://example.com/redirect/https://privatehost:5432/path",
+        "https://example.com/?target=//privatehost:5432/path",
+        "https://example.com/#target=https://privatehost:5432/path",
+    ],
+)
+def test_boundary_detector_scans_raw_nested_authorities(outer_url: str) -> None:
+    assert boundary_violations(f"endpoint: {outer_url}") == ["non-example hostname: privatehost"]
+
+
 def test_boundary_detector_bounds_url_payload_size() -> None:
     oversized_path = "a" * (MAX_URL_PAYLOAD_LENGTH + 1)
     assert boundary_violations(f"endpoint: https://example.com/{oversized_path}") == [
         "URL payload exceeds scan limit"
+    ]
+    nested_url = "//privatehost:5432"
+    for _depth in range(6):
+        nested_url = f"https://example.com/?target={nested_url}"
+    assert boundary_violations(f"endpoint: {nested_url}") == [
+        "URL authority nesting exceeds scan limit"
     ]
 
 
