@@ -22,6 +22,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: infralink-v0.2.0-promotion
+  cancel-in-progress: false
+
 env:
   GH_VERSION: "2.76.2"
   GH_SHA256: "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e"
@@ -222,18 +226,112 @@ jobs:
           git push origin refs/tags/v0.2.0
           verified="$(git ls-remote --tags origin "refs/tags/$tag^{}" | awk '{print $1}')"
           test "$verified" = "$SOURCE_SHA"
-      - name: Publish existing verified bytes as the GitHub release
+      - name: Stage the seven exact release assets
         shell: bash
         run: |
           set -euo pipefail
-          gh release create v0.2.0 --verify-tag \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Infralink v0.2.0" \
-            --notes-file trusted/docs/releases/v0.2.0.md \
-            candidate/infralink-0.2.0-py3-none-any.whl \
-            candidate/infralink-0.2.0.tar.gz \
-            candidate/manifest.json \
-            candidate/SHA256SUMS \
-            evidence/woodpecker-evidence.json \
-            evidence/woodpecker-evidence.sigstore.json \
-            metadata/promotion.json
+          mkdir release-assets
+          install -m 0444 candidate/SHA256SUMS release-assets/SHA256SUMS
+          install -m 0444 candidate/infralink-0.2.0-py3-none-any.whl \
+            release-assets/infralink-0.2.0-py3-none-any.whl
+          install -m 0444 candidate/infralink-0.2.0.tar.gz \
+            release-assets/infralink-0.2.0.tar.gz
+          install -m 0444 candidate/manifest.json release-assets/manifest.json
+          install -m 0444 metadata/promotion.json release-assets/promotion.json
+          install -m 0444 evidence/woodpecker-evidence.json \
+            release-assets/woodpecker-evidence.json
+          install -m 0444 evidence/woodpecker-evidence.sigstore.json \
+            release-assets/woodpecker-evidence.sigstore.json
+      - name: Create or recover an exact draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view v0.2.0 --json databaseId,isDraft \
+            --repo "$GITHUB_REPOSITORY" > metadata/release-lookup.json 2>/dev/null
+          then
+            if ! gh release create v0.2.0 --draft --verify-tag \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title "Infralink v0.2.0" \
+              --notes-file trusted/docs/releases/v0.2.0.md \
+              release-assets/SHA256SUMS \
+              release-assets/infralink-0.2.0-py3-none-any.whl \
+              release-assets/infralink-0.2.0.tar.gz \
+              release-assets/manifest.json \
+              release-assets/promotion.json \
+              release-assets/woodpecker-evidence.json \
+              release-assets/woodpecker-evidence.sigstore.json
+            then
+              echo "Draft creation did not succeed; requiring an exact recoverable release." >&2
+            fi
+            gh release view v0.2.0 --json databaseId,isDraft \
+              --repo "$GITHUB_REPOSITORY" > metadata/release-lookup.json
+          fi
+          python trusted/scripts/verify_release_publication.py resolve \
+            --lookup metadata/release-lookup.json > metadata/release-id
+          release_id="$(cat metadata/release-id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > metadata/release.json
+          python trusted/scripts/verify_release_publication.py plan \
+            --release-metadata metadata/release.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --source-sha "$SOURCE_SHA" \
+            --output metadata/release-plan.json
+          mapfile -t missing < <(
+            python trusted/scripts/verify_release_publication.py missing \
+              --plan metadata/release-plan.json \
+              --asset-dir release-assets
+          )
+          if test "${#missing[@]}" -gt 0; then
+            if ! gh release upload v0.2.0 --repo "$GITHUB_REPOSITORY" "${missing[@]}"
+            then
+              echo "Upload raced or failed; requiring exact refetched release state." >&2
+            fi
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > metadata/release-after-upload.json
+          python trusted/scripts/verify_release_publication.py plan \
+            --release-metadata metadata/release-after-upload.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --source-sha "$SOURCE_SHA" \
+            --output metadata/release-after-upload-plan.json
+      - name: Download and verify every draft release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir published-assets
+          python trusted/scripts/verify_release_publication.py downloads \
+            --release-metadata metadata/release-after-upload.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --source-sha "$SOURCE_SHA" > metadata/release-downloads.tsv
+          while IFS=$'\t' read -r asset_id asset_name; do
+            [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              -H "Accept: application/octet-stream" > "published-assets/$asset_name"
+          done < metadata/release-downloads.tsv
+          python trusted/scripts/verify_release_publication.py verify \
+            --release-metadata metadata/release-after-upload.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --downloaded-dir published-assets \
+            --source-sha "$SOURCE_SHA"
+      - name: Publish only the byte-verified draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit v0.2.0 --draft=false --repo "$GITHUB_REPOSITORY"
+          release_id="$(cat metadata/release-id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > metadata/release-published.json
+          python trusted/scripts/verify_release_publication.py verify \
+            --release-metadata metadata/release-published.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --downloaded-dir published-assets \
+            --source-sha "$SOURCE_SHA" \
+            --require-published

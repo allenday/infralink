@@ -84,10 +84,14 @@ def write_evidence(path: Path, digests: dict[str, str]) -> None:
 
 def write_attestations(root: Path, candidate: Path) -> None:
     root.mkdir()
+    subjects = [
+        {"name": name, "digest": {"sha256": sha256(candidate / name)}}
+        for name in (WHEEL, SDIST, "manifest.json", "SHA256SUMS")
+    ]
     for name in (WHEEL, SDIST, "manifest.json", "SHA256SUMS"):
         statement = {
             "predicateType": "https://slsa.dev/provenance/v1",
-            "subject": [{"name": name, "digest": {"sha256": sha256(candidate / name)}}],
+            "subject": subjects,
             "predicate": {
                 "buildDefinition": {
                     "externalParameters": {
@@ -123,7 +127,19 @@ def write_attestations(root: Path, candidate: Path) -> None:
             },
         }
         (root / f"{name}.json").write_text(
-            json.dumps([{"verificationResult": {"statement": statement}}]),
+            json.dumps(
+                [
+                    {
+                        "verificationResult": {
+                            "statement": {
+                                "predicateType": "https://slsa.dev/provenance/v1",
+                                "subject": [{"name": "unrelated", "digest": {"sha256": "f" * 64}}],
+                            }
+                        }
+                    },
+                    {"verificationResult": {"statement": statement}},
+                ]
+            ),
             encoding="utf-8",
         )
 
@@ -285,6 +301,101 @@ def test_verify_promotion_rejects_attestation_from_another_run(tmp_path: Path) -
         wheel_attestation.read_text().replace(f"/{RUN_ID}/attempts/", "/999/attempts/"),
         encoding="utf-8",
     )
+
+    with pytest.raises(module.PromotionVerificationError, match="attestation"):
+        module.validate_attestations(
+            attestations,
+            candidate_dir=candidate,
+            source_sha=SOURCE_SHA,
+            candidate_run_id=RUN_ID,
+        )
+
+
+def test_verify_promotion_rejects_attestation_missing_one_candidate_subject(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    candidate = tmp_path / "candidate"
+    write_candidate(candidate)
+    attestations = tmp_path / "attestations"
+    write_attestations(attestations, candidate)
+    path = attestations / f"{WHEEL}.json"
+    results = json.loads(path.read_text(encoding="utf-8"))
+    results[1]["verificationResult"]["statement"]["subject"].pop()
+    path.write_text(json.dumps(results), encoding="utf-8")
+
+    with pytest.raises(module.PromotionVerificationError, match="attestation"):
+        module.validate_attestations(
+            attestations,
+            candidate_dir=candidate,
+            source_sha=SOURCE_SHA,
+            candidate_run_id=RUN_ID,
+        )
+
+
+def test_verify_promotion_requires_the_same_statement_for_all_four_files(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    candidate = tmp_path / "candidate"
+    write_candidate(candidate)
+    attestations = tmp_path / "attestations"
+    write_attestations(attestations, candidate)
+    path = attestations / f"{WHEEL}.json"
+    path.write_text(
+        path.read_text().replace(f"/{RUN_ID}/attempts/1", f"/{RUN_ID}/attempts/2"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.PromotionVerificationError, match="attestation"):
+        module.validate_attestations(
+            attestations,
+            candidate_dir=candidate,
+            source_sha=SOURCE_SHA,
+            candidate_run_id=RUN_ID,
+        )
+
+
+def test_attestation_subject_order_is_not_semantic(tmp_path: Path) -> None:
+    module = load_module()
+    candidate = tmp_path / "candidate"
+    write_candidate(candidate)
+    attestations = tmp_path / "attestations"
+    write_attestations(attestations, candidate)
+    for path in attestations.iterdir():
+        results = json.loads(path.read_text(encoding="utf-8"))
+        results[1]["verificationResult"]["statement"]["subject"].reverse()
+        path.write_text(json.dumps(results), encoding="utf-8")
+
+    module.validate_attestations(
+        attestations,
+        candidate_dir=candidate,
+        source_sha=SOURCE_SHA,
+        candidate_run_id=RUN_ID,
+    )
+
+
+@pytest.mark.parametrize("mutation", ["extra", "duplicate", "wrong_digest", "two_exact", "empty"])
+def test_attestation_subject_set_and_selection_fail_closed(tmp_path: Path, mutation: str) -> None:
+    module = load_module()
+    candidate = tmp_path / "candidate"
+    write_candidate(candidate)
+    attestations = tmp_path / "attestations"
+    write_attestations(attestations, candidate)
+    path = attestations / f"{WHEEL}.json"
+    results = json.loads(path.read_text(encoding="utf-8"))
+    statement = results[1]["verificationResult"]["statement"]
+    if mutation == "extra":
+        statement["subject"].append({"name": "extra", "digest": {"sha256": "f" * 64}})
+    elif mutation == "duplicate":
+        statement["subject"].append(statement["subject"][0])
+    elif mutation == "wrong_digest":
+        statement["subject"][0]["digest"] = {"sha512": "f" * 128}
+    elif mutation == "two_exact":
+        results.append(results[1])
+    else:
+        results = []
+    path.write_text(json.dumps(results), encoding="utf-8")
 
     with pytest.raises(module.PromotionVerificationError, match="attestation"):
         module.validate_attestations(

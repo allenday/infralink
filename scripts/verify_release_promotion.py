@@ -159,6 +159,10 @@ def validate_attestations(
         "digest": {"gitCommit": source_sha},
         "uri": f"git+{REPOSITORY_URL}@refs/heads/main",
     }
+    expected_subjects = {
+        name: {"sha256": _sha256(candidate_dir / name)} for name in CANDIDATE_FILES
+    }
+    selected_statement: dict[str, Any] | None = None
     for name in CANDIDATE_FILES:
         path = attestation_dir / f"{name}.json"
         try:
@@ -170,52 +174,69 @@ def validate_attestations(
             )
         except (OSError, UnicodeError, ValueError, PromotionVerificationError):
             raise PromotionVerificationError("invalid attestation") from None
-        if type(results) is not list or len(results) != 1:
+        if type(results) is not list:
             raise PromotionVerificationError("invalid attestation")
-        statement = _nested(results[0], "verificationResult", "statement")
-        valid = (
-            type(statement) is dict
-            and statement.get("predicateType") == "https://slsa.dev/provenance/v1"
-            and statement.get("subject")
-            == [
-                {
-                    "name": name,
-                    "digest": {"sha256": _sha256(candidate_dir / name)},
+        matches = 0
+        matching_statement: dict[str, Any] | None = None
+        for result in results:
+            statement = _nested(result, "verificationResult", "statement")
+            subjects = statement.get("subject") if type(statement) is dict else None
+            actual_subjects: dict[str, Any] = {}
+            if type(subjects) is list:
+                for subject in subjects:
+                    if (
+                        type(subject) is not dict
+                        or set(subject) != {"name", "digest"}
+                        or type(subject.get("name")) is not str
+                        or subject["name"] in actual_subjects
+                        or type(subject.get("digest")) is not dict
+                    ):
+                        actual_subjects = {}
+                        break
+                    actual_subjects[subject["name"]] = subject["digest"]
+            invocation = _nested(
+                statement,
+                "predicate",
+                "runDetails",
+                "metadata",
+                "invocationId",
+            )
+            valid = (
+                type(statement) is dict
+                and statement.get("predicateType") == "https://slsa.dev/provenance/v1"
+                and actual_subjects == expected_subjects
+                and _nested(
+                    statement,
+                    "predicate",
+                    "buildDefinition",
+                    "externalParameters",
+                    "workflow",
+                )
+                == {
+                    "path": WORKFLOW_PATH,
+                    "ref": "refs/heads/main",
+                    "repository": REPOSITORY_URL,
                 }
-            ]
-            and _nested(
-                statement,
-                "predicate",
-                "buildDefinition",
-                "externalParameters",
-                "workflow",
+                and _nested(
+                    statement,
+                    "predicate",
+                    "buildDefinition",
+                    "resolvedDependencies",
+                )
+                == [expected_dependency]
+                and _nested(statement, "predicate", "runDetails", "builder", "id")
+                == expected_builder
+                and type(invocation) is str
+                and expected_invocation.fullmatch(invocation) is not None
             )
-            == {
-                "path": WORKFLOW_PATH,
-                "ref": "refs/heads/main",
-                "repository": REPOSITORY_URL,
-            }
-            and _nested(
-                statement,
-                "predicate",
-                "buildDefinition",
-                "resolvedDependencies",
-            )
-            == [expected_dependency]
-            and _nested(statement, "predicate", "runDetails", "builder", "id") == expected_builder
-        )
-        invocation = _nested(
-            statement,
-            "predicate",
-            "runDetails",
-            "metadata",
-            "invocationId",
-        )
-        if (
-            not valid
-            or type(invocation) is not str
-            or expected_invocation.fullmatch(invocation) is None
-        ):
+            if valid:
+                matches += 1
+                matching_statement = statement
+        if matches != 1:
+            raise PromotionVerificationError("invalid attestation")
+        if selected_statement is None:
+            selected_statement = matching_statement
+        elif matching_statement != selected_statement:
             raise PromotionVerificationError("invalid attestation")
 
 
