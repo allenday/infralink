@@ -476,8 +476,8 @@ def test_services_paginate_101_records_without_silent_truncation(tmp_path: Path)
     "command_args",
     [
         ("check",),
-        ("diagram",),
-        ("docs",),
+        ("diagram", "--output", "generated"),
+        ("docs", "--output", "generated"),
         ("app", "list"),
     ],
 )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -35,10 +34,12 @@ def generate_host_doc(
     ]
 
     # Services
-    lines.extend([
-        "## Services",
-        "",
-    ])
+    lines.extend(
+        [
+            "## Services",
+            "",
+        ]
+    )
 
     if host.services:
         lines.append("| Service | Status |")
@@ -53,12 +54,14 @@ def generate_host_doc(
     # Inbound connections
     inbound = edges.targeting_host(host.uuid)
     if inbound:
-        lines.extend([
-            "## Inbound Connections",
-            "",
-            "| Source | Service | Port | Protocol | Criticality |",
-            "|--------|---------|------|----------|-------------|",
-        ])
+        lines.extend(
+            [
+                "## Inbound Connections",
+                "",
+                "| Source | Service | Port | Protocol | Criticality |",
+                "|--------|---------|------|----------|-------------|",
+            ]
+        )
 
         for edge in inbound:
             source_hosts = edge.source_hosts
@@ -87,12 +90,14 @@ def generate_host_doc(
     # Outbound connections
     outbound = edges.from_host(host.uuid)
     if outbound:
-        lines.extend([
-            "## Outbound Connections",
-            "",
-            "| Target | Service | Port | Purpose |",
-            "|--------|---------|------|---------|",
-        ])
+        lines.extend(
+            [
+                "## Outbound Connections",
+                "",
+                "| Target | Service | Port | Purpose |",
+                "|--------|---------|------|---------|",
+            ]
+        )
 
         for edge in outbound:
             target_host = registry.get_by_uuid(edge.target_host)
@@ -105,11 +110,6 @@ def generate_host_doc(
         lines.append("")
 
     # Footer
-    lines.extend([
-        "---",
-        f"*Generated: {datetime.now().isoformat()}*",
-    ])
-
     return "\n".join(lines)
 
 
@@ -128,8 +128,9 @@ def generate_index(registry: Registry, edges: EdgeSet) -> str:
     ]
 
     for host in sorted(registry.active_hosts(), key=lambda h: h.canonical_name):
-        services = ", ".join(host.services[:3])
-        if len(host.services) > 3:
+        service_names = sorted(host.services)
+        services = ", ".join(service_names[:3])
+        if len(service_names) > 3:
             services += "..."
 
         lines.append(
@@ -139,11 +140,13 @@ def generate_index(registry: Registry, edges: EdgeSet) -> str:
         )
 
     # Groups summary
-    lines.extend([
-        "",
-        "## By Group",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## By Group",
+            "",
+        ]
+    )
 
     for group in sorted(registry.groups()):
         hosts_in_group = registry.filter(group=group)
@@ -151,22 +154,18 @@ def generate_index(registry: Registry, edges: EdgeSet) -> str:
         lines.append(f"- **{group}**: {active_count} active hosts")
 
     # Clouds summary
-    lines.extend([
-        "",
-        "## By Cloud Provider",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## By Cloud Provider",
+            "",
+        ]
+    )
 
     for cloud in sorted(registry.clouds()):
         hosts_in_cloud = registry.filter(cloud=cloud)
         active_count = len([h for h in hosts_in_cloud if h.is_active])
         lines.append(f"- **{cloud}**: {active_count} active hosts")
-
-    lines.extend([
-        "",
-        "---",
-        f"*Generated: {datetime.now().isoformat()}*",
-    ])
 
     return "\n".join(lines)
 
@@ -200,11 +199,13 @@ def generate_edge_index(edges: EdgeSet, registry: Registry) -> str:
         )
 
     # By type
-    lines.extend([
-        "",
-        "## By Type",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## By Type",
+            "",
+        ]
+    )
 
     from infralink.core.schema import EdgeType
 
@@ -212,11 +213,5 @@ def generate_edge_index(edges: EdgeSet, registry: Registry) -> str:
         type_edges = edges.by_type(etype)
         if type_edges:
             lines.append(f"- **{etype.value}**: {len(type_edges)} edges")
-
-    lines.extend([
-        "",
-        "---",
-        f"*Generated: {datetime.now().isoformat()}*",
-    ])
 
     return "\n".join(lines)

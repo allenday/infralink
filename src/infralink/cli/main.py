@@ -133,14 +133,17 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     },
     "analyze": {
         "description": "Analyze registry and generate derived artifacts.",
-        "usage": "infralink analyze",
+        "usage": "infralink analyze --output <directory>",
     },
     "check": {"description": "Run health checks for edges.", "usage": "infralink check"},
     "diagram": {
         "description": "Generate topology diagrams.",
-        "usage": "infralink diagram",
+        "usage": "infralink diagram --output <directory>",
     },
-    "docs": {"description": "Generate documentation outputs.", "usage": "infralink docs"},
+    "docs": {
+        "description": "Generate documentation outputs.",
+        "usage": "infralink docs --output <directory>",
+    },
     "resolve": {
         "description": "Resolve an edge to targets.",
         "usage": "infralink resolve <edge-id>",
@@ -609,12 +612,30 @@ class JsonGroup(click.Group):
                 if isinstance(result, int):
                     exit_code = result
             except click.UsageError:
+                path, _, _ = _parse_invocation(redact_argv(incoming))
+                artifact_command = (
+                    path[0] if path and path[0] in {"analyze", "diagram", "docs"} else None
+                )
                 usage_failure = CliFailure(
                     code=ErrorCode.USAGE_ERROR,
                     message="Invalid command usage",
                     exit_code=2,
-                    fix="Run infralink help",
-                    next_actions=[action("help", ["infralink", "help"], "Show available commands")],
+                    fix=(
+                        "Provide an explicit safe relative --output directory"
+                        if artifact_command is not None
+                        else "Run infralink help"
+                    ),
+                    next_actions=[
+                        action(
+                            "help",
+                            [
+                                "infralink",
+                                "help",
+                                *([artifact_command] if artifact_command is not None else []),
+                            ],
+                            "Show command usage",
+                        )
+                    ],
                 )
                 if not _ENVELOPE_EMITTED.get():
                     _emit(error_envelope(_context_for(incoming), usage_failure))

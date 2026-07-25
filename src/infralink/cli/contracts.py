@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import PurePath
 from typing import Any, Generic, Literal, TypeVar, cast
 
 from pydantic import (
@@ -9,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
+    field_validator,
     model_serializer,
     model_validator,
 )
@@ -184,9 +186,17 @@ class SecretReferenceStatus(ContractModel):
 
 
 class Artifact(ContractModel):
-    path: str
-    media_type: str
-    sha256: str
+    path: str = Field(min_length=1)
+    media_type: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def safe_relative_path(cls, value: str) -> str:
+        path = PurePath(value)
+        if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+            raise ValueError("artifact path must be safe and relative")
+        return value
 
 
 class CommandDescriptor(ContractModel):

@@ -297,6 +297,21 @@ def test_action_binding_and_diagnostic_literals_are_closed() -> None:
 
 
 @pytest.mark.parametrize(
+    "values",
+    [
+        {"path": "../out.json", "media_type": "application/json", "sha256": "a" * 64},
+        {"path": "/out.json", "media_type": "application/json", "sha256": "a" * 64},
+        {"path": "out.json", "media_type": "application/json", "sha256": "ABC"},
+    ],
+)
+def test_artifact_contract_rejects_unsafe_paths_and_invalid_digests(
+    values: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError):
+        Artifact(**values)
+
+
+@pytest.mark.parametrize(
     ("model", "field", "values", "maximum"),
     [
         (HostSummary, "services", host().model_dump(), 128),
@@ -318,7 +333,7 @@ def test_summary_previews_have_published_maximums(
 
 def test_all_command_result_contracts_have_typed_minimum_shapes() -> None:
     diagnostic = Diagnostic(code="ok", message="OK", severity="warning")
-    artifact = Artifact(path="out.json", media_type="application/json", sha256="abc")
+    artifact = Artifact(path="out.json", media_type="application/json", sha256="a" * 64)
     check = CheckResult(
         edge_id="edge-1",
         healthy=True,
