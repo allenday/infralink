@@ -79,6 +79,8 @@ class EdgeResolver:
         port = edge.target_port
         if port is None:
             raise ResolutionError(f"No target port declared for edge {edge_id}")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ResolutionError("Invalid target port: expected an integer from 1 to 65535")
         return port
 
     def get_target_endpoint(self, edge_id: str, prefer: str = "tailscale") -> str:

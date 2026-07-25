@@ -1,7 +1,14 @@
 import pytest
 from pydantic import ValidationError
 
-from infralink.core.schema import AuthConfig, HostSchema, RoleConfig, ServiceSchema, SlotBinding
+from infralink.core.schema import (
+    AuthConfig,
+    EdgeTarget,
+    HostSchema,
+    RoleConfig,
+    ServiceSchema,
+    SlotBinding,
+)
 
 
 def test_host_schema_defaults_node_type():
@@ -29,6 +36,12 @@ def test_slot_binding_schema():
 def test_host_schema_allows_extra_fields():
     host = HostSchema(canonical_name="h1", probe_path="/health", tls_certs=[{"name": "t1"}])
     assert host.canonical_name == "h1"
+
+
+@pytest.mark.parametrize("port", [True, 0, -1, 65536])
+def test_edge_target_rejects_invalid_port(port):
+    with pytest.raises(ValidationError):
+        EdgeTarget(host="target-id", service="postgresql", port=port)
 
 
 @pytest.mark.parametrize(

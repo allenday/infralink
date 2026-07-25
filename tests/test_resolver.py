@@ -131,6 +131,19 @@ class TestEdgeResolver:
         port = resolver.get_target_port("9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10")
         assert port == 5432
 
+    @pytest.mark.parametrize("port", [True, 0, -1, 65536])
+    def test_get_target_port_defensively_rejects_invalid_port(self, registry, edges, port):
+        edge_id = "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10"
+        edge = edges.get(edge_id)
+        assert edge is not None
+        edge._schema.to.port = port
+
+        with pytest.raises(
+            ResolutionError,
+            match="Invalid target port: expected an integer from 1 to 65535",
+        ):
+            EdgeResolver(registry, edges).get_target_port(edge_id)
+
     def test_get_target_endpoint(self, registry, edges):
         """Test getting target endpoint."""
         resolver = EdgeResolver(registry, edges)

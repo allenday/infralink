@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -484,7 +484,7 @@ class EdgeTarget(StrictModel):
 
     host: str  # UUID
     service: str
-    port: int | None = None
+    port: Annotated[int, Field(strict=True, ge=1, le=65535)] | None = None
 
 
 class EdgeMetadata(StrictModel):
