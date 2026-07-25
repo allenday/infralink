@@ -25,8 +25,14 @@ UUID = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
     re.IGNORECASE,
 )
-GCP_KEY = re.compile(r"^\s*(?:gcp_)?project(?:_id)?\s*:\s*(\S+)", re.MULTILINE)
-BWS_KEY = re.compile(r"^\s*bws_(?:project|organization)(?:_id)?\s*:\s*(\S+)", re.MULTILINE)
+GCP_KEY = re.compile(
+    r"^\s*(?:(?:gcp_)?project(?:_id)?|google_cloud_project)\s*[:=]\s*(\S+)",
+    re.MULTILINE | re.IGNORECASE,
+)
+BWS_KEY = re.compile(
+    r"^\s*bws_(?:project|organization)(?:_id)?\s*[:=]\s*(\S+)",
+    re.MULTILINE | re.IGNORECASE,
+)
 HOST_FIELD = re.compile(
     r"^\s*(?:host|hostname|canonical_name|tailscale_name|endpoint|url|source)\s*:\s*(\S+)",
     re.MULTILINE | re.IGNORECASE,
@@ -41,6 +47,29 @@ HOSTNAME = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$",
     re.IGNORECASE,
 )
+BARE_DOMAIN = re.compile(
+    r"(?<![a-z0-9_.-])"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?![a-z0-9_.-])",
+    re.IGNORECASE,
+)
+NON_HOST_SUFFIXES = {
+    "bws",
+    "cli",
+    "get",
+    "gz",
+    "json",
+    "load",
+    "md",
+    "py",
+    "tar",
+    "toml",
+    "whl",
+    "yaml",
+    "yml",
+}
+GCP_PROJECT_ALLOWLIST = {"example-project", "example-staging-project"}
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -128,6 +157,14 @@ def boundary_violations(text: str) -> list[str]:
         if hostname_violation is not None:
             violations.append(hostname_violation)
 
+    for match in BARE_DOMAIN.finditer(text):
+        candidate = match.group(0)
+        if candidate.rsplit(".", maxsplit=1)[-1].lower() in NON_HOST_SUFFIXES:
+            continue
+        hostname_violation = _hostname_violation(candidate)
+        if hostname_violation is not None:
+            violations.append(hostname_violation)
+
     for token in TOKEN.findall(text):
         candidate = token.strip("[](),;")
         try:
@@ -146,10 +183,10 @@ def boundary_violations(text: str) -> list[str]:
             violations.append(f"non-RFC5737 address: {address}")
 
     for project in GCP_KEY.findall(text):
-        if "example" not in project.lower():
+        if project.strip("'\"<>").lower() not in GCP_PROJECT_ALLOWLIST:
             violations.append("GCP project identifier")
     for project in BWS_KEY.findall(text):
-        if UUID.fullmatch(project):
+        if UUID.fullmatch(project.strip("'\"<>")):
             violations.append("UUID-shaped BWS project ID")
     return violations
 
@@ -168,6 +205,14 @@ def boundary_violations(text: str) -> list[str]:
         ("endpoint: https://api.relax.gg/v1", "non-example hostname"),
         ("canonical_name: private.internal", "non-example hostname"),
         ("host: localhost", "non-example hostname"),
+        ("Dependency: db.production.internal", "non-example hostname"),
+        ("See [database](db.production.internal).", "non-example hostname"),
+        (
+            "BWS_PROJECT_ID=8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2",
+            "UUID-shaped BWS",
+        ),
+        ("GOOGLE_CLOUD_PROJECT=production-123", "GCP project identifier"),
+        ("gcp_project: production-example-real", "GCP project identifier"),
     ],
 )
 def test_boundary_detector_rejects_each_private_data_class(text: str, expected: str) -> None:
@@ -217,3 +262,15 @@ def test_public_file_inventory_tracks_all_shipped_examples_and_compatibility_doc
     }
 
     assert set(tracked_public_files()) == expected
+
+
+def test_compatibility_inventory_uses_anchored_runtime_counts() -> None:
+    compatibility = (PROJECT_ROOT / "docs" / "compatibility" / "v0.2.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(compatibility.split())
+
+    assert "63 anchored `from infralink` imports" in normalized
+    assert "0 anchored `import infralink` module imports" in normalized
+    assert "four loader-module imports and one prose comment" in normalized
+    assert "1 PostgreSQL, 1 Redis, and 5 generic URL-helper call sites" in normalized

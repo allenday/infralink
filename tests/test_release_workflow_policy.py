@@ -57,7 +57,21 @@ def test_candidate_builds_once_after_all_nonbuild_gates() -> None:
     build_steps = [
         index for index, step in enumerate(steps) if "python -m build" in str(step.get("run", ""))
     ]
-    assert build_steps == [max(build_steps)]
+    assert len(build_steps) == 1
+    build_index = build_steps[0]
+    step_indices = {str(step.get("name", "")): index for index, step in enumerate(steps)}
+    required_prebuild_gates = {
+        "Check formatting",
+        "Lint",
+        "Type check",
+        "Test without package build",
+        "Verify deterministic schemas and clean source",
+        "Verify public-data boundary",
+        "Install checksum-verified Gitleaks",
+        "Scan repository",
+    }
+    assert required_prebuild_gates <= step_indices.keys()
+    assert all(step_indices[name] < build_index for name in required_prebuild_gates)
     run_text = all_run_text(candidate)
     assert run_text.count("python -m build") == 1
     assert "pytest" in run_text
