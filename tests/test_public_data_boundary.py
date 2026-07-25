@@ -2,7 +2,7 @@ import ipaddress
 import re
 import subprocess
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import pytest
 
@@ -38,7 +38,7 @@ URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
 PROTOCOL_RELATIVE_AUTHORITY = re.compile(r"//[^\s`\"'<>]+")
 SECRET_TEMPLATE = re.compile(r"\$\{secret:[^}\s]+\}")
 PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
-BRACKET_AUTHORITY_TOKEN = re.compile(r"\[[^\s`\"'<>]+")
+BRACKET_AUTHORITY_TOKEN = re.compile(r"\[[^\]\s`\"'<>]*\]|\[[^\s`\"'<>]+")
 UUID = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
     re.IGNORECASE,
@@ -387,7 +387,7 @@ def boundary_violations(
         return any(start <= span[0] and span[1] <= end for start, end in balanced_bracket_spans)
 
     def inside_generic_bracket_span(span: tuple[int, int]) -> bool:
-        return any(start <= span[0] and span[1] <= end for start, end in generic_bracket_spans)
+        return any(start <= span[0] < end for start, end in generic_bracket_spans)
 
     def inside_url_path(span: tuple[int, int]) -> bool:
         return _url_path_payload or any(
@@ -506,7 +506,11 @@ def boundary_violations(
                 record("invalid endpoint authority", span=match.span(), value=token)
             else:
                 balanced_bracket_spans.append(match.span())
-        elif closing_bracket > 0 and ":" in bracket_literal:
+        elif (
+            closing_bracket > 0
+            and ":" in bracket_literal
+            and not bracket_literal.rpartition(":")[-1].isdigit()
+        ):
             generic_bracket_spans.append(match.span())
         if "]" not in raw_token and ":" in token and not starts_in_authority_span(match.span()):
             bracket_spans.append(match.span())
@@ -550,7 +554,7 @@ def boundary_violations(
     for source_span, decoded_payload, path_payload in decoded_payloads:
         boundary_violations(
             decoded_payload,
-            _scan_url_like_authorities=False,
+            _scan_url_like_authorities=True,
             _url_payload=True,
             _url_path_payload=path_payload,
             _semantic_source=source_span,
@@ -757,6 +761,15 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
     assert boundary_violations("Use [key:value] in generic prose.") == []
+    assert boundary_violations("Use [key:value][privatehost:5432] in prose.") == [
+        "non-example hostname: privatehost"
+    ]
+    assert boundary_violations("Use [key:value], [privatehost:5432] in prose.") == [
+        "non-example hostname: privatehost"
+    ]
+    assert boundary_violations("Use [key:value][2001:db8::gg] in prose.") == [
+        "invalid endpoint authority"
+    ]
     assert boundary_violations("Address: [2001:db8::1]") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("Address: [2001:db8::1].") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("Address: [2001:db8::gg].") == ["invalid endpoint authority"]
@@ -786,6 +799,28 @@ def test_boundary_detector_deduplicates_raw_and_decoded_payload_findings() -> No
     assert boundary_violations("endpoint: https://example.com/users/api%2Eprivate.internal") == [
         "non-example hostname: api.private.internal"
     ]
+
+
+@pytest.mark.parametrize("rounds", [1, 2, 3])
+@pytest.mark.parametrize(
+    ("authority", "expected"),
+    [
+        ("http://privatehost:5432/path", "non-example hostname: privatehost"),
+        ("//privatehost:5432/path", "non-example hostname: privatehost"),
+        ("https://user:password@example.com/path", "credential URL userinfo"),
+        ("//user:password@example.com/path", "credential URL userinfo"),
+    ],
+)
+def test_boundary_detector_scans_recursively_decoded_authorities(
+    rounds: int,
+    authority: str,
+    expected: str,
+) -> None:
+    encoded = authority
+    for _round in range(rounds):
+        encoded = quote(encoded, safe="")
+
+    assert boundary_violations(f"endpoint: https://example.com/?target={encoded}") == [expected]
 
 
 def test_boundary_detector_bounds_url_payload_size() -> None:
