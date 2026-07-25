@@ -6,6 +6,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from infralink.cli.main import cli
+from tests.cli_helpers import source_checkout_env
 
 
 def test_root_command_returns_json_tree():
@@ -24,6 +25,7 @@ def test_module_help_is_one_json_document() -> None:
         check=False,
         capture_output=True,
         text=True,
+        env=source_checkout_env(),
     )
     payload = json.loads(completed.stdout)
     assert completed.returncode == 0
