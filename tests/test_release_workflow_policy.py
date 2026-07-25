@@ -33,6 +33,7 @@ def test_candidate_is_manual_sha_bound_and_least_privilege() -> None:
     candidate = load_workflow(CANDIDATE)
     triggers = candidate["on"]
     assert isinstance(triggers, dict)
+    assert set(triggers) == {"workflow_dispatch"}
     dispatch = triggers["workflow_dispatch"]
     assert dispatch["inputs"]["source_sha"]["required"] == "true"
     assert candidate["permissions"] == {
