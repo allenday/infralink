@@ -68,3 +68,16 @@ def test_release_wheel_includes_the_importable_package() -> None:
     assert wheel_config["force-include"] == {
         "src/infralink/schemas": "infralink/schemas",
     }
+
+
+def test_release_sdist_has_an_explicit_public_allowlist() -> None:
+    sdist_config = load_pyproject()["tool"]["hatch"]["build"]["targets"]["sdist"]
+
+    assert sdist_config["include"] == [
+        "src/infralink",
+        "README.md",
+        "PRD.md",
+        "BACKLOG.md",
+        "docs/compatibility",
+        "examples",
+    ]

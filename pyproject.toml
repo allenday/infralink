@@ -87,6 +87,16 @@ exclude = ["src/infralink/schemas"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/infralink/schemas" = "infralink/schemas"
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/infralink",
+    "README.md",
+    "PRD.md",
+    "BACKLOG.md",
+    "docs/compatibility",
+    "examples",
+]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

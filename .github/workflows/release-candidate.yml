@@ -136,8 +136,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir "$RUNNER_TEMP/artifact-scan"
+          tar -xzf dist/infralink-0.2.0.tar.gz -C "$RUNNER_TEMP/artifact-scan"
+          unzip -q dist/infralink-0.2.0-py3-none-any.whl \
+            -d "$RUNNER_TEMP/artifact-scan/wheel"
           ! rg -a "infralink-secret-canary-47291" \
-            dist "$RUNNER_TEMP/module-version.json" "$RUNNER_TEMP/entry-version.json"
+            "$RUNNER_TEMP/artifact-scan" \
+            "$RUNNER_TEMP/module-version.json" "$RUNNER_TEMP/entry-version.json"
       - name: Build deterministic release manifest
         run: >-
           python scripts/build_release_manifest.py
