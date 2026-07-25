@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from infralink.core.errors import ResolutionError
 from infralink.core.schema import (
     Criticality,
     EdgeSchema,
@@ -62,8 +63,11 @@ class Edge:
         return self._schema.to.service
 
     @property
-    def target_port(self) -> int | None:
-        return self._schema.to.port
+    def target_port(self) -> int:
+        port = self._schema.to.port
+        if port is None:
+            raise ResolutionError("No target port declared")
+        return port
 
     @property
     def protocol(self) -> str | None:

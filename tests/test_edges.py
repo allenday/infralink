@@ -3,6 +3,8 @@
 import pytest
 
 from infralink.core.edges import Edge, EdgeSet
+from infralink.core.errors import ResolutionError as CoreResolutionError
+from infralink.core.resolver import ResolutionError
 from infralink.core.schema import Criticality, EdgeType
 
 
@@ -133,11 +135,14 @@ class TestEdge:
         assert "explicit" not in stored_healthcheck.model_dump()
         assert "explicit" not in edge._schema.model_dump()["healthcheck"]
 
-    def test_missing_target_port_is_exposed_as_none(self, sample_edge_data):
+    def test_missing_target_port_raises_stable_resolution_error(self, sample_edge_data):
         del sample_edge_data["to"]["port"]
         edge = Edge(sample_edge_data)
 
-        assert edge.target_port is None
+        with pytest.raises(ResolutionError, match="No target port declared"):
+            _ = edge.target_port
+
+        assert ResolutionError is CoreResolutionError
 
 
 class TestEdgeSet:

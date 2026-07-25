@@ -1,8 +1,13 @@
 """Focused regression tests for generated topology artifacts."""
 
+import pytest
+
 import infralink.generators as generators
 from infralink.core.edges import EdgeSet
+from infralink.core.errors import ResolutionError
 from infralink.core.registry import Registry
+from infralink.generators.d2 import generate_d2
+from infralink.generators.dot import generate_dot
 from infralink.generators.markdown import generate_edge_index, generate_host_doc
 from infralink.generators.mermaid import generate_mermaid
 
@@ -90,3 +95,22 @@ def test_host_doc_service_rows_are_deterministic_for_mapping_order() -> None:
 
     assert first == second
     assert first.index("| alpha | Active |") < first.index("| zeta | Active |")
+
+
+def test_port_rendering_generators_reject_missing_target_port() -> None:
+    registry = _registry()
+    edge_data = _edge("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "postgres", 5432)
+    target = edge_data["to"]
+    assert isinstance(target, dict)
+    del target["port"]
+    edges = EdgeSet.from_dict({"edges": [edge_data]})
+    hosts = list(registry)
+
+    renderers = (
+        lambda: generate_d2(hosts, edges, registry),
+        lambda: generate_dot(hosts, edges, registry),
+        lambda: generate_edge_index(edges, registry),
+    )
+    for render in renderers:
+        with pytest.raises(ResolutionError, match=r"\ANo target port declared\Z"):
+            render()

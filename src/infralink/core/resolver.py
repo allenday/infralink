@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote, quote_plus
 
 from infralink.core.edges import Edge, EdgeSet
+from infralink.core.errors import ResolutionError as ResolutionError
 from infralink.core.registry import Host, Registry
 from infralink.core.schema import SAFE_SECRET_REF_PATTERN
 
@@ -28,12 +29,6 @@ _SUPPORTED_SCHEME_PREFIXES = (
     "redis",
     "rediss",
 )
-
-
-class ResolutionError(Exception):
-    """Raised when edge resolution fails."""
-
-    pass
 
 
 class EdgeResolver:
@@ -77,8 +72,6 @@ class EdgeResolver:
         """Get the target port for an edge."""
         edge = self.get_edge(edge_id)
         port = edge.target_port
-        if port is None:
-            raise ResolutionError(f"No target port declared for edge {edge_id}")
         if type(port) is not int or not 1 <= port <= 65535:
             raise ResolutionError("Invalid target port: expected an integer from 1 to 65535")
         return port
