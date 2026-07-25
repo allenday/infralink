@@ -846,7 +846,7 @@ def test_artifact_transaction_cleans_new_directories_after_enospc(
     assert not Path("generated").exists()
 
 
-def test_artifact_transaction_retries_after_stale_temp(
+def test_artifact_transaction_preserves_user_owned_transaction_lookalike(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -862,7 +862,75 @@ def test_artifact_transaction_retries_after_stale_temp(
     )
 
     assert (output / "result.txt").read_bytes() == b"complete"
-    assert not stale.exists()
+    assert stale.read_bytes() == b"stale"
+
+
+def test_artifact_transaction_retains_recovery_state_when_restore_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    (output / "first.txt").write_bytes(b"original-first")
+    (output / "later.txt").write_bytes(b"original-later")
+    real_replace = os.replace
+
+    def failing_replace(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        if destination == "later.txt" and ".tmp-" in str(source):
+            raise OSError(errno.EIO, "commit-failure-canary")
+        if ".bak-" in str(source):
+            raise OSError(errno.EIO, "restore-failure-canary")
+        return real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(artifact_helpers.os, "replace", failing_replace)
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [
+                (Path("first.txt"), "text/plain", b"new-first"),
+                (Path("later.txt"), "text/plain", b"new-later"),
+            ],
+        )
+
+    backups = list(output.glob(".infralink-txn-*.bak-*"))
+    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert failure.value.details == {"recovery_state": "retained"}
+    assert ".infralink-recovery.json" in failure.value.fix
+    assert "canary" not in failure.value.message
+    assert (output / ".infralink-recovery.json").is_file()
+    assert {backup.read_bytes() for backup in backups} == {
+        b"original-first",
+        b"original-later",
+    }
+
+
+def test_artifact_transaction_preserves_existing_recovery_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    target = output / "result.txt"
+    target.write_bytes(b"original")
+    manifest = output / ".infralink-recovery.json"
+    manifest.write_bytes(b"crashed-transaction-state")
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [(Path("result.txt"), "text/plain", b"replacement")],
+        )
+
+    assert failure.value.details == {"recovery_state": "retained"}
+    assert manifest.read_bytes() == b"crashed-transaction-state"
+    assert target.read_bytes() == b"original"
 
 
 def test_artifact_commands_fail_before_mutation_on_unsupported_platform(
@@ -892,7 +960,9 @@ def test_artifact_commands_fail_before_mutation_on_unsupported_platform(
     payload = _payload(result)
 
     assert result.exit_code == 69
-    assert payload["error"]["code"] == "provider_unavailable"
+    assert payload["error"]["code"] == "unsupported_platform"
+    assert "Linux" in payload["error"]["message"]
+    assert "Linux" in payload["fix"]
 
 
 @pytest.mark.parametrize(

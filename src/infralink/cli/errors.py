@@ -13,6 +13,7 @@ class ErrorCode(str, Enum):
     INPUT_LOAD_FAILED = "input_load_failed"
     ENTITY_NOT_FOUND = "entity_not_found"
     INVALID_CURSOR = "invalid_cursor"
+    UNSUPPORTED_PLATFORM = "unsupported_platform"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     PROVIDER_AUTHENTICATION_FAILED = "provider_authentication_failed"
     PROVIDER_AUTHORIZATION_FAILED = "provider_authorization_failed"

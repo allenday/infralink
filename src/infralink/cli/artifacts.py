@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 import secrets
@@ -23,8 +24,11 @@ from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.pagination import page_items, production_cursor_codec
 
 _TRANSACTION_PREFIX = ".infralink-txn-"
+_RECOVERY_MANIFEST = ".infralink-recovery.json"
+_MANIFEST_MAGIC = "infralink-artifact-transaction-v1"
 _SECURE_ARTIFACT_WRITES_SUPPORTED = (
     sys.platform.startswith("linux")
+    and importlib.util.find_spec("fcntl") is not None
     and hasattr(os, "O_DIRECTORY")
     and hasattr(os, "O_NOFOLLOW")
     and os.open in os.supports_dir_fd
@@ -59,10 +63,20 @@ def artifact_write_failure() -> CliFailure:
 
 def artifact_platform_failure() -> CliFailure:
     return CliFailure(
-        code=ErrorCode.PROVIDER_UNAVAILABLE,
-        message="Secure artifact writes are unavailable on this platform",
+        code=ErrorCode.UNSUPPORTED_PLATFORM,
+        message="Secure artifact writes require Linux",
         exit_code=69,
-        fix="Run artifact-generating commands on a supported POSIX platform",
+        fix="Run artifact-generating commands on Linux",
+    )
+
+
+def artifact_recovery_failure() -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.INTERNAL_ERROR,
+        message="Artifact transaction requires recovery",
+        exit_code=74,
+        fix=f"Preserve output and inspect {_RECOVERY_MANIFEST} before retrying",
+        details={"recovery_state": "retained"},
     )
 
 
@@ -199,22 +213,115 @@ class _TransactionTarget:
     committed: bool = False
 
 
-def _remove_transaction_files(parent_fd: int) -> None:
+def _lock_directory(directory_fd: int) -> None:
     try:
-        entries = os.listdir(parent_fd)
+        import fcntl
+
+        fcntl.flock(directory_fd, fcntl.LOCK_EX)
     except OSError:
         raise artifact_write_failure() from None
-    for entry in entries:
-        if not entry.startswith(_TRANSACTION_PREFIX):
-            continue
+
+
+def _manifest_payload(
+    transaction: str,
+    targets: list[_TransactionTarget],
+    phase: str,
+) -> bytes:
+    return (
+        json.dumps(
+            {
+                "format": _MANIFEST_MAGIC,
+                "transaction": transaction,
+                "phase": phase,
+                "targets": [
+                    {
+                        "path": target.relative.as_posix(),
+                        "temporary": target.temporary,
+                        "backup": target.backup,
+                        "existed": target.existed,
+                        "backup_moved": target.backup_moved,
+                        "committed": target.committed,
+                    }
+                    for target in targets
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_all(descriptor: int, body: bytes) -> None:
+    view = memoryview(body)
+    while view:
+        written = os.write(descriptor, view)
+        if written == 0:
+            raise OSError(errno.EIO, "short artifact transaction write")
+        view = view[written:]
+    os.fsync(descriptor)
+
+
+def _create_manifest(
+    output_fd: int,
+    transaction: str,
+    targets: list[_TransactionTarget],
+) -> None:
+    try:
+        descriptor = os.open(
+            _RECOVERY_MANIFEST,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=output_fd,
+        )
+    except FileExistsError:
+        raise artifact_recovery_failure() from None
+    except OSError:
+        raise artifact_write_failure() from None
+    try:
+        _write_all(descriptor, _manifest_payload(transaction, targets, "staging"))
+    except OSError:
         try:
-            metadata = os.stat(entry, dir_fd=parent_fd, follow_symlinks=False)
-            if stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                os.unlink(entry, dir_fd=parent_fd)
-        except FileNotFoundError:
-            continue
+            os.unlink(_RECOVERY_MANIFEST, dir_fd=output_fd)
         except OSError:
-            raise artifact_write_failure() from None
+            pass
+        raise artifact_write_failure() from None
+    finally:
+        os.close(descriptor)
+
+
+def _sync_manifest(
+    output_fd: int,
+    transaction: str,
+    targets: list[_TransactionTarget],
+    phase: str,
+) -> None:
+    temporary = f"{_TRANSACTION_PREFIX}{transaction}.manifest"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=output_fd,
+        )
+        _write_all(descriptor, _manifest_payload(transaction, targets, phase))
+        os.close(descriptor)
+        descriptor = None
+        os.replace(
+            temporary,
+            _RECOVERY_MANIFEST,
+            src_dir_fd=output_fd,
+            dst_dir_fd=output_fd,
+        )
+    except OSError:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=output_fd)
+        except OSError:
+            pass
+        raise artifact_write_failure() from None
 
 
 def _unlink_if_present(parent_fd: int, name: str | None) -> None:
@@ -231,6 +338,7 @@ def _close_transaction(
     created_directories: list[tuple[int, str]],
     *,
     remove_directories: bool,
+    output_fd: int | None = None,
 ) -> None:
     for target in targets:
         if target.preflight_fd is not None:
@@ -239,6 +347,8 @@ def _close_transaction(
         if target.parent_fd is not None:
             os.close(target.parent_fd)
             target.parent_fd = None
+    if output_fd is not None:
+        os.close(output_fd)
     for parent_fd, name in reversed(created_directories):
         if remove_directories:
             try:
@@ -267,13 +377,38 @@ def write_artifacts(
     except OSError:
         raise artifact_write_failure() from None
     created_directories: list[tuple[int, str]] = []
+    output_fd: int | None = None
     try:
-        # Preflight every existing chain and target before the first mutation.
         try:
+            output_preflight_fd, missing_output_parts = _preflight_directory(
+                root_fd,
+                output.parts,
+            )
+            try:
+                output_fd = _open_directory(
+                    output_preflight_fd,
+                    missing_output_parts,
+                    created_directories,
+                )
+            finally:
+                os.close(output_preflight_fd)
+            _lock_directory(output_fd)
+
+            # Existing recovery state is never guessed at or prefix-deleted.
+            try:
+                os.stat(_RECOVERY_MANIFEST, dir_fd=output_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise artifact_write_failure() from None
+            else:
+                raise artifact_recovery_failure()
+
+            # With the output locked, preflight all existing targets before staging.
             for target in targets:
-                parent_parts = (*output.parts, *target.relative.parts[:-1])
+                parent_parts = target.relative.parts[:-1]
                 target.preflight_fd, target.missing_parent_parts = _preflight_directory(
-                    root_fd,
+                    output_fd,
                     parent_parts,
                 )
                 if not target.missing_parent_parts:
@@ -281,15 +416,38 @@ def write_artifacts(
                         target.preflight_fd,
                         target.relative.name,
                     )
-        except (OSError, CliFailure):
-            _close_transaction(targets, created_directories, remove_directories=False)
+        except (OSError, CliFailure) as exc:
+            _close_transaction(
+                targets,
+                created_directories,
+                remove_directories=True,
+                output_fd=output_fd,
+            )
+            output_fd = None
+            if isinstance(exc, OSError):
+                raise artifact_write_failure() from None
             raise
 
         transaction = secrets.token_hex(16)
-        cleaned_parents: set[tuple[int, int]] = set()
+        for index, target in enumerate(targets):
+            target.temporary = f"{_TRANSACTION_PREFIX}{transaction}.tmp-{index}"
+            if target.existed:
+                target.backup = f"{_TRANSACTION_PREFIX}{transaction}.bak-{index}"
+        assert output_fd is not None
+        try:
+            _create_manifest(output_fd, transaction, targets)
+        except CliFailure:
+            _close_transaction(
+                targets,
+                created_directories,
+                remove_directories=True,
+                output_fd=output_fd,
+            )
+            output_fd = None
+            raise
         try:
             # Create missing directories and stage every body before committing any.
-            for index, target in enumerate(targets):
+            for target in targets:
                 assert target.preflight_fd is not None
                 target.parent_fd = _open_directory(
                     target.preflight_fd,
@@ -298,12 +456,7 @@ def write_artifacts(
                 )
                 os.close(target.preflight_fd)
                 target.preflight_fd = None
-                identity = os.fstat(target.parent_fd)
-                parent_identity = (identity.st_dev, identity.st_ino)
-                if parent_identity not in cleaned_parents:
-                    _remove_transaction_files(target.parent_fd)
-                    cleaned_parents.add(parent_identity)
-                target.temporary = f"{_TRANSACTION_PREFIX}{transaction}.tmp-{index}"
+                assert target.temporary is not None
                 descriptor = os.open(
                     target.temporary,
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -313,12 +466,13 @@ def write_artifacts(
                 with os.fdopen(descriptor, "wb") as artifact_file:
                     artifact_file.write(target.body)
 
+            _sync_manifest(output_fd, transaction, targets, "committing")
             # Commit with same-directory backups so every prior target is restorable.
-            for index, target in enumerate(targets):
+            for target in targets:
                 assert target.parent_fd is not None
                 assert target.temporary is not None
                 if target.existed:
-                    target.backup = f"{_TRANSACTION_PREFIX}{transaction}.bak-{index}"
+                    assert target.backup is not None
                     os.replace(
                         target.relative.name,
                         target.backup,
@@ -326,6 +480,7 @@ def write_artifacts(
                         dst_dir_fd=target.parent_fd,
                     )
                     target.backup_moved = True
+                    _sync_manifest(output_fd, transaction, targets, "committing")
                 os.replace(
                     target.temporary,
                     target.relative.name,
@@ -334,12 +489,12 @@ def write_artifacts(
                 )
                 target.temporary = None
                 target.committed = True
+                _sync_manifest(output_fd, transaction, targets, "committing")
         except (OSError, CliFailure):
+            restoration_failed = False
             for target in reversed(targets):
                 if target.parent_fd is None:
                     continue
-                if target.committed:
-                    _unlink_if_present(target.parent_fd, target.relative.name)
                 if target.backup_moved and target.backup is not None:
                     try:
                         os.replace(
@@ -349,25 +504,102 @@ def write_artifacts(
                             dst_dir_fd=target.parent_fd,
                         )
                     except OSError:
-                        pass
-                    target.backup = None
-                _unlink_if_present(target.parent_fd, target.temporary)
+                        restoration_failed = True
+                    else:
+                        target.backup_moved = False
+                        target.committed = False
+                elif target.committed and not target.existed:
+                    try:
+                        _unlink_if_present(target.parent_fd, target.relative.name)
+                    except OSError:
+                        restoration_failed = True
+                    else:
+                        target.committed = False
+                try:
+                    _unlink_if_present(target.parent_fd, target.temporary)
+                except OSError:
+                    restoration_failed = True
+            if restoration_failed:
+                try:
+                    _sync_manifest(output_fd, transaction, targets, "recovery_required")
+                except CliFailure:
+                    pass
+                _close_transaction(
+                    targets,
+                    created_directories,
+                    remove_directories=False,
+                    output_fd=output_fd,
+                )
+                output_fd = None
+                raise artifact_recovery_failure() from None
+            try:
+                _unlink_if_present(output_fd, _RECOVERY_MANIFEST)
+            except OSError:
+                _close_transaction(
+                    targets,
+                    created_directories,
+                    remove_directories=False,
+                    output_fd=output_fd,
+                )
+                output_fd = None
+                raise artifact_recovery_failure() from None
             _close_transaction(
                 targets,
                 created_directories,
                 remove_directories=True,
+                output_fd=output_fd,
             )
+            output_fd = None
             raise artifact_write_failure() from None
 
+        cleanup_failed = False
         for target in targets:
             assert target.parent_fd is not None
-            _unlink_if_present(target.parent_fd, target.backup)
+            try:
+                _unlink_if_present(target.parent_fd, target.backup)
+            except OSError:
+                cleanup_failed = True
+            else:
+                target.backup_moved = False
+        if cleanup_failed:
+            try:
+                _sync_manifest(output_fd, transaction, targets, "recovery_required")
+            except CliFailure:
+                pass
+            _close_transaction(
+                targets,
+                created_directories,
+                remove_directories=False,
+                output_fd=output_fd,
+            )
+            output_fd = None
+            raise artifact_recovery_failure()
+        try:
+            _unlink_if_present(output_fd, _RECOVERY_MANIFEST)
+        except OSError:
+            _close_transaction(
+                targets,
+                created_directories,
+                remove_directories=False,
+                output_fd=output_fd,
+            )
+            output_fd = None
+            raise artifact_recovery_failure() from None
         _close_transaction(
             targets,
             created_directories,
             remove_directories=False,
+            output_fd=output_fd,
         )
+        output_fd = None
     finally:
+        if output_fd is not None:
+            _close_transaction(
+                targets,
+                created_directories,
+                remove_directories=False,
+                output_fd=output_fd,
+            )
         os.close(root_fd)
     return metadata
 
