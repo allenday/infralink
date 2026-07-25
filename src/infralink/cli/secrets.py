@@ -7,6 +7,7 @@ import os
 import shlex
 from collections.abc import Sequence
 from typing import Any
+from uuid import UUID
 
 import click
 
@@ -67,7 +68,7 @@ def _status(
         location_count=len(locations),
         location_preview=locations[:16] if include_preview else [],
         locations_truncated=include_preview and len(locations) > 16,
-        project=reference.project,
+        project=reference.project if audit is None else audit.project,
         present=None if audit is None else audit.present,
         accessible=None if audit is None else audit.accessible,
         error_code=None if audit is None else audit.error_code,
@@ -152,8 +153,23 @@ def _provider_failure(code: ErrorCode, *, missing_sdk: bool = False) -> CliFailu
 
 def _audit_with_bws(references: list[SecretReference]) -> list[SecretAudit]:
     try:
+        canonical_references = [
+            SecretReference(
+                ref=reference.ref,
+                project=str(UUID(reference.project)) if reference.project is not None else None,
+                locations=reference.locations,
+                required=reference.required,
+            )
+            for reference in references
+        ]
+    except (AttributeError, TypeError, ValueError):
+        raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE) from None
+    if any(reference.project is None for reference in canonical_references):
+        raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
+
+    try:
         resolver = _build_bws_resolver()
-        audits = resolver.audit(references)
+        audits = resolver.audit(canonical_references)
     except ModuleNotFoundError:
         raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE, missing_sdk=True) from None
     except Exception as exc:
@@ -187,16 +203,16 @@ def _audit_with_bws(references: list[SecretReference]) -> list[SecretAudit]:
             raise _provider_failure(mapping[exc.code]) from None
         raise
 
-    expected = {(item.ref, item.project) for item in references}
+    expected = {(item.ref, item.project) for item in canonical_references}
     indexed: dict[tuple[str, str | None], SecretAudit] = {}
     for audit in audits:
         identity = (audit.ref, audit.project)
         if identity not in expected or identity in indexed:
             raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
         indexed[identity] = audit
-    if len(indexed) != len(references):
+    if len(indexed) != len(canonical_references):
         raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
-    return [indexed[(item.ref, item.project)] for item in references]
+    return [indexed[(item.ref, item.project)] for item in canonical_references]
 
 
 @click.group()

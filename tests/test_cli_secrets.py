@@ -244,6 +244,29 @@ def test_audit_joins_by_ref_and_project_and_returns_exit_one_for_negative(
     assert [item.project for item in resolver.seen] == [PROJECT_A, PROJECT_B]
 
 
+def test_audit_canonicalizes_uppercase_topology_project_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry, edges = write_topology(
+        tmp_path,
+        [(HOST_A, "shared", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")],
+    )
+    raw_registry = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    uppercase_project = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+    canonical_project = uppercase_project.lower()
+    raw_registry["hosts"][HOST_A]["bws_project"] = uppercase_project
+    registry.write_text(yaml.safe_dump(raw_registry), encoding="utf-8")
+    resolver = FakeResolver([SecretAudit("shared", canonical_project, True, True)])
+    monkeypatch.setattr(secret_commands, "_build_bws_resolver", lambda: resolver)
+
+    result = invoke(registry, edges, "secrets", "audit", "--provider", "bws")
+    body = payload(result)
+
+    assert result.exit_code == 0
+    assert [item.project for item in resolver.seen] == [canonical_project]
+    assert body["result"]["references"]["items"][0]["project"] == canonical_project
+
+
 def test_empty_audit_does_not_construct_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

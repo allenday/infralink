@@ -23,6 +23,7 @@ def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path]:
     registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
     for host in registry["hosts"].values():
         host["status"] = "terminated"
+        host["bws_project"] = "00000000-0000-4000-8000-000000000001"
     registry["hosts"][TARGET_ID].setdefault("provider_metadata", {})["password_value"] = canary
     registry_path = tmp_path / "registry.yml"
     registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
