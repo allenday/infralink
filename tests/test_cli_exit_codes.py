@@ -98,6 +98,28 @@ def test_json_group_discards_buffered_envelope_on_unregistered_exit(
     assert payload["error"]["message"] == "An unexpected internal error occurred"
 
 
+def test_json_group_discards_buffered_envelope_on_unexpected_exception() -> None:
+    canary = "unsafe-buffered-runtime-error"
+
+    @click.group(cls=JsonGroup, invoke_without_command=True)
+    def command() -> None:
+        _emit({"unsafe": canary})
+        raise RuntimeError(canary)
+
+    result = CliRunner().invoke(command, [])
+
+    assert result.exit_code == ExitCode.INTERNAL_ERROR
+    assert result.stderr == ""
+    assert result.output.count("\n") == 1
+    assert canary not in result.output
+    payload = json.loads(result.output)
+    assert payload["error"] == {
+        "code": "internal_error",
+        "message": "An unexpected internal error occurred",
+        "details": {},
+    }
+
+
 @pytest.mark.parametrize("exit_code", list(ExitCode))
 def test_json_group_preserves_registered_callback_exit_codes(exit_code: ExitCode) -> None:
     @click.group(cls=JsonGroup, invoke_without_command=True)

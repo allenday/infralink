@@ -703,8 +703,7 @@ class JsonGroup(click.Group):
                     exit_code = failure.exit_code
             except Exception:
                 failure = internal_failure()
-                if not _ENVELOPE_EMITTED.get():
-                    _emit(error_envelope(_context_for(incoming), failure))
+                _emit(error_envelope(_context_for(incoming), failure))
                 exit_code = failure.exit_code
         finally:
             pending_envelope = _PENDING_ENVELOPE.get()

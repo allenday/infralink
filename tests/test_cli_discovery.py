@@ -364,17 +364,25 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
     _install_test_command(monkeypatch, emit_then_fail)
     expected_exit = 4 if failure_kind == "cli_failure" else 70
 
+    def assert_expected_payload(output: str) -> None:
+        payload = json.loads(output)
+        if failure_kind == "cli_failure":
+            assert payload == {"first": True}
+        else:
+            assert payload["error"]["code"] == "internal_error"
+            assert "canary-secret" not in output
+
     direct = invoke("explode")
     assert direct.exit_code == expected_exit
     assert direct.stderr == ""
     assert direct.output.count("\n") == 1
-    assert json.loads(direct.output) == {"first": True}
+    assert_expected_payload(direct.output)
 
     assert main(["explode"]) == expected_exit
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.count("\n") == 1
-    assert json.loads(captured.out) == {"first": True}
+    assert_expected_payload(captured.out)
 
     with pytest.raises(SystemExit) as caught:
         run(["explode"])
@@ -382,7 +390,7 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.count("\n") == 1
-    assert json.loads(captured.out) == {"first": True}
+    assert_expected_payload(captured.out)
 
     following = invoke("--version")
     assert following.exit_code == 0
