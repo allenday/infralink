@@ -4,6 +4,7 @@ import errno
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -931,6 +932,111 @@ def test_artifact_transaction_preserves_existing_recovery_manifest(
     assert failure.value.details == {"recovery_state": "retained"}
     assert manifest.read_bytes() == b"crashed-transaction-state"
     assert target.read_bytes() == b"original"
+
+
+def test_artifact_transaction_syncs_files_and_directories_in_namespace_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    (output / "result.txt").write_bytes(b"original")
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+    real_unlink = os.unlink
+
+    def recording_fsync(descriptor: int) -> None:
+        kind = "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file"
+        events.append(f"fsync:{kind}")
+        real_fsync(descriptor)
+
+    def recording_replace(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        events.append(f"replace:{source}>{destination}")
+        return real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    def recording_unlink(path, *, dir_fd=None):
+        events.append(f"unlink:{path}")
+        return real_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(artifact_helpers.os, "fsync", recording_fsync)
+    monkeypatch.setattr(artifact_helpers.os, "replace", recording_replace)
+    monkeypatch.setattr(artifact_helpers.os, "unlink", recording_unlink)
+
+    write_artifacts(
+        output,
+        [(Path("result.txt"), "text/plain", b"replacement")],
+    )
+
+    stage_replace = next(
+        index
+        for index, event in enumerate(events)
+        if event.startswith("replace:.infralink-txn-") and event.endswith(">result.txt")
+    )
+    assert "fsync:file" in events[:stage_replace]
+    for index, event in enumerate(events):
+        if event.startswith(("replace:", "unlink:")):
+            assert events[index + 1] == "fsync:directory"
+
+
+def test_artifact_transaction_rolls_back_directory_fsync_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    target = output / "result.txt"
+    target.write_bytes(b"original")
+    real_fsync = os.fsync
+    real_replace = os.replace
+    fail_next_directory_sync = False
+    restored_target = False
+    restoration_synced = False
+
+    def observing_replace(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        nonlocal fail_next_directory_sync, restored_target
+        result = real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+        if destination == "result.txt" and ".tmp-" in str(source):
+            fail_next_directory_sync = True
+        if destination == "result.txt" and ".bak-" in str(source):
+            restored_target = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_directory_sync, restoration_synced
+        is_directory = stat.S_ISDIR(os.fstat(descriptor).st_mode)
+        if fail_next_directory_sync and is_directory:
+            fail_next_directory_sync = False
+            raise OSError(errno.EIO, "directory-fsync-canary")
+        real_fsync(descriptor)
+        if restored_target and is_directory:
+            restoration_synced = True
+
+    monkeypatch.setattr(artifact_helpers.os, "replace", observing_replace)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [(Path("result.txt"), "text/plain", b"replacement")],
+        )
+
+    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert target.read_bytes() == b"original"
+    assert restoration_synced
+    assert not list(output.glob(".infralink-*"))
 
 
 def test_artifact_commands_fail_before_mutation_on_unsupported_platform(

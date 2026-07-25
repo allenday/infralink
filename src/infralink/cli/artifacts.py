@@ -131,6 +131,10 @@ def _directory_flags() -> int:
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
+def _sync_directory(directory_fd: int) -> None:
+    os.fsync(directory_fd)
+
+
 def _path_or_write_failure(exc: OSError) -> CliFailure:
     if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
         return artifact_usage("Output must contain only real directories")
@@ -177,6 +181,7 @@ def _open_directory(
                     pass
                 else:
                     created_directories.append((os.dup(current_fd), part))
+                    _sync_directory(current_fd)
                 try:
                     child_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
                 except OSError as exc:
@@ -284,14 +289,19 @@ def _create_manifest(
         raise artifact_write_failure() from None
     try:
         _write_all(descriptor, _manifest_payload(transaction, targets, "staging"))
+        os.close(descriptor)
+        descriptor = -1
+        _sync_directory(output_fd)
     except OSError:
         try:
             os.unlink(_RECOVERY_MANIFEST, dir_fd=output_fd)
+            _sync_directory(output_fd)
         except OSError:
             pass
         raise artifact_write_failure() from None
     finally:
-        os.close(descriptor)
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _sync_manifest(
@@ -318,11 +328,12 @@ def _sync_manifest(
             src_dir_fd=output_fd,
             dst_dir_fd=output_fd,
         )
+        _sync_directory(output_fd)
     except OSError:
         if descriptor is not None:
             os.close(descriptor)
         try:
-            os.unlink(temporary, dir_fd=output_fd)
+            _unlink_if_present(output_fd, temporary)
         except OSError:
             pass
         raise artifact_write_failure() from None
@@ -335,6 +346,8 @@ def _unlink_if_present(parent_fd: int, name: str | None) -> None:
         os.unlink(name, dir_fd=parent_fd)
     except FileNotFoundError:
         pass
+    else:
+        _sync_directory(parent_fd)
 
 
 def _close_transaction(
@@ -359,6 +372,11 @@ def _close_transaction(
                 os.rmdir(name, dir_fd=parent_fd)
             except OSError:
                 pass
+            else:
+                try:
+                    _sync_directory(parent_fd)
+                except OSError:
+                    pass
         os.close(parent_fd)
 
 
@@ -467,8 +485,11 @@ def write_artifacts(
                     0o644,
                     dir_fd=target.parent_fd,
                 )
-                with os.fdopen(descriptor, "wb") as artifact_file:
-                    artifact_file.write(target.body)
+                try:
+                    _write_all(descriptor, target.body)
+                finally:
+                    os.close(descriptor)
+                _sync_directory(target.parent_fd)
 
             _sync_manifest(output_fd, transaction, targets, "committing")
             # Commit with same-directory backups so every prior target is restorable.
@@ -484,6 +505,7 @@ def write_artifacts(
                         dst_dir_fd=target.parent_fd,
                     )
                     target.backup_moved = True
+                    _sync_directory(target.parent_fd)
                     _sync_manifest(output_fd, transaction, targets, "committing")
                 os.replace(
                     target.temporary,
@@ -493,6 +515,7 @@ def write_artifacts(
                 )
                 target.temporary = None
                 target.committed = True
+                _sync_directory(target.parent_fd)
                 _sync_manifest(output_fd, transaction, targets, "committing")
         except (OSError, CliFailure):
             restoration_failed = False
@@ -512,6 +535,10 @@ def write_artifacts(
                     else:
                         target.backup_moved = False
                         target.committed = False
+                        try:
+                            _sync_directory(target.parent_fd)
+                        except OSError:
+                            restoration_failed = True
                 elif target.committed and not target.existed:
                     try:
                         _unlink_if_present(target.parent_fd, target.relative.name)
