@@ -20,9 +20,12 @@ from infralink.cli.contracts import (
     Binding,
     CommandContext,
     CommandDescriptor,
+    EdgeSummary,
     HelpResult,
+    HostSummary,
     OptionDescriptor,
     RootResult,
+    ServiceSummary,
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode
@@ -780,9 +783,9 @@ def _page_offset(
 ) -> int:
     if cursor is None:
         return 0
-    from infralink.cli.pagination import CursorCodec
+    from infralink.cli.pagination import production_cursor_codec
 
-    return CursorCodec().decode(cursor, command, collection, fingerprint)
+    return production_cursor_codec().decode(cursor, command, collection, fingerprint)
 
 
 def _active_collection(
@@ -802,30 +805,91 @@ def _active_collection(
     return selected
 
 
-def _next_cursors(
+def _attach_next_cursors(
+    result: Any,
+    *,
     command: str,
     collections: tuple[str, ...],
     selected: str,
     offset: int,
     limit: int,
     fingerprint: str,
-) -> dict[str, str]:
-    from infralink.cli.pagination import CursorCodec
+) -> None:
+    from infralink.cli.pagination import production_cursor_codec
 
-    codec = CursorCodec()
-    return {
-        collection: codec.encode(
+    codec = None
+    for collection in collections:
+        page = result.page if collection == "items" else getattr(result, collection).page
+        collection_offset = offset if collection == selected else 0
+        if page.total is None or collection_offset + page.returned >= page.total:
+            continue
+        if codec is None:
+            codec = production_cursor_codec()
+        page.next_cursor = codec.encode(
             command,
             collection,
-            (offset if collection == selected else 0) + limit,
+            collection_offset + limit,
             fingerprint,
         )
-        for collection in collections
-    }
+
+
+def _root_source_argv(ctx: Context) -> list[str]:
+    return [
+        "infralink",
+        "--registry",
+        str(ctx.registry_path),
+        "--edges",
+        str(ctx.edges_path),
+    ]
+
+
+def _summary_detail_actions(ctx: Context, result: Any) -> list[Any]:
+    summaries: list[Any] = []
+    items = getattr(result, "items", None)
+    if isinstance(items, list):
+        summaries.extend(items)
+    for name in ("host", "service", "edge"):
+        summary = getattr(result, name, None)
+        if summary is not None:
+            summaries.append(summary)
+    for name in ("services", "edges"):
+        page = getattr(result, name, None)
+        if page is not None:
+            summaries.extend(page.items)
+
+    actions = []
+    seen: set[tuple[str, str]] = set()
+    for summary in summaries:
+        if isinstance(summary, HostSummary):
+            truncated = summary.services_truncated or summary.projects_truncated
+            entity = "host"
+        elif isinstance(summary, ServiceSummary):
+            truncated = (
+                summary.hosts_truncated or summary.ports_truncated or summary.protocols_truncated
+            )
+            entity = "service"
+        elif isinstance(summary, EdgeSummary):
+            truncated = summary.secret_refs_truncated
+            entity = "edge"
+        else:
+            continue
+        identity = (entity, summary.id)
+        if not truncated or identity in seen:
+            continue
+        seen.add(identity)
+        actions.append(
+            action(
+                "show",
+                [*_root_source_argv(ctx), entity, "show", summary.id],
+                f"Show complete {entity} details",
+            )
+        )
+    return actions
 
 
 def _emit_query_result(
     *,
+    ctx: Context,
     path: list[str],
     command_argv: list[str],
     result: Any,
@@ -840,6 +904,7 @@ def _emit_query_result(
             if page is not None:
                 pages.append((name, page.page, f"result.{name}.page.next_cursor"))
     actions = [action("help", ["infralink", "help", *path], f"Show {' '.join(path)} help")]
+    actions.extend(_summary_detail_actions(ctx, result))
     for collection, page, source in pages:
         if page.next_cursor is None:
             continue
@@ -847,7 +912,7 @@ def _emit_query_result(
             action(
                 "continue",
                 [
-                    "infralink",
+                    *_root_source_argv(ctx),
                     *command_argv,
                     "--collection",
                     collection,
@@ -897,7 +962,6 @@ def services(
     collection: str | None,
 ) -> None:
     """List services declared by registry hosts."""
-    from infralink.cli.pagination import CursorCodec
     from infralink.cli.queries import list_services
 
     selected = _active_collection(collection, cursor, ("items",))
@@ -913,9 +977,23 @@ def services(
         ctx.edges,
         limit=limit,
         offset=offset,
-        next_cursor=CursorCodec().encode("services", "items", offset + limit, fingerprint),
     )
-    _emit_query_result(path=["services"], command_argv=["services"], result=result, limit=limit)
+    _attach_next_cursors(
+        result,
+        command="services",
+        collections=("items",),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    _emit_query_result(
+        ctx=ctx,
+        path=["services"],
+        command_argv=["services"],
+        result=result,
+        limit=limit,
+    )
 
 
 @cli.command()
@@ -984,7 +1062,6 @@ def hosts(
     collection: str | None,
 ) -> None:
     """List all hosts in registry."""
-    from infralink.cli.pagination import CursorCodec
     from infralink.cli.queries import list_hosts
 
     selected = _active_collection(collection, cursor, ("items",))
@@ -999,9 +1076,23 @@ def hosts(
         ctx.registry,
         limit=limit,
         offset=offset,
-        next_cursor=CursorCodec().encode("hosts", "items", offset + limit, fingerprint),
     )
-    _emit_query_result(path=["hosts"], command_argv=["hosts"], result=result, limit=limit)
+    _attach_next_cursors(
+        result,
+        command="hosts",
+        collections=("items",),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    _emit_query_result(
+        ctx=ctx,
+        path=["hosts"],
+        command_argv=["hosts"],
+        result=result,
+        limit=limit,
+    )
 
 
 @click.command(name="edges-list")
@@ -1014,7 +1105,6 @@ def edges_list(
     collection: str | None,
 ) -> None:
     """List all declared edges."""
-    from infralink.cli.pagination import CursorCodec
     from infralink.cli.queries import list_edges
 
     selected = _active_collection(collection, cursor, ("items",))
@@ -1029,9 +1119,18 @@ def edges_list(
         ctx.edges,
         limit=limit,
         offset=offset,
-        next_cursor=CursorCodec().encode("edges-list", "items", offset + limit, fingerprint),
+    )
+    _attach_next_cursors(
+        result,
+        command="edges-list",
+        collections=("items",),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
     )
     _emit_query_result(
+        ctx=ctx,
         path=["edges-list"],
         command_argv=["edges-list"],
         result=result,
@@ -1076,16 +1175,18 @@ def host_show(
         collection=selected,
         limit=limit,
         offset=offset,
-        next_cursors=_next_cursors(
-            "host show",
-            ("services", "projects"),
-            selected,
-            offset,
-            limit,
-            fingerprint,
-        ),
+    )
+    _attach_next_cursors(
+        result,
+        command="host show",
+        collections=("services", "projects"),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
     )
     _emit_query_result(
+        ctx=ctx,
         path=["host", "show"],
         command_argv=["host", "show", host_id],
         result=result,
@@ -1132,11 +1233,18 @@ def service_show(
         collection=selected,
         limit=limit,
         offset=offset,
-        next_cursors=_next_cursors(
-            "service show", collections, selected, offset, limit, fingerprint
-        ),
+    )
+    _attach_next_cursors(
+        result,
+        command="service show",
+        collections=collections,
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
     )
     _emit_query_result(
+        ctx=ctx,
         path=["service", "show"],
         command_argv=["service", "show", service_id],
         result=result,
@@ -1160,7 +1268,6 @@ def edge_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
-    from infralink.cli.pagination import CursorCodec
     from infralink.cli.queries import show_edge
 
     selected = _active_collection(collection, cursor, ("secret_refs",))
@@ -1181,9 +1288,18 @@ def edge_show(
         edge_id,
         limit=limit,
         offset=offset,
-        next_cursor=CursorCodec().encode("edge show", "secret_refs", offset + limit, fingerprint),
+    )
+    _attach_next_cursors(
+        result,
+        command="edge show",
+        collections=("secret_refs",),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
     )
     _emit_query_result(
+        ctx=ctx,
         path=["edge", "show"],
         command_argv=["edge", "show", edge_id],
         result=result,

@@ -26,8 +26,14 @@ from infralink.core.registry import Registry
 ROOT = Path(__file__).resolve().parents[1]
 HOST_A = "11111111-1111-4111-8111-111111111111"
 HOST_B = "22222222-2222-4222-8222-222222222222"
+HOST_C = "33333333-3333-4333-8333-333333333333"
 EDGE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 EDGE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+@pytest.fixture(autouse=True)
+def isolated_cursor_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "cursor-state"))
 
 
 @pytest.fixture
@@ -89,6 +95,11 @@ def registry() -> Registry:
                     "worker": {"port": 9000, "protocol": "http"},
                 },
             },
+            HOST_C: {
+                "canonical_name": "nonmember-host",
+                "status": "active",
+                "services": {"api": {"port": 9999, "protocol": "nonmember"}},
+            },
         }
     }
     loaded = Registry.from_dict(data)
@@ -111,7 +122,7 @@ def test_host_summary_truncates_sorted_relationship_preview(registry: Registry) 
 def test_all_lists_are_stably_sorted_and_bounded(registry: Registry, edges: EdgeSet) -> None:
     assert [item.id for item in list_hosts(registry, limit=1).items] == [HOST_A]
     assert [item.id for item in list_edges(edges, limit=1).items] == [EDGE_A]
-    assert list_hosts(registry, limit=1).page.total == 2
+    assert list_hosts(registry, limit=1).page.total == 3
     assert list_services(registry, edges, limit=1).page.returned == 1
     assert [item.id for item in list_apps(registry, edges, limit=10).items] == ["test-app"]
 
@@ -124,9 +135,9 @@ def test_service_summary_aggregates_roles_services_and_edge_targets(
     assert services["role-only"].host_ids == [HOST_B]
     assert services["postgres"].host_ids == [HOST_A]
     assert services["postgres"].ports == [5432]
-    assert services["api"].host_ids == [HOST_B]
-    assert services["api"].ports == [443, 8443]
-    assert services["api"].protocols == ["https"]
+    assert services["api"].host_ids == [HOST_B, HOST_C]
+    assert services["api"].ports == [443, 8443, 9999]
+    assert services["api"].protocols == ["https", "nonmember"]
 
 
 def test_edge_summary_contains_only_safe_declared_fields(edges: EdgeSet) -> None:
@@ -150,13 +161,16 @@ def test_detail_queries_return_complete_typed_pages(registry: Registry, edges: E
     assert host.host.id == HOST_A
     assert host.services.page.total == 2
     assert service.service.id == "api"
-    assert service.hosts.items == [HOST_B]
+    assert service.hosts.items == [HOST_B, HOST_C]
     assert edge.edge.id == EDGE_A
     assert edge.secret_refs.items == ["safe-ref-name"]
     assert app.app.edge_count == 1
     assert [item.id for item in app.edges.items] == [EDGE_B]
     app_services = {item.id: item for item in app.services.items}
     assert app_services["member-only"].host_ids == [HOST_B]
+    assert app_services["api"].host_ids == [HOST_B]
+    assert app_services["api"].ports == [443, 8443]
+    assert app_services["api"].protocols == ["https"]
 
 
 @pytest.mark.parametrize(
@@ -292,8 +306,9 @@ def test_cli_edge_detail_matches_existing_schema(tmp_path: Path) -> None:
 
 
 def test_cli_cursor_resumes_without_duplicates_and_exposes_exact_binding(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     registry_path, edges_path = _write_cli_inputs(tmp_path, host_count=3)
     first_result = _invoke(registry_path, edges_path, "hosts", "--limit", "2")
     first = _payload(first_result)
@@ -303,6 +318,10 @@ def test_cli_cursor_resumes_without_duplicates_and_exposes_exact_binding(
     continuation = next(item for item in first["next_actions"] if item["rel"] == "continue")
     assert continuation["argv"] == [
         "infralink",
+        "--registry",
+        str(registry_path),
+        "--edges",
+        str(edges_path),
         "hosts",
         "--collection",
         "items",
@@ -313,9 +332,8 @@ def test_cli_cursor_resumes_without_duplicates_and_exposes_exact_binding(
     ]
     assert continuation["bindings"]["cursor"]["source"] == "result.page.next_cursor"
 
-    second = _payload(
-        _invoke(registry_path, edges_path, "hosts", "--limit", "2", "--cursor", cursor)
-    )
+    replay_argv = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
+    second = _payload(CliRunner().invoke(cli, replay_argv[1:]))
     first_ids = {item["id"] for item in first["result"]["items"]}
     second_ids = {item["id"] for item in second["result"]["items"]}
     assert first_ids.isdisjoint(second_ids)
@@ -331,6 +349,32 @@ def test_services_over_default_limit_are_paginated(tmp_path: Path) -> None:
     assert payload["result"]["page"]["total"] == 1005
     assert payload["result"]["page"]["next_cursor"]
     assert payload["meta"]["truncated"] is True
+
+
+def test_nontruncated_page_does_not_create_cursor_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    registry_path, edges_path = _write_cli_inputs(tmp_path, host_count=1)
+    payload = _payload(_invoke(registry_path, edges_path, "hosts"))
+
+    assert payload["result"]["page"]["next_cursor"] is None
+    assert not (state / "infralink/cursor.key").exists()
+
+
+def test_invalid_environment_cursor_key_is_redacted_from_cli_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    canary = "invalid-cursor-key-canary"
+    monkeypatch.setenv("INFRALINK_CURSOR_KEY", canary)
+    registry_path, edges_path = _write_cli_inputs(tmp_path, host_count=2)
+    result = _invoke(registry_path, edges_path, "hosts", "--limit", "1")
+    payload = _payload(result)
+
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "invalid_cursor"
+    assert canary not in result.output
 
 
 def test_detail_cursor_requires_collection_and_only_advances_selected_page(
@@ -414,3 +458,73 @@ def test_cli_missing_entity_is_one_safe_json_document(tmp_path: Path) -> None:
         "entity_type": "edge",
         "requested_id": "canary-missing",
     }
+
+
+def test_truncated_host_preview_has_executable_detail_action(
+    tmp_path: Path,
+) -> None:
+    host_id = "00000000-0000-4000-8000-000000000000"
+    registry_path = tmp_path / "registry.yml"
+    edges_path = tmp_path / "edges.yml"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "hosts": {
+                    host_id: {
+                        "canonical_name": "large-host",
+                        "status": "active",
+                        "projects": [f"project-{index:03d}" for index in range(65)],
+                        "services": {
+                            f"service-{index:03d}": {"port": 10000 + index} for index in range(129)
+                        },
+                    }
+                }
+            }
+        )
+    )
+    edges_path.write_text(json.dumps({"edges": []}))
+    payload = _payload(_invoke(registry_path, edges_path, "hosts"))
+    summary = payload["result"]["items"][0]
+    assert summary["services_truncated"] is True
+    assert summary["projects_truncated"] is True
+    detail = next(
+        item for item in payload["next_actions"] if item["argv"][-3:] == ["host", "show", host_id]
+    )
+    replay = _payload(CliRunner().invoke(cli, detail["argv"][1:]))
+    schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/host-show.json").read_text())
+    Draft202012Validator(schema).validate(replay)
+
+
+def test_truncated_service_preview_has_executable_detail_action(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "registry.yml"
+    edges_path = tmp_path / "edges.yml"
+    hosts = {
+        f"00000000-0000-4000-8000-{index:012d}": {
+            "canonical_name": f"host-{index:03d}",
+            "status": "active",
+            "services": {
+                "shared": {
+                    "port": 10000 + index,
+                    "protocol": f"protocol-{index:03d}",
+                }
+            },
+        }
+        for index in range(129)
+    }
+    registry_path.write_text(json.dumps({"hosts": hosts}))
+    edges_path.write_text(json.dumps({"edges": []}))
+    payload = _payload(_invoke(registry_path, edges_path, "services"))
+    summary = next(item for item in payload["result"]["items"] if item["id"] == "shared")
+    assert summary["hosts_truncated"] is True
+    assert summary["ports_truncated"] is True
+    assert summary["protocols_truncated"] is True
+    detail = next(
+        item
+        for item in payload["next_actions"]
+        if item["argv"][-3:] == ["service", "show", "shared"]
+    )
+    replay = _payload(CliRunner().invoke(cli, detail["argv"][1:]))
+    schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/service-show.json").read_text())
+    Draft202012Validator(schema).validate(replay)

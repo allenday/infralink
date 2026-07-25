@@ -7,14 +7,13 @@ import click
 from infralink.cli.main import (
     Context,
     _active_collection,
+    _attach_next_cursors,
     _emit_query_result,
-    _next_cursors,
     _page_offset,
     _page_options,
     _topology_fingerprint,
     pass_context,
 )
-from infralink.cli.pagination import CursorCodec
 from infralink.cli.queries import list_apps as query_list_apps
 from infralink.cli.queries import show_app as query_show_app
 
@@ -47,9 +46,18 @@ def list_apps(
         ctx.edges,
         limit=limit,
         offset=offset,
-        next_cursor=CursorCodec().encode("app list", "items", offset + limit, fingerprint),
+    )
+    _attach_next_cursors(
+        result,
+        command="app list",
+        collections=("items",),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
     )
     _emit_query_result(
+        ctx=ctx,
         path=["app", "list"],
         command_argv=["app", "list"],
         result=result,
@@ -90,9 +98,18 @@ def show_app(
         collection=selected,
         limit=limit,
         offset=offset,
-        next_cursors=_next_cursors("app show", collections, selected, offset, limit, fingerprint),
+    )
+    _attach_next_cursors(
+        result,
+        command="app show",
+        collections=collections,
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
     )
     _emit_query_result(
+        ctx=ctx,
         path=["app", "show"],
         command_argv=["app", "show", app_id],
         result=result,

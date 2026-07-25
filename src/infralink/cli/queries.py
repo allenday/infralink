@@ -147,6 +147,35 @@ def _app_service_ids(application: Application) -> list[str]:
     )
 
 
+def _app_service_identities(
+    application: Application,
+    registry: Registry,
+    app_edges: list[Edge],
+) -> dict[str, _ServiceIdentity]:
+    identities = {service_id: _ServiceIdentity() for service_id in _app_service_ids(application)}
+    for member in application.schema.members:
+        host = registry.get(member.host)
+        for service_id in member.services:
+            identity = identities[service_id]
+            identity.hosts.add(member.host)
+            config = host.services.get(service_id, {}) if host is not None else {}
+            port = config.get("port")
+            if isinstance(port, int) and not isinstance(port, bool):
+                identity.ports.add(port)
+            protocol = config.get("protocol")
+            if isinstance(protocol, str):
+                identity.protocols.add(protocol)
+    for edge in app_edges:
+        edge_identity = identities.get(edge.target_service)
+        if edge_identity is None:
+            continue
+        edge_identity.hosts.add(edge.target_host)
+        edge_identity.ports.add(edge.target_port)
+        if edge.protocol:
+            edge_identity.protocols.add(edge.protocol)
+    return identities
+
+
 def app_summary(application: Application, registry: Registry, edges: EdgeSet) -> AppSummary:
     return AppSummary(
         id=application.id,
@@ -326,15 +355,12 @@ def show_app(
     if application is None:
         raise entity_not_found("app", app_id)
     selected = collection or "services"
-    identities = _service_identities(registry, edges)
-    for member in application.schema.members:
-        for service_id in member.services:
-            identities.setdefault(service_id, _ServiceIdentity()).hosts.add(member.host)
+    app_edges = _app_edges(application, registry, edges)
+    identities = _app_service_identities(application, registry, app_edges)
     services = [
-        service_summary(service_id, identities.get(service_id, _ServiceIdentity()))
+        service_summary(service_id, identities[service_id])
         for service_id in _app_service_ids(application)
     ]
-    app_edges = _app_edges(application, registry, edges)
     edge_items = [edge_summary(edge) for edge in app_edges]
     cursors = next_cursors or {}
     return AppShowResult(
