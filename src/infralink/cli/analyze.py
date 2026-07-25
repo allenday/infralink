@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from infralink.cli.artifacts import (
     require_output,
     write_artifacts,
 )
-from infralink.cli.contracts import AnalyzeResult, Diagnostic
+from infralink.cli.contracts import AnalysisSummary, AnalyzeResult, Artifact, Diagnostic, Page
 from infralink.cli.main import (
     Context,
     _context_for,
@@ -28,6 +29,7 @@ from infralink.cli.main import (
     pass_context,
 )
 from infralink.cli.output import ok_envelope
+from infralink.cli.pagination import invalid_cursor
 
 
 def _host_id(name: str, host_data: dict[str, Any]) -> str | None:
@@ -328,11 +330,13 @@ def analyze(
             )
         )
     artifacts = artifact_metadata(output, generated)
-    collections: dict[str, list[object]] = {
+    collections: Mapping[str, Sequence[object]] = {
         "diagnostics": diagnostics,
         "artifacts": artifacts,
     }
     selected = collection or "diagnostics"
+    if selected not in collections:
+        raise invalid_cursor()
     fingerprint = artifact_fingerprint(
         command="analyze",
         sources=[source],
@@ -344,23 +348,33 @@ def analyze(
         },
         collections=collections,
     )
-    pages = artifact_pages(
+    diagnostic_pages = artifact_pages(
         command="analyze",
-        collections=collections,
-        selected=selected,
-        cursor=cursor,
+        collections={"diagnostics": diagnostics},
+        selected="diagnostics",
+        cursor=cursor if selected == "diagnostics" else None,
         limit=limit,
         fingerprint=fingerprint,
     )
+    artifact_result_pages = artifact_pages(
+        command="analyze",
+        collections={"artifacts": artifacts},
+        selected="artifacts",
+        cursor=cursor if selected == "artifacts" else None,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    diagnostic_page: Page[Diagnostic] = diagnostic_pages["diagnostics"]
+    artifact_page: Page[Artifact] = artifact_result_pages["artifacts"]
     write_artifacts(output, generated)
     result = AnalyzeResult(
-        analysis={
-            "host_count": len(data.get("hosts", {})),
-            "service_count": _service_count(data),
-            "edge_count": len(edge_list),
-            "diagnostics": pages["diagnostics"],
-        },
-        artifacts=pages["artifacts"],
+        analysis=AnalysisSummary(
+            host_count=len(data.get("hosts", {})),
+            service_count=_service_count(data),
+            edge_count=len(edge_list),
+            diagnostics=diagnostic_page,
+        ),
+        artifacts=artifact_page,
     )
     base_argv = [*_root_source_argv(ctx), "analyze", "--output", output.as_posix()]
     if registry_override is not None:
@@ -376,11 +390,14 @@ def analyze(
         *continuation_actions(
             base_argv=base_argv,
             limit=limit,
-            pages=pages,
-            sources={
-                "diagnostics": "result.analysis.diagnostics.page.next_cursor",
-                "artifacts": "result.artifacts.page.next_cursor",
-            },
+            pages=diagnostic_pages,
+            sources={"diagnostics": "result.analysis.diagnostics.page.next_cursor"},
+        ),
+        *continuation_actions(
+            base_argv=base_argv,
+            limit=limit,
+            pages=artifact_result_pages,
+            sources={"artifacts": "result.artifacts.page.next_cursor"},
         ),
     ]
     payload = ok_envelope(
@@ -388,5 +405,7 @@ def analyze(
         result,
         actions,
     )
-    payload["meta"]["truncated"] = any(page.page.next_cursor is not None for page in pages.values())
+    payload["meta"]["truncated"] = any(
+        page.page.next_cursor is not None for page in (diagnostic_page, artifact_page)
+    )
     _emit(payload)

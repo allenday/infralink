@@ -69,9 +69,7 @@ def _sanitize_value(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return _sanitize_value(value.model_dump(mode="json"))
     if is_dataclass(value) and not isinstance(value, type):
-        return _sanitize_value(
-            {field.name: getattr(value, field.name) for field in fields(value)}
-        )
+        return _sanitize_value({field.name: getattr(value, field.name) for field in fields(value)})
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("unsupported command context value: non-string mapping key")

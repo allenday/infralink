@@ -24,6 +24,8 @@ from infralink.cli.contracts import (
     HelpResult,
     HostSummary,
     InfoResult,
+    InfoSources,
+    InfoSummary,
     OptionDescriptor,
     RootResult,
     ServiceSummary,
@@ -1089,15 +1091,15 @@ def info(ctx: Context) -> None:
     edges = ctx.edges
     service_count = list_services(registry, edges, limit=1).page.total
     result = InfoResult(
-        sources={
-            "registry": str(ctx.registry_path),
-            "edges": str(ctx.edges_path),
-        },
-        summary={
-            "host_count": len(registry),
-            "service_count": service_count or 0,
-            "edge_count": len(edges),
-        },
+        sources=InfoSources(
+            registry=str(ctx.registry_path),
+            edges=str(ctx.edges_path),
+        ),
+        summary=InfoSummary(
+            host_count=len(registry),
+            service_count=service_count or 0,
+            edge_count=len(edges),
+        ),
     )
     payload = ok_envelope(
         _context_for(path=["info"]),

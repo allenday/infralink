@@ -72,9 +72,7 @@ class Application:
 class ApplicationSet:
     """Collection of infrastructure applications."""
 
-    def __init__(
-        self, applications: list[Application], schema_version: str = "1.0"
-    ) -> None:
+    def __init__(self, applications: list[Application], schema_version: str = "1.0") -> None:
         self._applications = {app.id: app for app in applications}
         self._schema_version = schema_version
 
@@ -95,8 +93,7 @@ class ApplicationSet:
         schema = ApplicationSetSchema(**data)
 
         apps = [
-            Application(app_id, app_schema)
-            for app_id, app_schema in schema.applications.items()
+            Application(app_id, app_schema) for app_id, app_schema in schema.applications.items()
         ]
 
         return cls(apps, schema.schema_version)
@@ -106,8 +103,7 @@ class ApplicationSet:
         """Create application set from dictionary."""
         schema = ApplicationSetSchema(**data)
         apps = [
-            Application(app_id, app_schema)
-            for app_id, app_schema in schema.applications.items()
+            Application(app_id, app_schema) for app_id, app_schema in schema.applications.items()
         ]
         return cls(apps, schema.schema_version)
 

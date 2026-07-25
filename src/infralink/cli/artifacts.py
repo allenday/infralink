@@ -10,8 +10,10 @@ import os
 import secrets
 import stat
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePath
+from typing import TypeVar
 
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
@@ -22,6 +24,8 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.pagination import page_items, production_cursor_codec
+
+T = TypeVar("T")
 
 _TRANSACTION_PREFIX = ".infralink-txn-"
 _RECOVERY_MANIFEST = ".infralink-recovery.json"
@@ -609,7 +613,7 @@ def artifact_fingerprint(
     command: str,
     sources: list[Path],
     options: dict[str, object],
-    collections: dict[str, list[object]],
+    collections: Mapping[str, Sequence[object]],
 ) -> str:
     source_digests = []
     for source in sources:
@@ -640,12 +644,12 @@ def artifact_fingerprint(
 def artifact_pages(
     *,
     command: str,
-    collections: dict[str, list[object]],
+    collections: dict[str, list[T]],
     selected: str,
     cursor: str | None,
     limit: int,
     fingerprint: str,
-) -> dict[str, Page[object]]:
+) -> dict[str, Page[T]]:
     if selected not in collections:
         from infralink.cli.pagination import invalid_cursor
 
@@ -659,7 +663,7 @@ def artifact_pages(
         if cursor is not None
         else 0
     )
-    pages: dict[str, Page[object]] = {}
+    pages: dict[str, Page[T]] = {}
     for name, items in collections.items():
         collection_offset = offset if name == selected else 0
         page = page_items(items, limit=limit, offset=collection_offset, next_cursor="pending")
@@ -678,7 +682,7 @@ def continuation_actions(
     *,
     base_argv: list[str],
     limit: int,
-    pages: dict[str, Page[object]],
+    pages: Mapping[str, Page[T]],
     sources: dict[str, str],
 ) -> list[Action]:
     actions: list[Action] = []

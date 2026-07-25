@@ -364,6 +364,79 @@ def test_command_context_rejects_unsupported_structured_values() -> None:
         )
 
 
+def test_command_context_rejects_non_string_mapping_keys() -> None:
+    with pytest.raises(TypeError, match="non-string mapping key"):
+        command_context(["infralink"], [], {"nested": {1: "value"}}, [], {})
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        (
+            lambda: ok_envelope(
+                command="infralink",
+                context="infralink",
+                result={},
+                next_actions=[],
+            ),
+            "either context or command",
+        ),
+        (
+            lambda: ok_envelope(result={}),
+            "context and next_actions are required",
+        ),
+        (
+            lambda: error_envelope(
+                command="infralink",
+                context="infralink",
+                message="failed",
+                code="internal_error",
+                fix="Retry",
+                next_actions=[],
+            ),
+            "either context or command",
+        ),
+        (
+            lambda: error_envelope(
+                command="infralink",
+                failure="failed",
+                message="failed",
+                code="internal_error",
+                fix="Retry",
+                next_actions=[],
+            ),
+            "either failure or message",
+        ),
+        (
+            lambda: error_envelope(
+                failure="failed",
+                code="internal_error",
+                fix="Retry",
+                next_actions=[],
+            ),
+            "context is required",
+        ),
+        (
+            lambda: error_envelope(context="infralink", failure="failed"),
+            "legacy error envelope requires",
+        ),
+        (
+            lambda: error_envelope(
+                command_context(["infralink"], [], {}, [], {}),
+                "failed",
+            ),
+            "v1 error envelope requires",
+        ),
+    ],
+)
+def test_envelope_boundaries_reject_ambiguous_or_incomplete_calls(
+    call: Callable[[], dict[str, object]],
+    message: str,
+) -> None:
+    with pytest.raises(TypeError, match=message):
+        call()
+
+
 def test_ok_envelope_contains_structured_command_and_action() -> None:
     payload = ok_envelope(
         context=command_context(

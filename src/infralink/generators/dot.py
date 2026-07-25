@@ -85,9 +85,9 @@ def generate_dot(
 
             # Style based on criticality
             if edge.is_critical:
-                style = 'color=red, penwidth=2'
+                style = "color=red, penwidth=2"
             else:
-                style = 'color=black'
+                style = "color=black"
 
             label = f"{edge.target_service}:{edge.target_port}"
             lines.append(f'    {source_id} -> {target_id} [label="{label}", {style}];')

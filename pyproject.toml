@@ -114,4 +114,4 @@ warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --cov=infralink --cov-report=term-missing"
+addopts = "-v --cov=infralink --cov-branch --cov-report=term-missing --cov-fail-under=70"

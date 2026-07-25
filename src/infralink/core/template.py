@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import yaml
 
@@ -26,9 +27,7 @@ class ServiceTemplate:
 class ServiceTemplateSet:
     """Collection of service templates."""
 
-    def __init__(
-        self, templates: list[ServiceTemplate], schema_version: str = "1.0"
-    ) -> None:
+    def __init__(self, templates: list[ServiceTemplate], schema_version: str = "1.0") -> None:
         self._templates = {t.id: t for t in templates}
         self._schema_version = schema_version
 
@@ -46,20 +45,14 @@ class ServiceTemplateSet:
             return cls([], "1.0")
 
         schema = ServiceTemplateSetSchema(**data)
-        templates = [
-            ServiceTemplate(tid, t_schema)
-            for tid, t_schema in schema.templates.items()
-        ]
+        templates = [ServiceTemplate(tid, t_schema) for tid, t_schema in schema.templates.items()]
         return cls(templates, schema.schema_version)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ServiceTemplateSet:
         """Create service template set from dictionary."""
         schema = ServiceTemplateSetSchema(**data)
-        templates = [
-            ServiceTemplate(tid, t_schema)
-            for tid, t_schema in schema.templates.items()
-        ]
+        templates = [ServiceTemplate(tid, t_schema) for tid, t_schema in schema.templates.items()]
         return cls(templates, schema.schema_version)
 
     def get_template(self, template_id: str) -> ServiceTemplate | None:

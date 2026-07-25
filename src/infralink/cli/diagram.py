@@ -15,7 +15,7 @@ from infralink.cli.artifacts import (
     require_output,
     write_artifacts,
 )
-from infralink.cli.contracts import ArtifactResult
+from infralink.cli.contracts import ArtifactResult, ArtifactSummary
 from infralink.cli.main import (
     Context,
     _context_for,
@@ -101,7 +101,7 @@ def diagram(
     write_artifacts(output, generated)
     result = ArtifactResult(
         artifacts=pages["artifacts"],
-        summary={"artifact_count": len(artifacts)},
+        summary=ArtifactSummary(artifact_count=len(artifacts)),
     )
     base_argv = [
         *_root_source_argv(ctx),
