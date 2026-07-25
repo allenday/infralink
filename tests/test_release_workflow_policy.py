@@ -6,6 +6,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = PROJECT_ROOT / ".github" / "workflows" / "release-candidate.yml"
 RELEASE = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
+RELEASE_NOTES = PROJECT_ROOT / "docs" / "releases" / "v0.2.0.md"
 CI = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 SHA_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
@@ -215,6 +216,14 @@ def test_release_actions_and_tools_are_immutable() -> None:
         assert marker in RELEASE.read_text(encoding="utf-8")
     assert commands.count("sha256sum --check -") >= 3
     assert "--platform linux/amd64" not in commands
+
+
+def test_release_notes_publish_the_unprovisioned_trust_root_blocker() -> None:
+    notes = RELEASE_NOTES.read_text(encoding="utf-8")
+    assert "Promotion is currently blocked" in notes
+    assert "security/woodpecker-evidence-cosign.pub" in notes
+    assert "WOODPECKER_COSIGN_KEY_SHA256" in notes
+    assert "protected `release` environment" in notes
 
 
 def test_ci_matrix_and_release_gates_are_complete() -> None:
