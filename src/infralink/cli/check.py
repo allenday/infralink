@@ -133,6 +133,7 @@ def check(
         include_registry=True,
         include_edges=True,
         identifiers={
+            "requested_edge_ids": json.dumps(sorted(edge_ids)),
             "selected_edge_ids": json.dumps([edge.id for edge in edges_to_check]),
             "edge_type": str(edge_type),
             "criticality": str(criticality),

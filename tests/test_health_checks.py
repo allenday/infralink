@@ -1,4 +1,5 @@
 import errno
+import urllib.error
 
 import pytest
 
@@ -29,7 +30,7 @@ class _Resolver:
         return "192.0.2.1"
 
 
-def _edge() -> Edge:
+def _edge(check_type: str = "tcp") -> Edge:
     return Edge(
         {
             "id": "00000000-0000-4000-8000-000000000001",
@@ -40,7 +41,7 @@ def _edge() -> Edge:
                 "service": "postgresql",
                 "port": 5432,
             },
-            "healthcheck": {"type": "tcp"},
+            "healthcheck": {"type": check_type},
         }
     )
 
@@ -107,3 +108,110 @@ def test_unknown_typed_error_code_is_normalized_to_check_failed() -> None:
     )
 
     assert normalize_health_result(result) == ("unhealthy", "check_failed")
+
+
+class _RedisSocket:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def settimeout(self, timeout: int) -> None:
+        pass
+
+    def connect(self, endpoint: tuple[str, int]) -> None:
+        raise self.error
+
+
+def test_http_url_timeout_has_typed_code_without_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canary = "timeout-provider-canary"
+
+    def timeout(*args, **kwargs):
+        raise urllib.error.URLError(TimeoutError(canary))
+
+    monkeypatch.setattr("urllib.request.urlopen", timeout)
+
+    result = check_edge_health(_edge("http"), _Resolver(), timeout=2)  # type: ignore[arg-type]
+
+    assert result.error_code == "timeout"
+    assert normalize_health_result(result) == ("unavailable", "timeout")
+    assert canary not in (result.message or "")
+
+
+def test_http_url_errno_reason_has_typed_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refused(*args, **kwargs):
+        raise urllib.error.URLError(errno.ECONNREFUSED)
+
+    monkeypatch.setattr("urllib.request.urlopen", refused)
+
+    result = check_edge_health(_edge("http"), _Resolver(), timeout=2)  # type: ignore[arg-type]
+
+    assert result.error_code == "connection_refused"
+
+
+def test_redis_connection_refused_has_typed_code_without_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canary = "redis-provider-canary"
+    monkeypatch.setattr(
+        "infralink.health.checks.socket.socket",
+        lambda *args, **kwargs: _RedisSocket(ConnectionRefusedError(canary)),
+    )
+
+    result = check_edge_health(_edge("ping"), _Resolver(), timeout=2)  # type: ignore[arg-type]
+
+    assert result.error_code == "connection_refused"
+    assert normalize_health_result(result) == ("unavailable", "connection_refused")
+    assert canary not in (result.message or "")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (RuntimeError("library-provider-canary"), "network_unreachable"),
+        (ValueError("fallback-provider-canary"), "check_failed"),
+    ],
+)
+def test_redis_wrapped_cause_and_fallback_have_stable_codes(
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+    expected_code: str,
+) -> None:
+    if isinstance(error, RuntimeError):
+        error.__cause__ = OSError(errno.ENETUNREACH, "os-provider-canary")
+    monkeypatch.setattr(
+        "infralink.health.checks.socket.socket",
+        lambda *args, **kwargs: _RedisSocket(error),
+    )
+
+    result = check_edge_health(_edge("ping"), _Resolver(), timeout=2)  # type: ignore[arg-type]
+
+    assert result.error_code == expected_code
+    assert "canary" not in (result.message or "")
+
+
+class _HttpResponse:
+    status = 503
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+def test_http_non_success_status_is_stable_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: _HttpResponse(),
+    )
+
+    result = check_edge_health(_edge("http"), _Resolver(), timeout=2)  # type: ignore[arg-type]
+
+    assert result.error_code == "http_error"
+    assert result.message == "HTTP request failed"
+    assert normalize_health_result(result) == ("unhealthy", "http_error")

@@ -320,6 +320,55 @@ def test_check_cursor_ignores_recomputed_health_observations_but_binds_timeout(
     )
 
 
+@pytest.mark.parametrize(
+    "changed_requested_ids",
+    [
+        (
+            "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+            "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+            "7cfa416b-927f-4ae1-b59e-1f2df1d7220b",
+            "unmatched-b",
+        ),
+        (
+            "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+            "7cfa416b-927f-4ae1-b59e-1f2df1d7220b",
+            "unmatched-a",
+        ),
+    ],
+)
+def test_check_cursor_binds_canonical_requested_ids_including_unmatched_and_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+    changed_requested_ids: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(
+        "infralink.cli.check.check_edge_health",
+        lambda edge, resolver, timeout: _health(edge.id, healthy=True),
+    )
+    requested_ids = (
+        "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+        "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+        "7cfa416b-927f-4ae1-b59e-1f2df1d7220b",
+        "unmatched-a",
+    )
+    first_args = [item for edge_id in requested_ids for item in ("--edge", edge_id)]
+    first = json.loads(_invoke(*first_args, "--limit", "1").output)
+    cursor = first["result"]["checks"]["page"]["next_cursor"]
+    changed_args = [item for edge_id in changed_requested_ids for item in ("--edge", edge_id)]
+
+    changed = _invoke(
+        *changed_args,
+        "--limit",
+        "1",
+        "--collection",
+        "checks",
+        "--cursor",
+        cursor,
+    )
+
+    assert changed.exit_code == 2
+    assert json.loads(changed.output)["error"]["code"] == "invalid_cursor"
+
+
 def test_check_expected_load_failure_and_unexpected_failure_use_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
