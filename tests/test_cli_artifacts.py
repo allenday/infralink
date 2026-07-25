@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 import infralink.cli.artifacts as artifact_helpers
 from infralink.cli.artifacts import write_artifacts
+from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.main import cli
 from tests.cli_helpers import assert_schema
 
@@ -346,6 +349,7 @@ def test_artifact_continuation_action_is_executable_and_source_preserving(
 
     assert second.exit_code == 0
     assert continuation["bindings"]["cursor"]["source"] == ("result.artifacts.page.next_cursor")
+    assert continuation["safe"] is False
     assert continuation["argv"][1:5] == [
         "--registry",
         str(registry),
@@ -632,6 +636,263 @@ def test_analyze_input_failure_context_resolves_command_registry_override(
     assert result.exit_code == 3
     assert payload["error"]["code"] == "input_load_failed"
     assert payload["command"]["resolved"]["registry"] == str(missing_override)
+
+
+def test_analyze_public_registry_artifact_allowlists_nested_topology(
+    tmp_path: Path,
+) -> None:
+    canary = "nested-artifact-secret-canary"
+    registry = tmp_path / "registry.yml"
+    registry.write_text(
+        f"""
+hosts:
+  11111111-1111-4111-8111-111111111111:
+    canonical_name: useful-host
+    status: active
+    group: core
+    cloud: test-cloud
+    roles: [api]
+    password: {canary}
+    provider_metadata:
+      nested:
+        token: {canary}
+    services:
+      api:
+        port: 8443
+        protocol: https
+        password: {canary}
+    service_dependencies:
+      api:
+        - host: 22222222-2222-4222-8222-222222222222
+          service: postgres
+          port: 5432
+          notes: {canary}
+ansible_defaults:
+  password: {canary}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(
+            cli,
+            [
+                "analyze",
+                "--registry",
+                str(registry),
+                "--output",
+                "generated",
+            ],
+        )
+        artifact_bodies = b"\n".join(
+            path.read_bytes() for path in Path("generated").rglob("*") if path.is_file()
+        )
+        public_registry = yaml.safe_load(Path("generated/registry.yml").read_text())
+    assert result.exit_code == 0
+    assert canary not in result.output
+    assert canary.encode() not in artifact_bodies
+    host = public_registry["hosts"]["11111111-1111-4111-8111-111111111111"]
+    assert host["canonical_name"] == "useful-host"
+    assert host["status"] == "active"
+    assert host["group"] == "core"
+    assert host["roles"] == ["api"]
+    assert host["services"]["api"] == {"port": 8443, "protocol": "https"}
+    assert "provider_metadata" not in host
+    assert "ansible_defaults" not in public_registry
+
+
+@pytest.mark.parametrize(
+    "canonical_names",
+    [
+        ("duplicate", "duplicate"),
+        ("index", "other"),
+    ],
+)
+def test_docs_rejects_duplicate_generated_paths_before_writing(
+    tmp_path: Path,
+    canonical_names: tuple[str, str],
+) -> None:
+    registry, edges = _write_topology(tmp_path)
+    data = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    for host, canonical_name in zip(data["hosts"].values(), canonical_names, strict=True):
+        host["canonical_name"] = canonical_name
+    registry.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    with CliRunner().isolated_filesystem(temp_dir=tmp_path):
+        result = CliRunner().invoke(
+            cli,
+            [
+                "--registry",
+                str(registry),
+                "--edges",
+                str(edges),
+                "docs",
+                "--output",
+                "generated",
+            ],
+        )
+        assert not Path("generated").exists()
+    payload = _payload(result)
+
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "usage_error"
+
+
+def test_artifact_metadata_rejects_duplicate_relative_paths() -> None:
+    from infralink.cli.artifacts import artifact_metadata
+
+    generated = [
+        (Path("same.txt"), "text/plain", b"first"),
+        (Path("same.txt"), "text/plain", b"second"),
+    ]
+
+    with pytest.raises(CliFailure) as failure:
+        artifact_metadata(Path("generated"), generated)
+    assert failure.value.code == ErrorCode.USAGE_ERROR
+
+
+def test_artifact_transaction_preflight_preserves_earlier_target(
+    tmp_path: Path,
+) -> None:
+    tmp_path.joinpath("generated").mkdir()
+    first = tmp_path / "generated/first.txt"
+    first.write_bytes(b"original-first")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside")
+    (tmp_path / "generated/later.txt").symlink_to(outside)
+
+    with pytest.raises(CliFailure) as failure:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.chdir(tmp_path)
+            write_artifacts(
+                Path("generated"),
+                [
+                    (Path("first.txt"), "text/plain", b"new-first"),
+                    (Path("later.txt"), "text/plain", b"new-later"),
+                ],
+            )
+
+    assert failure.value.code == ErrorCode.USAGE_ERROR
+    assert first.read_bytes() == b"original-first"
+    assert outside.read_bytes() == b"outside"
+
+
+def test_artifact_transaction_rolls_back_later_commit_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    (output / "first.txt").write_bytes(b"original-first")
+    (output / "later.txt").write_bytes(b"original-later")
+    real_replace = os.replace
+
+    def failing_replace(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        if destination == "later.txt" and ".tmp-" in str(source):
+            raise OSError(errno.EIO, "write-failure-canary")
+        return real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(artifact_helpers.os, "replace", failing_replace)
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [
+                (Path("first.txt"), "text/plain", b"new-first"),
+                (Path("later.txt"), "text/plain", b"new-later"),
+            ],
+        )
+
+    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert "canary" not in failure.value.message
+    assert (output / "first.txt").read_bytes() == b"original-first"
+    assert (output / "later.txt").read_bytes() == b"original-later"
+    assert not list(output.glob(".infralink-*"))
+
+
+def test_artifact_transaction_cleans_new_directories_after_enospc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    real_open = os.open
+    staged = 0
+
+    def failing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal staged
+        if flags & os.O_EXCL:
+            staged += 1
+            if staged == 2:
+                raise OSError(errno.ENOSPC, "disk-full-canary")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(artifact_helpers.os, "open", failing_open)
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            Path("generated"),
+            [
+                (Path("one/first.txt"), "text/plain", b"first"),
+                (Path("two/later.txt"), "text/plain", b"later"),
+            ],
+        )
+
+    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert "canary" not in failure.value.message
+    assert not Path("generated").exists()
+
+
+def test_artifact_transaction_retries_after_stale_temp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    stale = output / ".infralink-txn-stale.tmp"
+    stale.write_bytes(b"stale")
+
+    write_artifacts(
+        output,
+        [(Path("result.txt"), "text/plain", b"complete")],
+    )
+
+    assert (output / "result.txt").read_bytes() == b"complete"
+    assert not stale.exists()
+
+
+def test_artifact_commands_fail_before_mutation_on_unsupported_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, edges = _write_topology(tmp_path)
+    monkeypatch.setattr(
+        artifact_helpers,
+        "_SECURE_ARTIFACT_WRITES_SUPPORTED",
+        False,
+    )
+    with CliRunner().isolated_filesystem(temp_dir=tmp_path):
+        result = CliRunner().invoke(
+            cli,
+            [
+                "--registry",
+                str(registry),
+                "--edges",
+                str(edges),
+                "diagram",
+                "--output",
+                "generated",
+            ],
+        )
+        assert not Path("generated").exists()
+    payload = _payload(result)
+
+    assert result.exit_code == 69
+    assert payload["error"]["code"] == "provider_unavailable"
 
 
 @pytest.mark.parametrize(

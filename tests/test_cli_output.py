@@ -176,6 +176,17 @@ def test_action_without_bindings_is_not_templated() -> None:
     assert first.bindings is not second.bindings
 
 
+def test_action_can_explicitly_mark_mutating_commands_unsafe() -> None:
+    result = action(
+        "continue",
+        ["infralink", "diagram", "--output", "generated"],
+        "Regenerate the next artifact page",
+        safe=False,
+    )
+
+    assert result.safe is False
+
+
 def test_sensitive_options_are_exact() -> None:
     assert SENSITIVE_OPTIONS == {
         "--access-token",

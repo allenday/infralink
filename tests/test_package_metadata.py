@@ -54,6 +54,17 @@ def test_project_urls_are_canonical() -> None:
     }
 
 
+def test_artifact_commands_publish_their_posix_platform_boundary() -> None:
+    project = load_pyproject()["project"]
+    classifiers = set(project["classifiers"])
+
+    assert "Operating System :: POSIX :: Linux" in classifiers
+    assert "Operating System :: OS Independent" not in classifiers
+    assert "Artifact-generating commands require POSIX" in (PROJECT_ROOT / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_release_wheel_contains_importable_package(tmp_path: Path) -> None:
     dist_dir = tmp_path / "dist"
     subprocess.run(

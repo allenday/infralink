@@ -35,6 +35,49 @@ def _host_id(name: str, host_data: dict[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+_PUBLIC_HOST_FIELDS = (
+    "canonical_name",
+    "status",
+    "group",
+    "cloud",
+    "tailscale_ip",
+    "tailscale_name",
+    "public_ip",
+    "private_ip",
+)
+_PUBLIC_SERVICE_FIELDS = ("port", "protocol", "exposure")
+
+
+def _public_host(name: str, raw_host: dict[str, Any]) -> dict[str, Any]:
+    host = {
+        field: raw_host[field]
+        for field in _PUBLIC_HOST_FIELDS
+        if isinstance(raw_host.get(field), (str, int, bool))
+    }
+    host.setdefault("canonical_name", name)
+
+    roles = raw_host.get("roles")
+    if isinstance(roles, list):
+        host["roles"] = [role for role in roles if isinstance(role, str)]
+
+    services = raw_host.get("services")
+    if isinstance(services, list):
+        host["services"] = [service for service in services if isinstance(service, str)]
+    elif isinstance(services, dict):
+        public_services: dict[str, Any] = {}
+        for service_name, service in sorted(services.items()):
+            if not isinstance(service_name, str):
+                continue
+            if isinstance(service, dict):
+                public_services[service_name] = {
+                    field: service[field]
+                    for field in _PUBLIC_SERVICE_FIELDS
+                    if isinstance(service.get(field), (str, int, bool))
+                }
+        host["services"] = public_services
+    return host
+
+
 def convert_to_uuid_primary(
     data: dict[str, Any],
     diagnostics: list[Diagnostic],
@@ -63,13 +106,8 @@ def convert_to_uuid_primary(
                 )
             )
             continue
-        host_copy = {key: value for key, value in raw_host.items() if key != "uuid"}
-        host_copy.setdefault("canonical_name", str(name))
-        new_hosts[identity] = host_copy
-    return {
-        "hosts": new_hosts,
-        "ansible_defaults": data.get("ansible_defaults", {}),
-    }
+        new_hosts[identity] = _public_host(str(name), raw_host)
+    return {"hosts": new_hosts}
 
 
 def infer_edges_from_dependencies(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -112,10 +150,7 @@ def infer_edges_from_dependencies(data: dict[str, Any]) -> list[dict[str, Any]]:
                             "service": target_service,
                             "port": dependency.get("port") or 3306,
                         },
-                        "metadata": {
-                            "source": "service_dependencies",
-                            "notes": dependency.get("notes"),
-                        },
+                        "metadata": {"source": "service_dependencies"},
                     }
                 )
     return sorted(edges, key=lambda edge: str(edge["id"]))

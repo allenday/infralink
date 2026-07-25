@@ -14,6 +14,9 @@ Infralink provides tools for:
 
 ## Installation
 
+Artifact-generating commands require POSIX/Linux filesystem semantics for secure,
+transactional writes. Other CLI commands remain portable.
+
 ```bash
 # From source
 pip install -e .
