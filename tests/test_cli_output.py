@@ -75,6 +75,24 @@ def test_cli_failure_is_frozen_and_defaults_are_independent() -> None:
         first.message = "changed"
 
 
+def test_cli_failure_only_allows_exception_runtime_mutation() -> None:
+    failure = CliFailure(ErrorCode.INTERNAL_ERROR, "boom", 70, "Retry")
+
+    failure.__traceback__ = None
+    failure.__context__ = None
+    failure.__cause__ = None
+    failure.__suppress_context__ = False
+
+    for operation in (
+        lambda: setattr(failure, "args", ("changed",)),
+        lambda: setattr(failure, "arbitrary", "value"),
+        lambda: delattr(failure, "message"),
+        lambda: delattr(failure, "args"),
+    ):
+        with pytest.raises(FrozenInstanceError):
+            operation()
+
+
 def test_cli_failure_copies_boundaries_and_logs_only_its_message() -> None:
     details = {"attempt": {"hosts": ["one"]}}
     repair = action("retry", ["infralink", "check"], "Retry")
@@ -134,9 +152,7 @@ def test_cli_failure_reconstructs_with_isolated_nested_data(
 
 def test_action_is_typed_canonical_and_does_not_alias_inputs() -> None:
     argv = ["infralink", "host", "show", "host with spaces"]
-    bindings = {
-        "host_id": Binding(type="string", required=True, source="result.items[].id")
-    }
+    bindings = {"host_id": Binding(type="string", required=True, source="result.items[].id")}
 
     result = action("show", argv, "Show host", bindings=bindings)
     argv.append("--json")
@@ -375,12 +391,13 @@ def test_ok_envelope_preserves_required_nullable_result_fields() -> None:
         summary={"total": 1, "healthy": 0, "unhealthy": 1},
     )
 
-    payload = ok_envelope(command_context(["infralink", "check"], ["check"], {}, [], {}), result, [])
+    payload = ok_envelope(
+        command_context(["infralink", "check"], ["check"], {}, [], {}), result, []
+    )
     schema = json.loads(
-        (
-            Path(__file__).parents[1]
-            / "src/infralink/schemas/cli/v1/check.json"
-        ).read_text(encoding="utf-8")
+        (Path(__file__).parents[1] / "src/infralink/schemas/cli/v1/check.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     Draft202012Validator(schema).validate(payload)

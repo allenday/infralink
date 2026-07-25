@@ -30,7 +30,7 @@ class CliFailure(Exception):
     next_actions: list[Action] = field(default_factory=list)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        immutable_fields = {
+        declared_fields = {
             "code",
             "message",
             "exit_code",
@@ -38,9 +38,32 @@ class CliFailure(Exception):
             "details",
             "next_actions",
         }
-        if name in immutable_fields and hasattr(self, name):
+        runtime_fields = {
+            "__cause__",
+            "__context__",
+            "__notes__",
+            "__suppress_context__",
+            "__traceback__",
+        }
+        if name in runtime_fields:
+            object.__setattr__(self, name, value)
+            return
+        if name in declared_fields and not hasattr(self, name):
+            object.__setattr__(self, name, value)
+            return
+        raise FrozenInstanceError(f"cannot assign to field {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        runtime_fields = {
+            "__cause__",
+            "__context__",
+            "__notes__",
+            "__suppress_context__",
+            "__traceback__",
+        }
+        if name not in runtime_fields:
             raise FrozenInstanceError(f"cannot assign to field {name!r}")
-        object.__setattr__(self, name, value)
+        object.__delattr__(self, name)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "details", deepcopy(self.details))

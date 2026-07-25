@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import click
 
-from infralink.cli.main import Context, pass_context
-from infralink.cli.output import error_envelope, ok_envelope
+from infralink.cli.actions import action
+from infralink.cli.errors import CliFailure, ErrorCode
+from infralink.cli.main import Context, entity_not_found, pass_context
+from infralink.cli.output import ok_envelope
 
 
 @click.command()
@@ -82,36 +85,45 @@ def resolve(
     try:
         registry = ctx.registry
         edges = ctx.edges
-    except Exception as exc:
-        payload = error_envelope(
-            command,
-            str(exc),
-            "RESOLVE_FAILED",
-            "Ensure registry/edges paths are correct.",
-            [{"command": "infralink validate", "description": "Validate registry and edges"}],
-        )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+    except CliFailure:
+        raise
+    except Exception:
+        raise CliFailure(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="Resolve could not start",
+            exit_code=70,
+            fix="Retry the command or report the failure",
+            details={},
+            next_actions=[],
+        ) from None
 
     resolver = EdgeResolver(registry, edges)
+    if edges.get(edge_id) is None:
+        raise entity_not_found("edge", edge_id)
 
     # Get password from environment if specified
     if password_env:
         password = os.environ.get(password_env)
         if not password:
-            payload = error_envelope(
-                command,
-                f"Environment variable not set: {password_env}",
-                "RESOLVE_PASSWORD_ENV_MISSING",
-                f"Export {password_env} and re-run.",
-                [{"command": "env | grep PASSWORD", "description": "Inspect environment vars"}],
+            raise CliFailure(
+                code=ErrorCode.INPUT_LOAD_FAILED,
+                message="Password environment variable is not set",
+                exit_code=3,
+                fix="Set the requested password environment variable and retry",
+                details={},
+                next_actions=[
+                    action(
+                        "help",
+                        ["infralink", "help", "resolve"],
+                        "Show resolve options",
+                    )
+                ],
             )
-            click.echo(json.dumps(payload))
-            raise SystemExit(1)
 
     try:
         edge = resolver.get_edge(edge_id)
         target_host = resolver.get_target_host(edge_id)
+        result: dict[str, Any]
 
         if output_format == "ip":
             result = {"ip": resolver.get_target_ip(edge_id, prefer_ip)}
@@ -147,7 +159,7 @@ def resolve(
             prefix = edge_id.upper().replace("-", "_")
             ip = resolver.get_target_ip(edge_id, prefer_ip)
             port = edge.target_port
-            env_vars = {
+            env_vars: dict[str, Any] = {
                 f"{prefix}_HOST": ip,
                 f"{prefix}_PORT": port,
                 f"{prefix}_ENDPOINT": f"{ip}:{port}",
@@ -165,18 +177,20 @@ def resolve(
             result,
             [
                 {"command": "infralink edges-list", "description": "List all edges"},
-                {"command": f"infralink resolve {edge_id} --format json", "description": "Resolve as JSON"},
+                {
+                    "command": f"infralink resolve {edge_id} --format json",
+                    "description": "Resolve as JSON",
+                },
             ],
         )
         click.echo(json.dumps(payload))
 
-    except ResolutionError as e:
-        payload = error_envelope(
-            command,
-            str(e),
-            "RESOLUTION_FAILED",
-            "Verify edge ID and registry/edges consistency.",
-            [{"command": "infralink edges-list", "description": "List all edges"}],
-        )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+    except ResolutionError:
+        raise CliFailure(
+            code=ErrorCode.INPUT_LOAD_FAILED,
+            message="Edge could not be resolved",
+            exit_code=3,
+            fix="Verify the edge and its target host declarations",
+            details={},
+            next_actions=[action("list", ["infralink", "edges-list"], "List all edges")],
+        ) from None

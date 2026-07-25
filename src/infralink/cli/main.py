@@ -21,11 +21,19 @@ from infralink.cli.contracts import (
     CommandDescriptor,
     HelpResult,
     OptionDescriptor,
+    PageInfo,
     RootResult,
+    ServiceListResult,
+    ServiceSummary,
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode
-from infralink.cli.output import command_context, error_envelope, ok_envelope
+from infralink.cli.output import (
+    command_context,
+    error_envelope,
+    ok_envelope,
+    redact_argv,
+)
 
 # Default paths (can be overridden)
 DEFAULT_REGISTRY = "examples/registry.yml"
@@ -33,6 +41,7 @@ DEFAULT_EDGES = "examples/edges.yml"
 _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
+ROOT_COMMANDS = ("help", "services", "version")
 
 
 class Context:
@@ -52,27 +61,18 @@ class Context:
         if self._registry is None:
             from infralink.core.registry import Registry
 
-            if self.registry_path and self.registry_path.exists():
+            path = str(self.registry_path)
+            if not self.registry_path or not self.registry_path.exists():
+                raise input_load_failed("registry", path)
+            try:
                 if self.registry_path.is_dir():
                     self._registry = Registry.load_dir(self.registry_path)
                 else:
                     self._registry = Registry.load(self.registry_path)
-            else:
-                path = str(self.registry_path)
-                raise CliFailure(
-                    code=ErrorCode.INPUT_LOAD_FAILED,
-                    message="Registry could not be loaded",
-                    exit_code=3,
-                    fix="Provide an existing registry with --registry",
-                    details={"source": "registry", "path": path},
-                    next_actions=[
-                        action(
-                            "help",
-                            ["infralink", "help", "validate"],
-                            "Show validation input options",
-                        )
-                    ],
-                )
+            except CliFailure:
+                raise
+            except Exception:
+                raise input_load_failed("registry", path) from None
         return self._registry
 
     @property
@@ -82,7 +82,11 @@ class Context:
             from infralink.core.edges import EdgeSet
 
             if self.edges_path and self.edges_path.exists():
-                self._edges = EdgeSet.load(self.edges_path)
+                path = str(self.edges_path)
+                try:
+                    self._edges = EdgeSet.load(self.edges_path)
+                except Exception:
+                    raise input_load_failed("edges", path) from None
             else:
                 # Try loading from registry
                 import yaml
@@ -96,16 +100,19 @@ class Context:
                         # Actually, EdgeSet.from_registry expects a dict.
                         # I will check if registry is already loaded.
                         if self._registry:
-                             # This is tricky because self._registry is a Registry object, not a dict.
-                             # But Registry has an applications property, etc.
-                             # For now, if it is a directory, we just default to empty if edges.yml is missing.
-                             self._edges = EdgeSet([])
+                            # This is tricky because self._registry is a Registry object, not a dict.
+                            # But Registry has an applications property, etc.
+                            # For now, if it is a directory, we just default to empty if edges.yml is missing.
+                            self._edges = EdgeSet([])
                         else:
-                             self._edges = EdgeSet([])
+                            self._edges = EdgeSet([])
                     else:
-                        with self.registry_path.open() as f:
-                            data = yaml.safe_load(f)
-                        self._edges = EdgeSet.from_registry(data)
+                        try:
+                            with self.registry_path.open() as f:
+                                data = yaml.safe_load(f)
+                            self._edges = EdgeSet.from_registry(data)
+                        except Exception:
+                            raise input_load_failed("registry", str(self.registry_path)) from None
                 else:
                     self._edges = EdgeSet([])
         return self._edges
@@ -133,7 +140,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "usage": "infralink diagram",
     },
     "docs": {"description": "Generate documentation outputs.", "usage": "infralink docs"},
-    "resolve": {"description": "Resolve an edge to targets.", "usage": "infralink resolve <edge-id>"},
+    "resolve": {
+        "description": "Resolve an edge to targets.",
+        "usage": "infralink resolve <edge-id>",
+    },
     "validate": {
         "description": "Validate registry and edges.",
         "usage": "infralink validate",
@@ -190,55 +200,55 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink app show core"],
     },
     ("host",): {
-        "description": "Inspect hosts.",
+        "description": "Unavailable until host detail commands are implemented.",
         "arguments": [],
         "options": [],
         "examples": ["infralink host show host-1"],
     },
     ("host", "show"): {
-        "description": "Show one host.",
+        "description": "Unavailable until host detail commands are implemented.",
         "arguments": [{"name": "host_id", "type": "string", "required": True}],
         "options": [],
         "examples": ["infralink host show host-1"],
     },
     ("edge",): {
-        "description": "Inspect edges.",
+        "description": "Unavailable until edge detail commands are implemented.",
         "arguments": [],
         "options": [],
         "examples": ["infralink edge show edge-1"],
     },
     ("edge", "show"): {
-        "description": "Show one edge.",
+        "description": "Unavailable until edge detail commands are implemented.",
         "arguments": [{"name": "edge_id", "type": "string", "required": True}],
         "options": [],
         "examples": ["infralink edge show edge-1"],
     },
     ("service",): {
-        "description": "Inspect services.",
+        "description": "Unavailable until service detail commands are implemented.",
         "arguments": [],
         "options": [],
         "examples": ["infralink service show api"],
     },
     ("service", "show"): {
-        "description": "Show one service.",
+        "description": "Unavailable until service detail commands are implemented.",
         "arguments": [{"name": "service_id", "type": "string", "required": True}],
         "options": [],
         "examples": ["infralink service show api"],
     },
     ("secrets",): {
-        "description": "Inspect and audit secret references.",
+        "description": "Unavailable until secret commands are implemented.",
         "arguments": [],
         "options": [],
         "examples": ["infralink secrets inspect"],
     },
     ("secrets", "inspect"): {
-        "description": "Inspect declared secret references.",
+        "description": "Unavailable until secret commands are implemented.",
         "arguments": [],
         "options": [{"name": "ref", "type": "string", "required": False}],
         "examples": ["infralink secrets inspect"],
     },
     ("secrets", "audit"): {
-        "description": "Audit secret references against a provider.",
+        "description": "Unavailable until secret commands are implemented.",
         "arguments": [],
         "options": [{"name": "provider", "type": "string", "required": False}],
         "examples": ["infralink secrets audit"],
@@ -246,36 +256,156 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
 }
 
 
-def _context_for(
-    argv: list[str] | None = None, path: list[str] | None = None
-) -> CommandContext:
+def _context_for(argv: list[str] | None = None, path: list[str] | None = None) -> CommandContext:
     active_argv = argv
     if active_argv is None:
         active_argv = _INVOCATION_ARGS.get() or []
+    redacted_argv = redact_argv(active_argv)
+    parsed_path, parsed_args, root_values = _parse_invocation(redacted_argv)
+    resolved = {
+        "version": __version__,
+        "cwd": os.getcwd(),
+        "registry": str(root_values.get("registry", DEFAULT_REGISTRY)),
+        "edges": str(root_values.get("edges", DEFAULT_EDGES)),
+        "output": root_values.get("output", "json"),
+        "verbose": bool(root_values.get("verbose", False)),
+    }
     return command_context(
-        ["infralink", *active_argv],
-        path=path if path is not None else _command_path(active_argv),
-        args={},
-        flags=[item for item in active_argv if item.startswith("-")],
-        resolved={"version": __version__, "cwd": os.getcwd()},
+        ["infralink", *redacted_argv],
+        path=path if path is not None else parsed_path,
+        args=parsed_args,
+        flags=[item for item in redacted_argv if item.startswith("-")],
+        resolved=resolved,
     )
 
 
-def _command_path(argv: list[str]) -> list[str]:
-    path: list[str] = []
+def input_load_failed(source: str, path: str) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.INPUT_LOAD_FAILED,
+        message=f"{source.title()} could not be loaded",
+        exit_code=3,
+        fix=f"Provide a valid {source} input",
+        details={"source": source, "path": path},
+        next_actions=[
+            action(
+                "help",
+                ["infralink", "help", "validate"],
+                "Show validation input options",
+            )
+        ],
+    )
+
+
+def _protected_args(ctx: click.Context) -> list[str]:
+    return list(getattr(ctx, "_protected_args", []))
+
+
+def _parse_invocation(
+    argv: list[str],
+) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
+    root_ctx = cli.make_context("infralink", list(argv), resilient_parsing=True)
+    root_values = dict(root_ctx.params)
+    protected = _protected_args(root_ctx)
+    if not protected:
+        return [], {}, root_values
+
+    name = protected[0]
+    path = [name]
+    command = _load_command(name)
+    remaining = list(root_ctx.args)
+    if command is None:
+        candidate = tuple([name, *[item for item in remaining if not item.startswith("-")]][:2])
+        if candidate in HELP_METADATA:
+            path = list(candidate)
+        return path, {}, root_values
+
+    current = command
+    while isinstance(current, click.Group):
+        command_ctx = current.make_context(
+            f"infralink {' '.join(path)}",
+            list(remaining),
+            resilient_parsing=True,
+        )
+        nested = _protected_args(command_ctx)
+        if not nested:
+            return path, {}, root_values
+        child_name = nested[0]
+        child = current.get_command(command_ctx, child_name)
+        if child is None:
+            return path, {}, root_values
+        path.append(child_name)
+        current = child
+        remaining = list(command_ctx.args)
+
+    command_ctx = current.make_context(
+        f"infralink {' '.join(path)}",
+        list(remaining),
+        resilient_parsing=True,
+    )
+    positional_names = {
+        parameter.name
+        for parameter in current.params
+        if isinstance(parameter, click.Argument) and parameter.name
+    }
+    parsed_args = {
+        name: value
+        for name, value in command_ctx.params.items()
+        if name in positional_names and value is not None
+    }
+    if not parsed_args:
+        positional_values = _declared_positionals(current, remaining)
+        argument_parameters = [
+            parameter
+            for parameter in current.params
+            if isinstance(parameter, click.Argument) and parameter.name
+        ]
+        parsed_args = {
+            parameter.name: value
+            for parameter, value in zip(argument_parameters, positional_values, strict=False)
+        }
+    return path, parsed_args, root_values
+
+
+def _declared_positionals(command: click.Command, argv: list[str]) -> list[str]:
+    options = {
+        option: parameter
+        for parameter in command.params
+        if isinstance(parameter, click.Option)
+        for option in parameter.opts
+    }
+    values: list[str] = []
     index = 0
-    options_with_values = {"-r", "--registry", "-e", "--edges", "-o", "--output"}
     while index < len(argv):
-        item = argv[index]
-        if item in options_with_values:
-            index += 2
-            continue
-        if item.startswith("-"):
-            index += 1
-            continue
-        path.append(item)
+        token = argv[index]
+        option_name = token.partition("=")[0]
+        parameter = options.get(option_name)
+        if parameter is None and token.startswith("-") and not token.startswith("--"):
+            parameter = next(
+                (
+                    candidate
+                    for option, candidate in options.items()
+                    if token.startswith(option) and len(token) > len(option)
+                ),
+                None,
+            )
+        if parameter is not None:
+            if (
+                not parameter.is_flag
+                and "=" not in token
+                and not (
+                    token.startswith("-")
+                    and not token.startswith("--")
+                    and any(
+                        token.startswith(option) and len(token) > len(option)
+                        for option in parameter.opts
+                    )
+                )
+            ):
+                index += parameter.nargs
+        elif not token.startswith("-"):
+            values.append(token)
         index += 1
-    return path[:2]
+    return values
 
 
 def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
@@ -286,24 +416,8 @@ def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
     if "--help" not in argv:
         return argv
 
-    help_index = argv.index("--help")
-    prefix = argv[:help_index]
-    global_prefix: list[str] = []
-    path: list[str] = []
-    index = 0
-    options_with_values = {"-r", "--registry", "-e", "--edges", "-o", "--output"}
-    while index < len(prefix):
-        item = prefix[index]
-        if not path and item in options_with_values and index + 1 < len(prefix):
-            global_prefix.extend(prefix[index : index + 2])
-            index += 2
-            continue
-        if not path and item == "--verbose":
-            global_prefix.append(item)
-        else:
-            path.append(item)
-        index += 1
-    return [*global_prefix, "help", *path]
+    path, _, _ = _parse_invocation(redact_argv(argv[: argv.index("--help")]))
+    return ["help", *path]
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -312,37 +426,60 @@ def _emit(payload: dict[str, Any]) -> None:
 
 def _help_result(path: tuple[str, ...]) -> HelpResult:
     metadata = HELP_METADATA.get(path)
-    if metadata is None and len(path) == 1 and path[0] in COMMAND_METADATA:
-        command = _load_command(path[0])
-        if command is not None:
-            arguments = []
-            options = []
-            for parameter in command.params:
-                if isinstance(parameter, click.Argument):
-                    arguments.append(
-                        ArgumentDescriptor(
-                            name=parameter.name or "",
-                            type=parameter.type.name,
-                            required=parameter.required,
-                        )
+    command = _command_for_path(path)
+    if command is not None:
+        arguments = []
+        options = []
+        for parameter in command.params:
+            if isinstance(parameter, click.Argument):
+                arguments.append(
+                    ArgumentDescriptor(
+                        name=parameter.name or "",
+                        type=parameter.type.name,
+                        required=parameter.required,
                     )
-                elif isinstance(parameter, click.Option):
-                    options.append(
-                        OptionDescriptor(
-                            name=parameter.name or "",
-                            type=parameter.type.name,
-                            required=parameter.required,
-                        )
+                )
+            elif isinstance(parameter, click.Option):
+                long_option = next(
+                    (option for option in parameter.opts if option.startswith("--")),
+                    parameter.name or "",
+                )
+                options.append(
+                    OptionDescriptor(
+                        name=long_option.removeprefix("--").replace("-", "_"),
+                        type=parameter.type.name,
+                        required=parameter.required,
                     )
-            metadata = {
-                "description": COMMAND_METADATA[path[0]]["description"],
-                "arguments": arguments,
-                "options": options,
-                "examples": [COMMAND_METADATA[path[0]]["usage"]],
-            }
+                )
+        root_metadata = COMMAND_METADATA.get(path[0], {}) if path else {}
+        metadata = {
+            "description": (
+                (metadata or {}).get("description")
+                or command.help
+                or root_metadata.get("description", "")
+            ),
+            "arguments": arguments,
+            "options": options,
+            "examples": (metadata or {}).get("examples", [root_metadata.get("usage", "infralink")]),
+        }
     if metadata is None:
         raise click.UsageError("Unknown command path")
     return HelpResult(path=list(path), **metadata)
+
+
+def _command_for_path(path: tuple[str, ...]) -> click.Command | None:
+    if not path:
+        return cli
+    command = _load_command(path[0])
+    if command is None:
+        return None
+    for name in path[1:]:
+        if not isinstance(command, click.Group):
+            return None
+        command = command.get_command(click.Context(command), name)
+        if command is None:
+            return None
+    return command
 
 
 def _emit_help(path: tuple[str, ...], argv: list[str] | None = None) -> None:
@@ -413,21 +550,13 @@ def _load_command(name: str) -> click.Command | None:
     if name == "edges-list":
         return edges_list
     if name == "services":
-        return _discovery_command("services")
-    if name in {"host", "edge", "service", "secrets"}:
-        children = {
-            "host": ("show",),
-            "edge": ("show",),
-            "service": ("show",),
-            "secrets": ("inspect", "audit"),
-        }[name]
-        return _discovery_group(name, children)
+        return services
     return None
 
 
 class JsonGroup(click.Group):
     def list_commands(self, ctx: click.Context) -> list[str]:
-        return sorted(COMMAND_METADATA.keys())
+        return sorted(name for name in COMMAND_METADATA if _load_command(name) is not None)
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         return _load_command(cmd_name)
@@ -445,48 +574,54 @@ class JsonGroup(click.Group):
         invocation_token = _INVOCATION_ARGS.set(incoming)
         exit_code = 0
         try:
-            result = super().main(
-                args=normalized,
-                prog_name=prog_name,
-                complete_var=complete_var,
-                standalone_mode=False,
-                **extra,
-            )
-            if isinstance(result, int):
-                exit_code = result
-        except click.UsageError:
-            usage_failure = CliFailure(
-                code=ErrorCode.USAGE_ERROR,
-                message="Invalid command usage",
-                exit_code=2,
-                fix="Run infralink help",
-                next_actions=[
-                    action("help", ["infralink", "help"], "Show available commands")
-                ],
-            )
-            _emit(error_envelope(_context_for(incoming), usage_failure))
-            exit_code = usage_failure.exit_code
-        except CliFailure as cli_failure:
-            payload = error_envelope(_context_for(incoming), cli_failure)
-            if (
-                "validate" in _command_path(incoming)
-                and any(item in {"-o", "--output"} for item in incoming)
-            ):
-                payload["status"] = "error"
-            _emit(payload)
-            exit_code = cli_failure.exit_code
-        except Exception:
-            internal_failure = CliFailure(
-                code=ErrorCode.INTERNAL_ERROR,
-                message="An unexpected internal error occurred",
-                exit_code=70,
-                fix="Retry the command or report the failure",
-                next_actions=[],
-            )
-            _emit(error_envelope(_context_for(incoming), internal_failure))
-            exit_code = internal_failure.exit_code
-
-        _INVOCATION_ARGS.reset(invocation_token)
+            try:
+                result = super().main(
+                    args=normalized,
+                    prog_name=prog_name,
+                    complete_var=complete_var,
+                    standalone_mode=False,
+                    **extra,
+                )
+                if isinstance(result, int):
+                    exit_code = result
+            except click.UsageError:
+                usage_failure = CliFailure(
+                    code=ErrorCode.USAGE_ERROR,
+                    message="Invalid command usage",
+                    exit_code=2,
+                    fix="Run infralink help",
+                    next_actions=[action("help", ["infralink", "help"], "Show available commands")],
+                )
+                _emit(error_envelope(_context_for(incoming), usage_failure))
+                exit_code = usage_failure.exit_code
+            except CliFailure as cli_failure:
+                _emit(error_envelope(_context_for(incoming), cli_failure))
+                exit_code = cli_failure.exit_code
+            except SystemExit as system_exit:
+                if isinstance(system_exit.code, int):
+                    exit_code = system_exit.code
+                else:
+                    internal_failure = CliFailure(
+                        code=ErrorCode.INTERNAL_ERROR,
+                        message="An unexpected internal error occurred",
+                        exit_code=70,
+                        fix="Retry the command or report the failure",
+                        next_actions=[],
+                    )
+                    _emit(error_envelope(_context_for(incoming), internal_failure))
+                    exit_code = internal_failure.exit_code
+            except Exception:
+                internal_failure = CliFailure(
+                    code=ErrorCode.INTERNAL_ERROR,
+                    message="An unexpected internal error occurred",
+                    exit_code=70,
+                    fix="Retry the command or report the failure",
+                    next_actions=[],
+                )
+                _emit(error_envelope(_context_for(incoming), internal_failure))
+                exit_code = internal_failure.exit_code
+        finally:
+            _INVOCATION_ARGS.reset(invocation_token)
         if standalone_mode:
             raise SystemExit(exit_code)
         return exit_code
@@ -512,40 +647,6 @@ def version_command() -> None:
             [],
         )
     )
-
-
-def _discovery_command(name: str) -> click.Command:
-    @click.command(name=name)
-    def command() -> None:
-        _emit_help((name,))
-
-    return command
-
-
-def _discovery_group(name: str, children: tuple[str, ...]) -> click.Group:
-    @click.group(name=name, invoke_without_command=True)
-    def group() -> None:
-        if click.get_current_context().invoked_subcommand is None:
-            _emit_help((name,))
-
-    for child in children:
-        metadata = HELP_METADATA[(name, child)]
-        arguments = metadata["arguments"]
-
-        def callback(
-            *values: str,
-            _path: tuple[str, str] = (name, child),
-            **options: Any,
-        ) -> None:
-            del values, options
-            _emit_help(_path)
-
-        params: list[click.Parameter] = [
-            click.Argument([argument["name"]], required=argument["required"])
-            for argument in arguments
-        ]
-        group.add_command(click.Command(child, callback=callback, params=params))
-    return group
 
 
 @click.group(
@@ -589,7 +690,6 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
     ctx.verbose = verbose
     ctx.output = output
 
-
     click_ctx = click.get_current_context()
     if click_ctx.invoked_subcommand is not None:
         return
@@ -603,6 +703,7 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
                 usage=meta.get("usage", f"infralink {name}"),
             )
             for name, meta in sorted(COMMAND_METADATA.items())
+            if name in ROOT_COMMANDS
         ],
     )
 
@@ -611,11 +712,66 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
         command_tree,
         [
             action("help", ["infralink", "help"], "Show available commands"),
-            action("validate", ["infralink", "validate"], "Validate registry and edges"),
-            action("list", ["infralink", "edges-list"], "List all edges"),
+            action("list", ["infralink", "services"], "List declared services"),
+            action("version", ["infralink", "version"], "Show CLI version"),
         ],
     )
     _emit(payload)
+
+
+@cli.command()
+@pass_context
+def services(ctx: Context) -> None:
+    """List services declared by registry hosts."""
+    registry = ctx.registry
+    service_hosts: dict[str, set[str]] = {}
+    service_ports: dict[str, set[int]] = {}
+    service_protocols: dict[str, set[str]] = {}
+    for host in registry:
+        for service_id, config in host.services.items():
+            service_hosts.setdefault(service_id, set()).add(host.uuid)
+            port = config.get("port")
+            if isinstance(port, int):
+                service_ports.setdefault(service_id, set()).add(port)
+            protocol = config.get("protocol")
+            if isinstance(protocol, str):
+                service_protocols.setdefault(service_id, set()).add(protocol)
+
+    items = []
+    for service_id in sorted(service_hosts)[:100]:
+        hosts = sorted(service_hosts[service_id])
+        ports = sorted(service_ports.get(service_id, set()))
+        protocols = sorted(service_protocols.get(service_id, set()))
+        items.append(
+            ServiceSummary(
+                id=service_id,
+                host_count=len(hosts),
+                host_ids=hosts[:128],
+                hosts_truncated=len(hosts) > 128,
+                port_count=len(ports),
+                ports=ports[:64],
+                ports_truncated=len(ports) > 64,
+                protocol_count=len(protocols),
+                protocols=protocols[:32],
+                protocols_truncated=len(protocols) > 32,
+            )
+        )
+    result = ServiceListResult(
+        items=items,
+        page=PageInfo(
+            limit=100,
+            returned=len(items),
+            total=len(service_hosts),
+            next_cursor=None,
+        ),
+    )
+    _emit(
+        ok_envelope(
+            _context_for(path=["services"]),
+            result,
+            [action("help", ["infralink", "help", "services"], "Show service help")],
+        )
+    )
 
 
 @cli.command()

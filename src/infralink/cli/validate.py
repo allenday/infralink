@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import click
 
+from infralink.cli.actions import action
+from infralink.cli.contracts import (
+    Diagnostic,
+    Page,
+    PageInfo,
+    ValidateResult,
+    ValidationSummary,
+)
 from infralink.cli.errors import CliFailure
 
 try:
-    from infralink.cli.main import Context, pass_context
+    from infralink.cli.main import Context, _context_for, _emit, pass_context
 except ModuleNotFoundError:
     Context = object  # type: ignore[misc,assignment]
 
     def pass_context(func: Any) -> Any:
         return func
 
-from infralink.cli.output import error_envelope, ok_envelope
+
+from infralink.cli.output import ok_envelope
 
 
 def _edge_node_type_error(source_service: str | None) -> str | None:
@@ -40,7 +48,7 @@ def _edge_node_type_error(source_service: str | None) -> str | None:
     help="Validate all edges can be resolved",
 )
 @pass_context
-def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
+def validate(ctx: Context, strict: bool, check_resolution: bool) -> int:
     """
     Validate registry and edge declarations.
 
@@ -56,66 +64,66 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
     """
     from infralink.core.resolver import EdgeResolver
 
-    errors: list[str] = []
-    warnings: list[str] = []
-    command = click.get_current_context().command_path.replace("cli", "infralink")
+    errors: list[Diagnostic] = []
+    warnings: list[Diagnostic] = []
+
+    def error(code: str, message: str, path: str | None = None) -> None:
+        errors.append(Diagnostic(code=code, path=path, message=message, severity="error"))
+
+    def warning(code: str, message: str, path: str | None = None) -> None:
+        warnings.append(Diagnostic(code=code, path=path, message=message, severity="warning"))
 
     # Load and validate registry
     try:
         registry = ctx.registry
     except CliFailure:
         raise
-    except Exception as e:
-        errors.append(f"Registry validation failed: {e}")
+    except Exception:
+        error("registry_invalid", "Registry validation failed")
 
     # Load and validate edges
     try:
         edges = ctx.edges
     except CliFailure:
         raise
-    except Exception as e:
-        errors.append(f"Edge validation failed: {e}")
+    except Exception:
+        error("edges_invalid", "Edge validation failed")
 
     # Check edge target references
     if "registry" in dir() and "edges" in dir() and len(edges) > 0:
         for edge in edges:
             node_type_error = _edge_node_type_error(edge.source_service)
             if node_type_error:
-                errors.append(f"Edge '{edge.id}': {node_type_error}")
+                error("edge_source_service_invalid", node_type_error, edge.id)
 
             # Check target host exists
             target = registry.get_by_uuid(edge.target_host)
             if not target:
-                errors.append(f"Edge '{edge.id}': target host not found: {edge.target_host}")
+                error("target_host_not_found", "Target host not found", edge.id)
             elif not target.is_active:
-                warnings.append(f"Edge '{edge.id}': target host is not active: {target.canonical_name}")
+                warning("target_host_inactive", "Target host is not active", edge.id)
 
             # Check source hosts exist
             for source_uuid in edge.source_hosts:
                 source = registry.get_by_uuid(source_uuid)
                 if not source:
-                    errors.append(f"Edge '{edge.id}': source host not found: {source_uuid}")
+                    error("source_host_not_found", "Source host not found", edge.id)
 
     # Check edge resolution
     if check_resolution and "registry" in dir() and "edges" in dir():
         resolver = EdgeResolver(registry, edges)
         resolution_errors, resolution_warnings = resolver.validate_all()
-
-        if resolution_warnings:
-            click.echo("\nResolution Warnings:", err=True)
-            for warn in resolution_warnings:
-                click.secho(f"  - {warn}", fg="yellow", err=True)
-
-        if resolution_errors:
-            for err in resolution_errors:
-                errors.append(err)
+        for item in resolution_warnings:
+            warning("resolution_warning", item)
+        for item in resolution_errors:
+            error("resolution_error", item)
 
     # Check for duplicate edge IDs
     if "edges" in dir():
         seen_ids: set[str] = set()
         for edge in edges:
             if edge.id in seen_ids:
-                errors.append(f"Duplicate edge ID: {edge.id}")
+                error("duplicate_edge_id", "Duplicate edge ID", edge.id)
             seen_ids.add(edge.id)
 
     # Check that hosts use roles, not direct services
@@ -127,9 +135,10 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
             # Check if host has managed_services but no roles
             if not host.roles and host.managed_services:
                 hosts_without_roles.append(host)
-                errors.append(
-                    f"Host '{host.canonical_name}' ({host.uuid_prefix}): "
-                    f"has managed_services but no roles. Declare roles instead."
+                error(
+                    "host_services_without_roles",
+                    "Host has managed services but no roles",
+                    host.uuid,
                 )
         # Report on unmanaged infrastructure
         hosts_with_unmanaged = []
@@ -140,64 +149,43 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
                 hosts_with_unmanaged.append(host)
         if hosts_with_unmanaged:
             for h in hosts_with_unmanaged:
-                unmanaged_items = list(h.unmanaged_services.keys()) + list(h.unmanaged_roles.keys())
-                warnings.append(
-                    f"Host '{h.canonical_name}' has unmanaged: {', '.join(unmanaged_items)}"
+                warning(
+                    "host_has_unmanaged_resources",
+                    "Host has unmanaged resources",
+                    h.uuid,
                 )
 
-    summary = {"errors": len(errors), "warnings": len(warnings)}
-    result = {
-        "valid": len(errors) == 0 and (not strict or len(warnings) == 0),
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-    if errors:
-        payload = error_envelope(
-            command,
-            "Validation failed",
-            "VALIDATION_FAILED",
-            "Fix registry/edge errors and re-run infralink validate.",
-            [
-                {"command": "infralink validate", "description": "Re-run validation"},
-                {"command": "infralink analyze", "description": "Inspect topology coverage"},
-            ],
-        )
-        payload["summary"] = summary
-        payload["result"] = result
-        payload["errors"] = errors
-        payload["warnings"] = warnings
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
-
-    if warnings and strict:
-        payload = error_envelope(
-            command,
-            "Validation failed (strict mode)",
-            "VALIDATION_STRICT_FAILED",
-            "Resolve warnings or run without --strict.",
-            [
-                {"command": "infralink validate", "description": "Re-run validation"},
-                {"command": "infralink validate --strict", "description": "Re-run in strict mode"},
-            ],
-        )
-        payload["summary"] = summary
-        payload["result"] = result
-        payload["warnings"] = warnings
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
-
-    status = "warn" if warnings else "ok"
-    payload = ok_envelope(
-        command,
-        result,
-        [
-            {"command": "infralink check", "description": "Run edge health checks"},
-            {"command": "infralink analyze", "description": "Analyze topology coverage"},
-        ],
-        status=status,
+    valid = not errors and (not strict or not warnings)
+    result = ValidateResult(
+        valid=valid,
+        errors=Page[Diagnostic](
+            items=errors[:100],
+            page=PageInfo(
+                limit=100,
+                returned=min(len(errors), 100),
+                total=len(errors),
+                next_cursor=None,
+            ),
+        ),
+        warnings=Page[Diagnostic](
+            items=warnings[:100],
+            page=PageInfo(
+                limit=100,
+                returned=min(len(warnings), 100),
+                total=len(warnings),
+                next_cursor=None,
+            ),
+        ),
+        summary=ValidationSummary(error_count=len(errors), warning_count=len(warnings)),
     )
-    payload["summary"] = summary
-    payload["errors"] = errors
-    payload["warnings"] = warnings
-    click.echo(json.dumps(payload))
+    _emit(
+        ok_envelope(
+            _context_for(path=["validate"]),
+            result,
+            [
+                action("check", ["infralink", "check"], "Run edge health checks"),
+                action("help", ["infralink", "help", "validate"], "Show validation help"),
+            ],
+        )
+    )
+    return 0 if valid else 1

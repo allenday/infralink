@@ -1,8 +1,19 @@
 import json
+from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
+from jsonschema import Draft202012Validator
 
 from infralink.cli.main import cli
+
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
+
+
+def validate_schema(payload: dict) -> None:
+    schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/validate.json").read_text())
+    Draft202012Validator(schema).validate(payload)
 
 
 def test_validate_returns_json_envelope():
@@ -16,3 +27,71 @@ def test_validate_returns_json_envelope():
     assert result.stderr == ""
     assert result.output.count("\n") == 1
     assert payload["error"]["code"] == "input_load_failed"
+    validate_schema(payload)
+
+
+@pytest.mark.parametrize(
+    "output_args",
+    [(), ("--output=json",), ("-o", "json")],
+)
+def test_validate_option_spellings_are_schema_equivalent(
+    output_args: tuple[str, ...],
+) -> None:
+    result = CliRunner().invoke(
+        cli,
+        [
+            *output_args,
+            "--registry",
+            str(EXAMPLES / "registry.yml"),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "validate",
+        ],
+    )
+    payload = json.loads(result.output)
+    assert result.stderr == ""
+    assert result.output.count("\n") == 1
+    validate_schema(payload)
+    assert set(payload) == {
+        "schema_version",
+        "ok",
+        "command",
+        "result",
+        "next_actions",
+        "meta",
+    }
+
+
+def test_resolution_warnings_are_structured_without_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infralink.core.resolver import EdgeResolver
+
+    monkeypatch.setattr(
+        EdgeResolver,
+        "validate_all",
+        lambda self: ([], ["canary warning"]),
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(EXAMPLES / "registry.yml"),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "validate",
+            "--check-resolution",
+        ],
+    )
+    payload = json.loads(result.output)
+    assert result.stderr == ""
+    assert result.output.count("\n") == 1
+    validate_schema(payload)
+    assert payload["result"]["warnings"]["items"] == [
+        {
+            "code": "resolution_warning",
+            "path": None,
+            "message": "canary warning",
+            "severity": "warning",
+        }
+    ]
