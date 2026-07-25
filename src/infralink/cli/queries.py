@@ -153,6 +153,11 @@ def _app_service_identities(
     app_edges: list[Edge],
 ) -> dict[str, _ServiceIdentity]:
     identities = {service_id: _ServiceIdentity() for service_id in _app_service_ids(application)}
+    selected_services = {
+        (member.host, service_id)
+        for member in application.schema.members
+        for service_id in member.services
+    }
     for member in application.schema.members:
         host = registry.get(member.host)
         for service_id in member.services:
@@ -166,11 +171,14 @@ def _app_service_identities(
             if isinstance(protocol, str):
                 identity.protocols.add(protocol)
     for edge in app_edges:
+        if (edge.target_host, edge.target_service) not in selected_services:
+            continue
         edge_identity = identities.get(edge.target_service)
         if edge_identity is None:
             continue
         edge_identity.hosts.add(edge.target_host)
-        edge_identity.ports.add(edge.target_port)
+        if isinstance(edge.target_port, int) and not isinstance(edge.target_port, bool):
+            edge_identity.ports.add(edge.target_port)
         if edge.protocol:
             edge_identity.protocols.add(edge.protocol)
     return identities
@@ -253,13 +261,21 @@ def show_service(
     edges: EdgeSet,
     service_id: str,
     *,
+    app_id: str | None = None,
     collection: str | None = None,
     limit: int = 100,
     offset: int = 0,
     next_cursor: str | None = None,
     next_cursors: dict[str, str] | None = None,
 ) -> ServiceShowResult:
-    identities = _service_identities(registry, edges)
+    if app_id is None:
+        identities = _service_identities(registry, edges)
+    else:
+        application = registry.applications.get_application(app_id)
+        if application is None:
+            raise entity_not_found("app", app_id)
+        app_edges = _app_edges(application, registry, edges)
+        identities = _app_service_identities(application, registry, app_edges)
     identity = identities.get(service_id)
     if identity is None:
         raise entity_not_found("service", service_id)

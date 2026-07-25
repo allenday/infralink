@@ -843,19 +843,21 @@ def _root_source_argv(ctx: Context) -> list[str]:
     ]
 
 
-def _summary_detail_actions(ctx: Context, result: Any) -> list[Any]:
-    summaries: list[Any] = []
-    items = getattr(result, "items", None)
-    if isinstance(items, list):
-        summaries.extend(items)
-    for name in ("host", "service", "edge"):
-        summary = getattr(result, name, None)
-        if summary is not None:
-            summaries.append(summary)
-    for name in ("services", "edges"):
-        page = getattr(result, name, None)
-        if page is not None:
-            summaries.extend(page.items)
+def _summary_detail_actions(
+    ctx: Context,
+    result: Any,
+    path: list[str],
+    command_argv: list[str],
+) -> list[Any]:
+    summaries: list[Any]
+    scoped_app_id: str | None = None
+    if path in (["hosts"], ["services"], ["edges-list"]):
+        summaries = result.items
+    elif path == ["app", "show"]:
+        summaries = result.services.items
+        scoped_app_id = command_argv[2]
+    else:
+        return []
 
     actions = []
     seen: set[tuple[str, str]] = set()
@@ -876,11 +878,16 @@ def _summary_detail_actions(ctx: Context, result: Any) -> list[Any]:
         identity = (entity, summary.id)
         if not truncated or identity in seen:
             continue
+        if scoped_app_id is not None and entity != "service":
+            continue
         seen.add(identity)
+        command = [*_root_source_argv(ctx), entity, "show", summary.id]
+        if scoped_app_id is not None:
+            command.extend(["--app", scoped_app_id])
         actions.append(
             action(
                 "show",
-                [*_root_source_argv(ctx), entity, "show", summary.id],
+                command,
                 f"Show complete {entity} details",
             )
         )
@@ -904,7 +911,7 @@ def _emit_query_result(
             if page is not None:
                 pages.append((name, page.page, f"result.{name}.page.next_cursor"))
     actions = [action("help", ["infralink", "help", *path], f"Show {' '.join(path)} help")]
-    actions.extend(_summary_detail_actions(ctx, result))
+    actions.extend(_summary_detail_actions(ctx, result, path, command_argv))
     for collection, page, source in pages:
         if page.next_cursor is None:
             continue
@@ -1201,11 +1208,13 @@ def service() -> None:
 
 @service.command(name="show")
 @click.argument("service_id")
+@click.option("--app", "app_id", type=str, default=None)
 @_page_options
 @pass_context
 def service_show(
     ctx: Context,
     service_id: str,
+    app_id: str | None,
     limit: int,
     cursor: str | None,
     collection: str | None,
@@ -1214,11 +1223,14 @@ def service_show(
 
     collections = ("hosts", "ports", "protocols")
     selected = _active_collection(collection, cursor, collections)
+    identifiers = {"service_id": service_id}
+    if app_id is not None:
+        identifiers["app_id"] = app_id
     fingerprint = _topology_fingerprint(
         ctx,
         include_registry=True,
         include_edges=True,
-        identifiers={"service_id": service_id},
+        identifiers=identifiers,
     )
     offset = _page_offset(
         command="service show",
@@ -1230,6 +1242,7 @@ def service_show(
         ctx.registry,
         ctx.edges,
         service_id,
+        app_id=app_id,
         collection=selected,
         limit=limit,
         offset=offset,
@@ -1246,7 +1259,12 @@ def service_show(
     _emit_query_result(
         ctx=ctx,
         path=["service", "show"],
-        command_argv=["service", "show", service_id],
+        command_argv=[
+            "service",
+            "show",
+            service_id,
+            *([] if app_id is None else ["--app", app_id]),
+        ],
         result=result,
         limit=limit,
     )

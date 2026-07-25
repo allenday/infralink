@@ -8,10 +8,7 @@ import hashlib
 import hmac
 import json
 import os
-import secrets
-import stat
 from collections.abc import Sequence
-from pathlib import Path
 from typing import TypeVar
 
 from infralink.cli.contracts import Page, PageInfo
@@ -20,6 +17,7 @@ from infralink.cli.errors import CliFailure, ErrorCode
 T = TypeVar("T")
 _CURSOR_KEYS = {"v", "command", "collection", "offset", "fingerprint"}
 _KEY_LENGTH = 32
+_DEFAULT_KEY = hashlib.sha256(b"infralink.cli/v1").digest()
 
 
 def invalid_cursor() -> CliFailure:
@@ -47,123 +45,31 @@ def _decode_segment(value: str) -> bytes:
     )
 
 
-def _validate_key_file(file_descriptor: int) -> None:
-    metadata = os.fstat(file_descriptor)
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-    ):
-        raise invalid_cursor()
-
-
-def _read_key(key_path: Path) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        file_descriptor = os.open(key_path, flags)
-    except OSError:
-        raise invalid_cursor() from None
-    try:
-        _validate_key_file(file_descriptor)
-        key = os.read(file_descriptor, _KEY_LENGTH + 1)
-    except OSError:
-        raise invalid_cursor() from None
-    finally:
-        os.close(file_descriptor)
-    if len(key) != _KEY_LENGTH:
-        raise invalid_cursor()
-    return key
-
-
-def _validate_key_directory(key_directory: Path) -> None:
-    try:
-        metadata = key_directory.lstat()
-    except OSError:
-        raise invalid_cursor() from None
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or stat.S_ISLNK(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o700
-    ):
-        raise invalid_cursor()
-
-
-def _state_root(state_dir: Path | None) -> Path:
-    if state_dir is not None:
-        return state_dir
-    configured = os.environ.get("XDG_STATE_HOME")
-    if configured:
-        return Path(configured)
-    return Path.home() / ".local/state"
-
-
-def load_cursor_key(*, state_dir: Path | None = None) -> bytes:
-    """Load a validated environment key or a secure per-user state key."""
+def load_cursor_key() -> bytes:
+    """Load an optional deployment key or the deterministic stateless key."""
     configured = os.environ.get("INFRALINK_CURSOR_KEY")
-    if configured is not None:
-        try:
-            key = _decode_segment(configured)
-        except (ValueError, binascii.Error):
-            raise invalid_cursor() from None
-        if len(key) != _KEY_LENGTH or _encode_segment(key) != configured.rstrip("="):
-            raise invalid_cursor()
-        return key
-
-    key_directory = _state_root(state_dir) / "infralink"
+    if configured is None:
+        return _DEFAULT_KEY
     try:
-        key_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-        key_directory.chmod(0o700)
-    except FileExistsError:
-        pass
-    except OSError:
+        key = _decode_segment(configured)
+    except (ValueError, binascii.Error):
         raise invalid_cursor() from None
-    _validate_key_directory(key_directory)
-    key_path = key_directory / "cursor.key"
-    try:
-        return _read_key(key_path)
-    except CliFailure:
-        try:
-            exists = key_path.lstat()
-        except FileNotFoundError:
-            exists = None
-        except OSError:
-            raise invalid_cursor() from None
-        if exists is not None:
-            raise
-
-    key = secrets.token_bytes(_KEY_LENGTH)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        file_descriptor = os.open(key_path, flags, 0o600)
-    except FileExistsError:
-        return _read_key(key_path)
-    except OSError:
-        raise invalid_cursor() from None
-    try:
-        os.fchmod(file_descriptor, 0o600)
-        _validate_key_file(file_descriptor)
-        view = memoryview(key)
-        while view:
-            written = os.write(file_descriptor, view)
-            if written <= 0:
-                raise OSError("cursor key write failed")
-            view = view[written:]
-        os.fsync(file_descriptor)
-    except (OSError, CliFailure):
-        raise invalid_cursor() from None
-    finally:
-        os.close(file_descriptor)
+    if len(key) != _KEY_LENGTH or _encode_segment(key) != configured.rstrip("="):
+        raise invalid_cursor()
     return key
 
 
-def production_cursor_codec(*, state_dir: Path | None = None) -> CursorCodec:
-    """Create a codec from production key configuration."""
-    return CursorCodec(load_cursor_key(state_dir=state_dir))
+def production_cursor_codec() -> CursorCodec:
+    """Create the stateless production codec without filesystem side effects."""
+    return CursorCodec(load_cursor_key())
 
 
 class CursorCodec:
-    """Encode and verify cursor payloads bound to a query snapshot."""
+    """Detect corruption and bind untrusted continuation fields.
+
+    The deterministic default token is not an authorization boundary and is
+    forgeable by clients. Authorization must never depend on cursor contents.
+    """
 
     def __init__(self, key: bytes) -> None:
         self._key = key
@@ -262,6 +168,7 @@ def page_items(
         or isinstance(offset, bool)
         or not isinstance(offset, int)
         or offset < 0
+        or offset > len(items)
     ):
         raise invalid_cursor()
     total = len(items)

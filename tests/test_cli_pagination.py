@@ -2,11 +2,6 @@ import base64
 import hashlib
 import hmac
 import json
-import os
-import stat
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -138,60 +133,24 @@ def test_cursor_rejects_signed_noncanonical_json() -> None:
     assert error.value.code == ErrorCode.INVALID_CURSOR
 
 
-def test_production_cursor_key_is_persisted_and_not_publicly_forgeable(
-    tmp_path: Path,
+def test_default_cursor_is_stateless_integrity_not_authorization(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("INFRALINK_CURSOR_KEY", raising=False)
     public_key = hashlib.sha256(b"infralink.cli/v1").digest()
     forged = CursorCodec(public_key).encode("hosts", "items", 1, "sha")
-    codec = production_cursor_codec(state_dir=tmp_path)
 
-    with pytest.raises(CliFailure):
-        codec.decode(forged, "hosts", "items", "sha")
-
-    cursor = codec.encode("hosts", "items", 1, "sha")
-    assert production_cursor_codec(state_dir=tmp_path).decode(cursor, "hosts", "items", "sha") == 1
-    key_path = tmp_path / "infralink/cursor.key"
-    assert len(key_path.read_bytes()) == 32
-    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(key_path.parent.stat().st_mode) == 0o700
-
-
-def test_production_cursor_key_is_stable_across_process_loads(tmp_path: Path) -> None:
-    env = {
-        **os.environ,
-        "XDG_STATE_HOME": str(tmp_path),
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-    }
-    env.pop("INFRALINK_CURSOR_KEY", None)
-    script = (
-        "from infralink.cli.pagination import production_cursor_codec;"
-        "print(production_cursor_codec().encode('hosts','items',1,'sha'))"
-    )
-    first = subprocess.run(
-        [sys.executable, "-c", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    ).stdout
-    second = subprocess.run(
-        [sys.executable, "-c", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    ).stdout
-    assert first == second
+    assert production_cursor_codec().decode(forged, "hosts", "items", "sha") == 1
+    assert production_cursor_codec().encode("hosts", "items", 1, "sha") == forged
 
 
 def test_cursor_key_environment_override_accepts_only_32_base64url_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key = bytes(range(32))
     encoded = base64.urlsafe_b64encode(key).rstrip(b"=").decode()
     monkeypatch.setenv("INFRALINK_CURSOR_KEY", encoded)
-    assert load_cursor_key(state_dir=tmp_path) == key
-    assert not (tmp_path / "infralink").exists()
+    assert load_cursor_key() == key
 
     for invalid in [
         "not-base64!",
@@ -201,54 +160,18 @@ def test_cursor_key_environment_override_accepts_only_32_base64url_bytes(
     ]:
         monkeypatch.setenv("INFRALINK_CURSOR_KEY", invalid)
         with pytest.raises(CliFailure) as error:
-            load_cursor_key(state_dir=tmp_path)
+            load_cursor_key()
         assert error.value.code == ErrorCode.INVALID_CURSOR
         assert invalid not in str(error.value)
 
 
-def test_cursor_key_rejects_insecure_permissions_and_symlinks(tmp_path: Path) -> None:
-    key_dir = tmp_path / "infralink"
-    key_dir.mkdir(mode=0o700)
-    key_path = key_dir / "cursor.key"
-    key_path.write_bytes(b"x" * 32)
-    key_path.chmod(0o644)
-    with pytest.raises(CliFailure):
-        load_cursor_key(state_dir=tmp_path)
-
-    key_path.unlink()
-    target = tmp_path / "target"
-    target.write_bytes(b"x" * 32)
-    key_path.symlink_to(target)
-    with pytest.raises(CliFailure):
-        load_cursor_key(state_dir=tmp_path)
-
-
-def test_cursor_key_rejects_insecure_state_directory(tmp_path: Path) -> None:
-    key_dir = tmp_path / "infralink"
-    key_dir.mkdir(mode=0o755)
-    with pytest.raises(CliFailure):
-        load_cursor_key(state_dir=tmp_path)
-
-
-def test_cursor_key_permissions_ignore_restrictive_umask(tmp_path: Path) -> None:
-    previous = os.umask(0o777)
-    try:
-        load_cursor_key(state_dir=tmp_path)
-    finally:
-        os.umask(previous)
-
-    key_path = tmp_path / "infralink/cursor.key"
-    assert stat.S_IMODE(key_path.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
-
-
 def test_cursor_key_failure_does_not_disclose_key_material(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = "cursor-key-canary-material"
     monkeypatch.setenv("INFRALINK_CURSOR_KEY", canary)
     with pytest.raises(CliFailure) as error:
-        load_cursor_key(state_dir=tmp_path)
+        load_cursor_key()
     assert canary not in error.value.message
     assert canary not in error.value.fix
     assert canary not in json.dumps(error.value.details)
@@ -267,6 +190,32 @@ def test_page_items_only_emits_cursor_when_more_items_exist() -> None:
     final = page_items(list(range(3)), limit=2, offset=2, next_cursor="unused")
     assert final.items == [2]
     assert final.page.next_cursor is None
+
+
+def test_page_items_rejects_offset_past_collection_and_allows_exact_end() -> None:
+    with pytest.raises(CliFailure) as error:
+        page_items([1, 2], limit=1, offset=3, next_cursor=None)
+    assert error.value.code == ErrorCode.INVALID_CURSOR
+
+    final = page_items([1, 2], limit=1, offset=2, next_cursor=None)
+    assert final.items == []
+    assert final.page.next_cursor is None
+
+
+def test_forged_offset_cannot_escape_bounded_collection_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("INFRALINK_CURSOR_KEY", raising=False)
+    items = ["authorized-a", "authorized-b"]
+    forged = CursorCodec(hashlib.sha256(b"infralink.cli/v1").digest()).encode(
+        "hosts", "items", 1, "sha"
+    )
+    offset = production_cursor_codec().decode(forged, "hosts", "items", "sha")
+    page = page_items(items, limit=1, offset=offset, next_cursor=None)
+
+    assert page.items == ["authorized-b"]
+    assert page.page.returned == 1
+    assert items == ["authorized-a", "authorized-b"]
 
 
 @pytest.mark.parametrize(
