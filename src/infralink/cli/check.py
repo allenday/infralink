@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
-
 import click
 
-from infralink.cli.main import Context, pass_context
+from infralink.cli.main import Context, _emit, pass_context
 from infralink.cli.output import error_envelope, ok_envelope
 
 
@@ -86,12 +84,12 @@ def check(
             "Ensure registry/edges paths are correct.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+        _emit(payload)
+        raise SystemExit(1) from exc
 
     if len(edges) == 0:
         payload = ok_envelope(command, {"results": [], "summary": {"healthy": 0, "failed": 0}}, [])
-        click.echo(json.dumps(payload))
+        _emit(payload)
         return
 
     resolver = EdgeResolver(registry, edges)
@@ -115,7 +113,7 @@ def check(
 
     if not edges_to_check:
         payload = ok_envelope(command, {"results": [], "summary": {"healthy": 0, "failed": 0}}, [])
-        click.echo(json.dumps(payload))
+        _emit(payload)
         return
 
     # Run health checks
@@ -140,7 +138,11 @@ def check(
 
         results_payload.append(result.to_dict())
 
-    summary = {"healthy": healthy_count, "failed": failed_count, "critical_failed": critical_failures}
+    summary = {
+        "healthy": healthy_count,
+        "failed": failed_count,
+        "critical_failed": critical_failures,
+    }
 
     if failed_count > 0:
         payload = error_envelope(
@@ -154,7 +156,7 @@ def check(
             ],
         )
         payload["result"] = {"results": results_payload, "summary": summary}
-        click.echo(json.dumps(payload))
+        _emit(payload)
         raise SystemExit(2 if critical_failures else 1)
 
     payload = ok_envelope(
@@ -162,4 +164,4 @@ def check(
         {"results": results_payload, "summary": summary},
         [{"command": "infralink analyze", "description": "Analyze topology coverage"}],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)

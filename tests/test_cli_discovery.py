@@ -35,10 +35,18 @@ def assert_schema(payload: dict, name: str) -> None:
 def test_root_discovers_commands_as_json() -> None:
     payload = payload_for()
     assert payload["result"]["version"] == "0.2.0"
-    assert {"help", "version", "services"} == {
+    assert {"help", "version", "hosts", "services", "edges-list"} <= {
         item["name"] for item in payload["result"]["commands"]
     }
     assert_schema(payload, "root")
+
+
+def test_every_advertised_command_is_a_real_click_command() -> None:
+    payload = payload_for()
+    for descriptor in payload["result"]["commands"]:
+        command = cli_main._load_command(descriptor["name"])
+        assert isinstance(command, click.Command)
+        assert command is cli_main.help_command or command.callback is not cli_main._emit_help
 
 
 def test_help_is_json() -> None:
@@ -88,11 +96,10 @@ def test_help_describes_every_live_resolve_option() -> None:
     assert {
         "format",
         "user",
-        "password",
-        "password_env",
         "database",
         "prefer_ip",
     } <= option_names
+    assert {"password", "password_env"}.isdisjoint(option_names)
 
 
 def test_future_help_is_marked_unavailable_without_registering_command() -> None:
@@ -322,6 +329,24 @@ def test_system_exit_text_is_suppressed_at_all_boundaries(
     assert "canary-secret" not in captured.out + captured.err
 
 
+def test_system_exit_integer_becomes_one_internal_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_test_command(monkeypatch, lambda: raise_system_exit(5))
+
+    direct = invoke("explode")
+    assert direct.exit_code == 70
+    assert direct.stderr == ""
+    assert direct.output.count("\n") == 1
+    assert json.loads(direct.output)["error"]["code"] == "internal_error"
+
+    assert main(["explode"]) == 70
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.count("\n") == 1
+    assert json.loads(captured.out)["error"]["code"] == "internal_error"
+
+
 def raise_system_exit(code: object) -> None:
     raise SystemExit(code)
 
@@ -342,8 +367,7 @@ def test_resolve_absent_is_one_json_entity_failure() -> None:
     assert payload["error"]["code"] == "entity_not_found"
 
 
-def test_every_advertised_command_produces_its_schema() -> None:
-    root = payload_for()
+def test_advertised_typed_commands_produce_their_schemas() -> None:
     invocations = {
         "help": (("help",), "help"),
         "version": (("version",), "version"),
@@ -352,11 +376,45 @@ def test_every_advertised_command_produces_its_schema() -> None:
             "services",
         ),
     }
-    for descriptor in root["result"]["commands"]:
-        args, schema_name = invocations[descriptor["name"]]
+    for args, schema_name in invocations.values():
         result = invoke(*args)
-        assert result.exit_code == 0, (descriptor["name"], result.output)
+        assert result.exit_code == 0, result.output
         assert_schema(json.loads(result.output), schema_name)
+
+
+def test_services_include_role_explicit_and_edge_target_identities() -> None:
+    payload = payload_for(
+        "--registry",
+        str(EXAMPLES / "registry.yml"),
+        "--edges",
+        str(EXAMPLES / "edges.yml"),
+        "services",
+    )
+    service_ids = {item["id"] for item in payload["result"]["items"]}
+    assert {"postgresql", "redis", "nginx", "node-exporter"} <= service_ids
+    assert payload["result"]["page"]["returned"] == len(payload["result"]["items"])
+    assert payload["result"]["page"]["returned"] == payload["result"]["page"]["total"]
+
+
+def test_services_do_not_silently_truncate_101_records(tmp_path: Path) -> None:
+    services = "\n".join(
+        f"      service-{index}:\n        port: {10000 + index}\n" for index in range(101)
+    )
+    registry = tmp_path / "registry.yml"
+    registry.write_text(
+        "hosts:\n"
+        "  11111111-1111-1111-1111-111111111111:\n"
+        "    canonical_name: complete-host\n"
+        "    status: active\n"
+        "    services:\n"
+        f"{services}"
+    )
+    payload = payload_for("--registry", str(registry), "services")
+    generated = [item for item in payload["result"]["items"] if item["id"].startswith("service-")]
+    assert len(generated) == 101
+    assert payload["result"]["page"]["returned"] == payload["result"]["page"]["total"]
+    assert payload["result"]["page"]["next_cursor"] is None
+    assert payload["meta"]["truncated"] is False
 
 
 def test_wrapper_and_click_object_have_identical_parse_errors(

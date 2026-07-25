@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import click
 
-from infralink.cli.main import Context, pass_context
+from infralink.cli.main import Context, _emit, pass_context
 from infralink.cli.output import error_envelope, ok_envelope
 
 
@@ -68,9 +67,9 @@ def diagram(
         # Generate all formats for a specific group
         infralink diagram --format all --group bdsmlr
     """
-    from infralink.generators.mermaid import generate_mermaid
     from infralink.generators.d2 import generate_d2
     from infralink.generators.dot import generate_dot
+    from infralink.generators.mermaid import generate_mermaid
 
     command = click.get_current_context().command_path.replace("cli", "infralink")
     try:
@@ -84,8 +83,8 @@ def diagram(
             "Ensure registry/edges paths are correct.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+        _emit(payload)
+        raise SystemExit(1) from exc
 
     # Filter hosts
     if filter_group:
@@ -97,7 +96,7 @@ def diagram(
 
     if not hosts:
         payload = ok_envelope(command, {"outputs": [], "stdout": stdout}, [])
-        click.echo(json.dumps(payload))
+        _emit(payload)
         return
 
     # Generate diagrams
@@ -140,4 +139,4 @@ def diagram(
             {"command": "infralink analyze", "description": "Analyze topology coverage"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)

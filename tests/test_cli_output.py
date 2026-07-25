@@ -8,6 +8,7 @@ from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 
 import pytest
+from click import NoSuchOption
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 
@@ -222,9 +223,9 @@ def test_redact_argv_redacts_live_short_password_alias() -> None:
     ]
 
 
-def test_click_parser_accepts_attached_short_password_value() -> None:
-    with resolve.make_context("resolve", ["edge-1", "-pcanary-secret"]) as context:
-        assert context.params["password"] == "canary-secret"
+def test_click_parser_rejects_attached_short_password_value() -> None:
+    with pytest.raises(NoSuchOption):
+        resolve.make_context("resolve", ["edge-1", "-pcanary-secret"])
 
 
 def test_redact_argv_redacts_attached_short_password_without_matching_long_prefixes() -> None:

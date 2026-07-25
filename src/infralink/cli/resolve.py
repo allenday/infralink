@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import os
 from typing import Any
 
 import click
 
 from infralink.cli.actions import action
 from infralink.cli.errors import CliFailure, ErrorCode
-from infralink.cli.main import Context, entity_not_found, pass_context
+from infralink.cli.main import Context, _emit, entity_not_found, pass_context
 from infralink.cli.output import ok_envelope
 
 
@@ -30,15 +28,6 @@ from infralink.cli.output import ok_envelope
     help="Username for URL generation",
 )
 @click.option(
-    "--password",
-    "-p",
-    help="Password for URL generation (or use --password-env)",
-)
-@click.option(
-    "--password-env",
-    help="Environment variable containing password",
-)
-@click.option(
     "--database",
     "-d",
     help="Database name for URL generation",
@@ -55,8 +44,6 @@ def resolve(
     edge_id: str,
     output_format: str,
     user: str | None,
-    password: str | None,
-    password_env: str | None,
     database: str | None,
     prefer_ip: str,
 ) -> None:
@@ -70,8 +57,8 @@ def resolve(
         # Get endpoint (ip:port)
         infralink resolve airflow-to-postgres
 
-        # Get full connection URL
-        infralink resolve airflow-to-postgres --format url -u airflow -p secret -d airflow
+        # Get a connection URL without credentials
+        infralink resolve airflow-to-postgres --format url -u airflow -d airflow
 
         # Get just the IP
         infralink resolve airflow-to-postgres --format ip
@@ -101,25 +88,6 @@ def resolve(
     if edges.get(edge_id) is None:
         raise entity_not_found("edge", edge_id)
 
-    # Get password from environment if specified
-    if password_env:
-        password = os.environ.get(password_env)
-        if not password:
-            raise CliFailure(
-                code=ErrorCode.INPUT_LOAD_FAILED,
-                message="Password environment variable is not set",
-                exit_code=3,
-                fix="Set the requested password environment variable and retry",
-                details={},
-                next_actions=[
-                    action(
-                        "help",
-                        ["infralink", "help", "resolve"],
-                        "Show resolve options",
-                    )
-                ],
-            )
-
     try:
         edge = resolver.get_edge(edge_id)
         target_host = resolver.get_target_host(edge_id)
@@ -133,7 +101,6 @@ def resolve(
             url = resolver.get_url(
                 edge_id,
                 user=user,
-                password=password,
                 database=database,
                 prefer_ip=prefer_ip,
             )
@@ -183,7 +150,7 @@ def resolve(
                 },
             ],
         )
-        click.echo(json.dumps(payload))
+        _emit(payload)
 
     except ResolutionError:
         raise CliFailure(

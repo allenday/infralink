@@ -95,3 +95,29 @@ def test_resolution_warnings_are_structured_without_stderr(
             "severity": "warning",
         }
     ]
+
+
+def test_validate_does_not_silently_truncate_101_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infralink.core.resolver import EdgeResolver
+
+    warnings = [f"warning-{index}" for index in range(101)]
+    monkeypatch.setattr(EdgeResolver, "validate_all", lambda self: ([], warnings))
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(EXAMPLES / "registry.yml"),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "validate",
+            "--check-resolution",
+        ],
+    )
+    payload = json.loads(result.output)
+    warning_page = payload["result"]["warnings"]
+    assert len(warning_page["items"]) == 101
+    assert warning_page["page"]["returned"] == warning_page["page"]["total"] == 101
+    assert warning_page["page"]["next_cursor"] is None
+    assert payload["meta"]["truncated"] is False

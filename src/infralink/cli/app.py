@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import click
 
-from infralink.cli.main import Context, pass_context
+from infralink.cli.main import Context, _emit, pass_context
 from infralink.cli.output import error_envelope, ok_envelope
 
 
@@ -29,9 +26,10 @@ def list_apps(ctx: Context) -> None:
             str(exc),
             "APP_LIST_FAILED",
             "Ensure registry and applications.yml are valid.",
+            [],
         )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+        _emit(payload)
+        raise SystemExit(1) from exc
 
     app_payload = []
     for application in sorted(apps, key=lambda a: a.id):
@@ -51,7 +49,7 @@ def list_apps(ctx: Context) -> None:
             {"command": "infralink app show <id>", "description": "Show app details"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)
 
 
 @app.command(name="show")
@@ -73,9 +71,10 @@ def show_app(ctx: Context, app_id: str) -> None:
             str(exc),
             "APP_SHOW_FAILED",
             f"Check if app {app_id} exists.",
+            [],
         )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+        _emit(payload)
+        raise SystemExit(1) from exc
 
     result = application.to_dict()
     result["resolved_edges"] = [
@@ -96,4 +95,4 @@ def show_app(ctx: Context, app_id: str) -> None:
             {"command": "infralink app list", "description": "List all apps"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)

@@ -159,19 +159,19 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> int:
     result = ValidateResult(
         valid=valid,
         errors=Page[Diagnostic](
-            items=errors[:100],
+            items=errors,
             page=PageInfo(
-                limit=100,
-                returned=min(len(errors), 100),
+                limit=min(max(100, len(errors)), 1000),
+                returned=len(errors),
                 total=len(errors),
                 next_cursor=None,
             ),
         ),
         warnings=Page[Diagnostic](
-            items=warnings[:100],
+            items=warnings,
             page=PageInfo(
-                limit=100,
-                returned=min(len(warnings), 100),
+                limit=min(max(100, len(warnings)), 1000),
+                returned=len(warnings),
                 total=len(warnings),
                 next_cursor=None,
             ),

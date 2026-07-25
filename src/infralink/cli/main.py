@@ -41,7 +41,7 @@ DEFAULT_EDGES = "examples/edges.yml"
 _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
-ROOT_COMMANDS = ("help", "services", "version")
+_ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 
 
 class Context:
@@ -421,6 +421,7 @@ def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
 
 
 def _emit(payload: dict[str, Any]) -> None:
+    _ENVELOPE_EMITTED.set(True)
     click.echo(json.dumps(payload, separators=(",", ":")))
 
 
@@ -572,6 +573,7 @@ class JsonGroup(click.Group):
         incoming = list(sys.argv[1:] if args is None else args)
         normalized = _normalize_discovery_aliases(incoming)
         invocation_token = _INVOCATION_ARGS.set(incoming)
+        emitted_token = _ENVELOPE_EMITTED.set(False)
         exit_code = 0
         try:
             try:
@@ -598,7 +600,7 @@ class JsonGroup(click.Group):
                 _emit(error_envelope(_context_for(incoming), cli_failure))
                 exit_code = cli_failure.exit_code
             except SystemExit as system_exit:
-                if isinstance(system_exit.code, int):
+                if _ENVELOPE_EMITTED.get() and isinstance(system_exit.code, int):
                     exit_code = system_exit.code
                 else:
                     internal_failure = CliFailure(
@@ -621,6 +623,7 @@ class JsonGroup(click.Group):
                 _emit(error_envelope(_context_for(incoming), internal_failure))
                 exit_code = internal_failure.exit_code
         finally:
+            _ENVELOPE_EMITTED.reset(emitted_token)
             _INVOCATION_ARGS.reset(invocation_token)
         if standalone_mode:
             raise SystemExit(exit_code)
@@ -694,6 +697,7 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
     if click_ctx.invoked_subcommand is not None:
         return
 
+    live_commands = cli.list_commands(click_ctx)
     command_tree = RootResult(
         version=__version__,
         commands=[
@@ -702,8 +706,8 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
                 description=meta.get("description", ""),
                 usage=meta.get("usage", f"infralink {name}"),
             )
-            for name, meta in sorted(COMMAND_METADATA.items())
-            if name in ROOT_COMMANDS
+            for name in live_commands
+            if (meta := COMMAND_METADATA.get(name)) is not None
         ],
     )
 
@@ -728,8 +732,9 @@ def services(ctx: Context) -> None:
     service_ports: dict[str, set[int]] = {}
     service_protocols: dict[str, set[str]] = {}
     for host in registry:
-        for service_id, config in host.services.items():
+        for service_id in set(host.roles) | set(host.service_names):
             service_hosts.setdefault(service_id, set()).add(host.uuid)
+            config = host.services.get(service_id, {})
             port = config.get("port")
             if isinstance(port, int):
                 service_ports.setdefault(service_id, set()).add(port)
@@ -737,8 +742,15 @@ def services(ctx: Context) -> None:
             if isinstance(protocol, str):
                 service_protocols.setdefault(service_id, set()).add(protocol)
 
+    edges = ctx.edges
+    for edge in edges:
+        service_hosts.setdefault(edge.target_service, set()).add(edge.target_host)
+        service_ports.setdefault(edge.target_service, set()).add(edge.target_port)
+        if edge.protocol:
+            service_protocols.setdefault(edge.target_service, set()).add(edge.protocol)
+
     items = []
-    for service_id in sorted(service_hosts)[:100]:
+    for service_id in sorted(service_hosts):
         hosts = sorted(service_hosts[service_id])
         ports = sorted(service_ports.get(service_id, set()))
         protocols = sorted(service_protocols.get(service_id, set()))
@@ -759,7 +771,7 @@ def services(ctx: Context) -> None:
     result = ServiceListResult(
         items=items,
         page=PageInfo(
-            limit=100,
+            limit=min(max(100, len(items)), 1000),
             returned=len(items),
             total=len(service_hosts),
             next_cursor=None,
@@ -792,7 +804,7 @@ def info(ctx: Context) -> None:
             "Ensure registry/edges paths are correct.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
+        _emit(payload)
         raise SystemExit(1) from exc
 
     from infralink.core.schema import EdgeType
@@ -827,7 +839,7 @@ def info(ctx: Context) -> None:
             {"command": "infralink edges-list", "description": "List all edges"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)
 
 
 @cli.command()
@@ -847,7 +859,7 @@ def hosts(ctx: Context) -> None:
             "Ensure registry path is correct.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
+        _emit(payload)
         raise SystemExit(1) from exc
 
     hosts_payload = []
@@ -873,7 +885,7 @@ def hosts(ctx: Context) -> None:
         ],
     )
     payload.update(result)
-    click.echo(json.dumps(payload))
+    _emit(payload)
 
 
 @cli.command()
@@ -891,7 +903,7 @@ def edges_list(ctx: Context) -> None:
             "Ensure edges path is correct.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
+        _emit(payload)
         raise SystemExit(1) from exc
 
     edge_payload = []
@@ -916,7 +928,7 @@ def edges_list(ctx: Context) -> None:
             {"command": "infralink resolve <edge-id>", "description": "Resolve an edge"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)
 
 
 def main(args: list[str] | None = None) -> int:

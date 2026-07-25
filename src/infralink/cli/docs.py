@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import click
 
-from infralink.cli.main import Context, pass_context
+from infralink.cli.main import Context, _emit, pass_context
 from infralink.cli.output import error_envelope, ok_envelope
 
 
@@ -63,9 +62,9 @@ def docs(
         infralink docs --index-only
     """
     from infralink.generators.markdown import (
+        generate_edge_index,
         generate_host_doc,
         generate_index,
-        generate_edge_index,
     )
 
     command = click.get_current_context().command_path.replace("cli", "infralink")
@@ -80,8 +79,8 @@ def docs(
             "Ensure registry/edges paths are correct.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+        _emit(payload)
+        raise SystemExit(1) from exc
 
     output.mkdir(parents=True, exist_ok=True)
     outputs: list[str] = []
@@ -98,7 +97,7 @@ def docs(
             {"outputs": outputs, "count": len(outputs)},
             [{"command": "infralink docs", "description": "Generate full docs"}],
         )
-        click.echo(json.dumps(payload))
+        _emit(payload)
         return
 
     # Generate per-host documentation
@@ -113,7 +112,7 @@ def docs(
                 "Use infralink hosts to list available hosts.",
                 [{"command": "infralink hosts", "description": "List all hosts"}],
             )
-            click.echo(json.dumps(payload))
+            _emit(payload)
             raise SystemExit(1)
         hosts = [host]
 
@@ -140,4 +139,4 @@ def docs(
             {"command": "infralink analyze", "description": "Analyze topology coverage"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)

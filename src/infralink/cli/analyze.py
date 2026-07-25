@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import click
 import yaml
 
+from infralink.cli.main import _emit
 from infralink.cli.output import error_envelope, ok_envelope
 
 
@@ -55,28 +55,34 @@ def infer_edges_from_dependencies(data: dict[str, Any]) -> list[dict[str, Any]]:
                     continue
 
                 edge_id = f"{host_data.get('canonical_name', name)}-{service}-to-{target_service}"
-                edges.append({
-                    "id": edge_id,
-                    "type": "database" if target_service in ("mariadb", "mysql", "postgresql", "postgres") else "queue",
-                    "from": {
-                        "hosts": [source_uuid],
-                        "service": service,
-                    },
-                    "to": {
-                        "host": target_host,
-                        "service": target_service,
-                        "port": target_port or 3306,
-                    },
-                    "metadata": {
-                        "source": "service_dependencies",
-                        "notes": dep.get("notes"),
-                    },
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "type": "database"
+                        if target_service in ("mariadb", "mysql", "postgresql", "postgres")
+                        else "queue",
+                        "from": {
+                            "hosts": [source_uuid],
+                            "service": service,
+                        },
+                        "to": {
+                            "host": target_host,
+                            "service": target_service,
+                            "port": target_port or 3306,
+                        },
+                        "metadata": {
+                            "source": "service_dependencies",
+                            "notes": dep.get("notes"),
+                        },
+                    }
+                )
 
     return edges
 
 
-def infer_monitoring_edges(data: dict[str, Any], prometheus_uuid: str | None) -> list[dict[str, Any]]:
+def infer_monitoring_edges(
+    data: dict[str, Any], prometheus_uuid: str | None
+) -> list[dict[str, Any]]:
     """Infer prometheus scrape edges from observability declarations."""
     if not prometheus_uuid:
         return []
@@ -114,22 +120,24 @@ def infer_monitoring_edges(data: dict[str, Any], prometheus_uuid: str | None) ->
             if service in exporter_ports or service.endswith("-exporter"):
                 port = overrides.get(service) or exporter_ports.get(service, 9100)
                 edge_id = f"prometheus-to-{host_data.get('canonical_name', name)}-{service}"
-                edges.append({
-                    "id": edge_id,
-                    "type": "monitoring",
-                    "from": {
-                        "hosts": [prometheus_uuid],
-                        "service": "prometheus",
-                    },
-                    "to": {
-                        "host": target_uuid,
-                        "service": service,
-                        "port": port,
-                    },
-                    "metadata": {
-                        "source": "observability.managed_services",
-                    },
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "type": "monitoring",
+                        "from": {
+                            "hosts": [prometheus_uuid],
+                            "service": "prometheus",
+                        },
+                        "to": {
+                            "host": target_uuid,
+                            "service": service,
+                            "port": port,
+                        },
+                        "metadata": {
+                            "source": "observability.managed_services",
+                        },
+                    }
+                )
 
     return edges
 
@@ -139,7 +147,7 @@ def generate_mermaid_diagram(data: dict[str, Any], edges: list[dict[str, Any]]) 
     lines = ["graph LR"]
 
     # Group hosts by group
-    groups: dict[str, list[tuple[str, dict]]] = {}
+    groups: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for name, host_data in data.get("hosts", {}).items():
         if host_data.get("status") != "active":
             continue
@@ -176,13 +184,15 @@ def generate_mermaid_diagram(data: dict[str, Any], edges: list[dict[str, Any]]) 
 
 @click.command()
 @click.option(
-    "-r", "--registry",
+    "-r",
+    "--registry",
     type=click.Path(exists=True, path_type=Path),
     default="../../ansible/inventory/uuid_registry.yml",
     help="Path to production registry",
 )
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(path_type=Path),
     default="local",
     help="Output directory",
@@ -218,8 +228,8 @@ def analyze(
             "Ensure registry path is correct and readable.",
             [{"command": "infralink validate", "description": "Validate registry and edges"}],
         )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
+        _emit(payload)
+        raise SystemExit(1) from exc
 
     # Stats
     total_hosts = len(data.get("hosts", {}))
@@ -227,7 +237,7 @@ def analyze(
 
     # Find prometheus host
     prometheus_uuid = None
-    for name, host_data in data.get("hosts", {}).items():
+    for _name, host_data in data.get("hosts", {}).items():
         if "prometheus" in host_data.get("services", []):
             prometheus_uuid = host_data.get("uuid")
             break
@@ -330,4 +340,4 @@ def analyze(
             {"command": "infralink diagram", "description": "Generate diagram outputs"},
         ],
     )
-    click.echo(json.dumps(payload))
+    _emit(payload)
