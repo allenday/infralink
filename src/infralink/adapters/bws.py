@@ -10,9 +10,9 @@ import importlib
 import ipaddress
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from enum import Enum
-from typing import Any, Protocol, cast
+from typing import Any, NoReturn, Protocol, SupportsIndex, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -84,9 +84,12 @@ def _is_loopback_url(value: str) -> bool:
     try:
         parsed = urlsplit(value)
         hostname = parsed.hostname
+        port = parsed.port
         if (
             parsed.scheme not in {"http", "https"}
             or not hostname
+            or port is None
+            or not 1 <= port <= 65535
             or parsed.username is not None
             or parsed.password is not None
             or parsed.path
@@ -108,26 +111,48 @@ def _safe_attr(value: Any, name: str) -> Any:
         return _MISSING
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BwsConfig:
     """Immutable connection settings with a redacted credential."""
 
-    access_token: str = field(repr=False)
+    access_token: InitVar[str]
     organization_id: str
     api_url: str = HOSTED_API_URL
     identity_url: str = HOSTED_IDENTITY_URL
     test_only: bool = False
+    _access_token: SecretValue = field(init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        if not self.access_token or not self.organization_id:
+    def __post_init__(self, access_token: str) -> None:
+        if not access_token or not self.organization_id:
             raise BwsConfigurationError("BWS_ACCESS_TOKEN and BWS_ORGANIZATION_ID are required")
+        try:
+            organization_id = str(UUID(self.organization_id))
+        except (AttributeError, TypeError, ValueError):
+            raise BwsConfigurationError("BWS organization identity must be a UUID") from None
         if self.test_only:
-            if self.access_token != _FAKE_TOKEN:
+            if access_token != _FAKE_TOKEN:
                 raise BwsConfigurationError("test configuration requires the fake token")
             if not _is_loopback_url(self.api_url) or not _is_loopback_url(self.identity_url):
                 raise BwsConfigurationError("test configuration requires loopback endpoints")
         elif self.api_url != HOSTED_API_URL or self.identity_url != HOSTED_IDENTITY_URL:
             raise BwsConfigurationError("production configuration requires hosted endpoints")
+        object.__setattr__(self, "organization_id", organization_id)
+        object.__setattr__(self, "_access_token", SecretValue(access_token))
+
+    def __copy__(self) -> NoReturn:
+        raise TypeError("BwsConfig cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, object]) -> NoReturn:
+        raise TypeError("BwsConfig cannot be copied")
+
+    def __getstate__(self) -> NoReturn:
+        raise TypeError("BwsConfig state cannot be extracted")
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        raise TypeError("BwsConfig cannot be pickled")
+
+    def _reveal_access_token(self) -> str:
+        return self._access_token.reveal()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> BwsConfig:
@@ -188,37 +213,39 @@ class BwsSecretResolver:
                 "test configuration requires an explicitly injected SDK factory"
             )
         factory = _default_sdk_factory if sdk_factory is None else sdk_factory
-        failure_code: BwsErrorCode | None = None
-        client: Any = _MISSING
-        login: object = _MISSING
-        try:
-            client = factory(config)
-            login = client.auth().login_access_token(config.access_token)
-        except TimeoutError:
-            failure_code = BwsErrorCode.PROVIDER_TIMEOUT
-        except Exception:
-            failure_code = BwsErrorCode.PROVIDER_UNAVAILABLE
-        if failure_code is not None:
-            raise BwsProviderError(failure_code)
+        client = self._call(
+            lambda: factory(config),
+            BwsErrorCode.PROVIDER_UNAVAILABLE,
+        )
+        login = self._call(
+            lambda: client.auth().login_access_token(config._reveal_access_token()),
+            BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED,
+        )
         login_succeeded = _safe_attr(login, "success")
         if type(login_succeeded) is not bool:
             raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
         if not login_succeeded:
             raise BwsProviderError(BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED)
+        authenticated = _safe_attr(_safe_attr(login, "data"), "authenticated")
+        if type(authenticated) is not bool:
+            raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
+        if not authenticated:
+            raise BwsProviderError(BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED)
         self._config = config
         self._client = cast(_SdkClient, client)
 
-    def _call(self, operation: Callable[[], Any]) -> Any:
-        result: Any = _MISSING
+    @staticmethod
+    def _call(operation: Callable[[], Any], exception_code: BwsErrorCode) -> Any:
         failure_code: BwsErrorCode | None = None
+        result: Any = _MISSING
         try:
             result = operation()
         except TimeoutError:
             failure_code = BwsErrorCode.PROVIDER_TIMEOUT
         except Exception:
-            failure_code = BwsErrorCode.PROVIDER_UNAVAILABLE
+            failure_code = exception_code
         if failure_code is not None:
-            raise BwsProviderError(failure_code)
+            raise BwsProviderError(failure_code) from None
         return result
 
     @staticmethod
@@ -237,16 +264,34 @@ class BwsSecretResolver:
     def _normalize_id(value: Any) -> str:
         if isinstance(value, UUID):
             return str(value)
-        if type(value) is str and value:
-            return value
-        raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
+        if type(value) is str:
+            try:
+                return str(UUID(value))
+            except ValueError:
+                pass
+        raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE) from None
+
+    @staticmethod
+    def _normalize_declared_project(project_id: str) -> str:
+        try:
+            return str(UUID(project_id))
+        except (AttributeError, TypeError, ValueError):
+            raise BwsConfigurationError("Bitwarden project identity must be a UUID") from None
 
     def _accessible_projects(self, configured_projects: set[str]) -> set[str]:
-        response = self._call(lambda: self._client.projects().list(self._config.organization_id))
+        response = self._call(
+            lambda: self._client.projects().list(self._config.organization_id),
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        )
         items = self._list_payload(response, BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
         project_ids: set[str] = set()
         for item in items:
             project_id = self._normalize_id(_safe_attr(item, "id"))
+            organization_id = _safe_attr(item, "organization_id")
+            if organization_id is not _MISSING and (
+                self._normalize_id(organization_id) != self._config.organization_id
+            ):
+                raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
             if project_id in project_ids:
                 raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
             project_ids.add(project_id)
@@ -256,14 +301,22 @@ class BwsSecretResolver:
         return accessible
 
     def _identifier_index(self) -> dict[tuple[str, str], str]:
-        response = self._call(lambda: self._client.secrets().list(self._config.organization_id))
-        items = self._list_payload(response, BwsErrorCode.PROVIDER_UNAVAILABLE)
+        response = self._call(
+            lambda: self._client.secrets().list(self._config.organization_id),
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        )
+        items = self._list_payload(response, BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
         identifiers: dict[tuple[str, str], str] = {}
         for item in items:
             secret_id = self._normalize_id(_safe_attr(item, "id"))
             key = _safe_attr(item, "key")
+            organization_id = self._normalize_id(_safe_attr(item, "organization_id"))
             project_ids = _safe_attr(item, "project_ids")
-            if type(key) is not str or type(project_ids) is not list:
+            if (
+                type(key) is not str
+                or organization_id != self._config.organization_id
+                or type(project_ids) is not list
+            ):
                 raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
             for raw_project_id in project_ids:
                 project_id = self._normalize_id(raw_project_id)
@@ -279,7 +332,7 @@ class BwsSecretResolver:
         for reference in references:
             if reference.project is None:
                 raise BwsConfigurationError("Bitwarden references require an explicit project")
-            projects.add(reference.project)
+            projects.add(BwsSecretResolver._normalize_declared_project(reference.project))
         return projects
 
     def audit(self, references: list[SecretReference]) -> list[SecretAudit]:
@@ -291,7 +344,7 @@ class BwsSecretResolver:
         identifiers = self._identifier_index()
         audits: list[SecretAudit] = []
         for reference in references:
-            project_id = cast(str, reference.project)
+            project_id = self._normalize_declared_project(cast(str, reference.project))
             if project_id not in accessible_projects:
                 audits.append(
                     SecretAudit(
@@ -328,17 +381,32 @@ class BwsSecretResolver:
         configured_projects = self._configured_projects([reference])
         self._accessible_projects(configured_projects)
         identifiers = self._identifier_index()
-        project_id = cast(str, reference.project)
+        project_id = self._normalize_declared_project(cast(str, reference.project))
         secret_id = identifiers.get((project_id, reference.ref))
         if secret_id is None:
             raise BwsProviderError(BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
-        response = self._call(lambda: self._client.secrets().get(secret_id))
+        response = self._call(
+            lambda: self._client.secrets().get(secret_id),
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        )
         succeeded = _safe_attr(response, "success")
         if type(succeeded) is not bool:
             raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
         if not succeeded:
             raise BwsProviderError(BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
-        value = _safe_attr(_safe_attr(response, "data"), "value")
+        data = _safe_attr(response, "data")
+        response_id = self._normalize_id(_safe_attr(data, "id"))
+        response_key = _safe_attr(data, "key")
+        response_organization_id = self._normalize_id(_safe_attr(data, "organization_id"))
+        response_project_id = self._normalize_id(_safe_attr(data, "project_id"))
+        if (
+            response_id != secret_id
+            or response_key != reference.ref
+            or response_organization_id != self._config.organization_id
+            or response_project_id != project_id
+        ):
+            raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
+        value = _safe_attr(data, "value")
         if type(value) is not str:
             raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
         return SecretValue(value)

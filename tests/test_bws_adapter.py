@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
 import pickle
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError
+from collections.abc import Callable, Sequence
+from dataclasses import FrozenInstanceError, asdict
 from types import ModuleType, SimpleNamespace
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -30,6 +33,7 @@ PROJECT_A = UUID("22222222-2222-2222-2222-222222222222")
 PROJECT_B = UUID("33333333-3333-3333-3333-333333333333")
 SECRET_A = UUID("44444444-4444-4444-4444-444444444444")
 SECRET_B = UUID("55555555-5555-5555-5555-555555555555")
+MIXED_ORGANIZATION_ID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
 
 
 def test_from_env_requires_token_and_organization() -> None:
@@ -56,6 +60,33 @@ def test_hosted_endpoints_are_fixed_and_config_is_frozen_and_redacted() -> None:
     assert CANARY not in str(config)
     with pytest.raises(FrozenInstanceError):
         config.api_url = "https://example.com"  # type: ignore[misc]
+
+
+def test_config_blocks_credential_extraction_protocols() -> None:
+    config = BwsConfig.from_env(
+        {
+            "BWS_ACCESS_TOKEN": CANARY,
+            "BWS_ORGANIZATION_ID": ORGANIZATION_ID,
+        }
+    )
+    operations: list[Callable[[], object]] = [
+        lambda: asdict(config),
+        lambda: vars(config),
+        lambda: pickle.dumps(config),
+        lambda: copy.copy(config),
+        lambda: copy.deepcopy(config),
+        lambda: config.__getstate__(),
+    ]
+
+    for operation in operations:
+        with pytest.raises((BwsConfigurationError, TypeError)) as caught:
+            operation()
+        assert CANARY not in str(caught.value)
+        assert CANARY not in repr(caught.value)
+    with pytest.raises(TypeError):
+        json.dumps(config)
+    assert not hasattr(config, "access_token")
+    assert not hasattr(config, "__dict__")
 
 
 @pytest.mark.parametrize(
@@ -85,6 +116,14 @@ def test_direct_production_construction_requires_exact_hosted_urls() -> None:
         )
 
 
+def test_config_normalizes_organization_uuid_and_rejects_invalid_identity() -> None:
+    config = BwsConfig(access_token=CANARY, organization_id=MIXED_ORGANIZATION_ID)
+
+    assert config.organization_id == MIXED_ORGANIZATION_ID.lower()
+    with pytest.raises(BwsConfigurationError, match="organization"):
+        BwsConfig(access_token=CANARY, organization_id="not-a-uuid")
+
+
 @pytest.mark.parametrize(
     ("token", "api_url", "identity_url"),
     [
@@ -95,6 +134,11 @@ def test_direct_production_construction_requires_exact_hosted_urls() -> None:
         (FAKE_TOKEN, "http://localhost:8080?query=x", "http://localhost:8081"),
         (FAKE_TOKEN, "http://localhost:8080#fragment", "http://localhost:8081"),
         (FAKE_TOKEN, "ftp://localhost:8080", "http://localhost:8081"),
+        (FAKE_TOKEN, "http://localhost", "http://localhost:8081"),
+        (FAKE_TOKEN, "http://localhost:", "http://localhost:8081"),
+        (FAKE_TOKEN, "http://localhost:0", "http://localhost:8081"),
+        (FAKE_TOKEN, "http://localhost:65536", "http://localhost:8081"),
+        (FAKE_TOKEN, "http://localhost:not-a-port", "http://localhost:8081"),
     ],
 )
 def test_for_test_requires_literal_token_and_strict_loopback_urls(
@@ -168,13 +212,16 @@ class FakeClient:
     def __init__(
         self,
         *,
-        login: object = SimpleNamespace(success=True),
+        login: object = SimpleNamespace(
+            success=True,
+            data=SimpleNamespace(authenticated=True),
+        ),
         projects: object = SimpleNamespace(
             success=True,
             data=SimpleNamespace(
                 data=[
-                    SimpleNamespace(id=PROJECT_A),
-                    SimpleNamespace(id=PROJECT_B),
+                    SimpleNamespace(id=PROJECT_A, organization_id=UUID(ORGANIZATION_ID)),
+                    SimpleNamespace(id=PROJECT_B, organization_id=UUID(ORGANIZATION_ID)),
                 ]
             ),
         ),
@@ -182,14 +229,30 @@ class FakeClient:
             success=True,
             data=SimpleNamespace(
                 data=[
-                    SimpleNamespace(id=SECRET_A, key="db_password", project_ids=[PROJECT_A]),
-                    SimpleNamespace(id=SECRET_B, key="api_key", project_ids=[PROJECT_B]),
+                    SimpleNamespace(
+                        id=SECRET_A,
+                        key="db_password",
+                        organization_id=UUID(ORGANIZATION_ID),
+                        project_ids=[PROJECT_A],
+                    ),
+                    SimpleNamespace(
+                        id=SECRET_B,
+                        key="api_key",
+                        organization_id=UUID(ORGANIZATION_ID),
+                        project_ids=[PROJECT_B],
+                    ),
                 ]
             ),
         ),
         secret: object = SimpleNamespace(
             success=True,
-            data=SimpleNamespace(value=CANARY),
+            data=SimpleNamespace(
+                id=SECRET_A,
+                key="db_password",
+                organization_id=UUID(ORGANIZATION_ID),
+                project_id=PROJECT_A,
+                value=CANARY,
+            ),
         ),
     ) -> None:
         self.auth_client = FakeAuth(login)
@@ -210,12 +273,22 @@ def response(data: object, *, success: bool = True) -> SimpleNamespace:
     return SimpleNamespace(success=success, data=SimpleNamespace(data=data))
 
 
-def project(project_id: UUID) -> SimpleNamespace:
-    return SimpleNamespace(id=project_id)
+def project(project_id: object, organization_id: object = UUID(ORGANIZATION_ID)) -> SimpleNamespace:
+    return SimpleNamespace(id=project_id, organization_id=organization_id)
 
 
-def identifier(secret_id: object, key: object, project_ids: object) -> SimpleNamespace:
-    return SimpleNamespace(id=secret_id, key=key, project_ids=project_ids)
+def identifier(
+    secret_id: object,
+    key: object,
+    project_ids: object,
+    organization_id: object = UUID(ORGANIZATION_ID),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=secret_id,
+        key=key,
+        organization_id=organization_id,
+        project_ids=project_ids,
+    )
 
 
 def reference(ref: str = "db_password", project_id: UUID | None = PROJECT_A) -> SecretReference:
@@ -224,6 +297,64 @@ def reference(ref: str = "db_password", project_id: UUID | None = PROJECT_A) -> 
         project=None if project_id is None else str(project_id),
         locations=("apps.api.secrets",),
     )
+
+
+class NativeCommandStub:
+    def __init__(self, responses: Sequence[dict[str, object]]) -> None:
+        self.responses = list(responses)
+
+    def run_command(self, command: str) -> str:
+        return json.dumps(self.responses.pop(0))
+
+
+def real_sdk_client(responses: Sequence[dict[str, object]]) -> Any:
+    sdk = pytest.importorskip("bitwarden_sdk")
+    client = sdk.BitwardenClient.__new__(sdk.BitwardenClient)
+    client.inner = NativeCommandStub(responses)
+    return client
+
+
+def sdk_success(data: dict[str, object]) -> dict[str, object]:
+    return {"success": True, "data": data, "errorMessage": None}
+
+
+def sdk_denial() -> dict[str, object]:
+    return {"success": False, "data": None, "errorMessage": CANARY}
+
+
+SDK_LOGIN_SUCCESS = sdk_success(
+    {
+        "authenticated": True,
+        "forcePasswordReset": False,
+        "resetMasterPassword": False,
+        "twoFactor": None,
+    }
+)
+SDK_PROJECTS_SUCCESS = sdk_success(
+    {
+        "data": [
+            {
+                "creationDate": "2026-01-01T00:00:00Z",
+                "id": str(PROJECT_A),
+                "name": "project-a",
+                "organizationId": ORGANIZATION_ID,
+                "revisionDate": "2026-01-01T00:00:00Z",
+            }
+        ]
+    }
+)
+SDK_IDENTIFIERS_SUCCESS = sdk_success(
+    {
+        "data": [
+            {
+                "id": str(SECRET_A),
+                "key": "db_password",
+                "organizationId": ORGANIZATION_ID,
+                "projectIds": [str(PROJECT_A)],
+            }
+        ]
+    }
+)
 
 
 @pytest.mark.parametrize("factory", [None, _default_sdk_factory])
@@ -365,7 +496,7 @@ def test_default_factory_normalizes_missing_optional_sdk(
     [
         (SimpleNamespace(success=False), BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED),
         (TimeoutError(CANARY), BwsErrorCode.PROVIDER_TIMEOUT),
-        (RuntimeError(CANARY), BwsErrorCode.PROVIDER_UNAVAILABLE),
+        (RuntimeError(CANARY), BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED),
         (SimpleNamespace(), BwsErrorCode.PROVIDER_UNAVAILABLE),
         (SimpleNamespace(success="yes"), BwsErrorCode.PROVIDER_UNAVAILABLE),
     ],
@@ -387,6 +518,98 @@ def test_login_failure_is_safe(login: object, code: BwsErrorCode) -> None:
     assert caught.value.code is code
     assert str(caught.value) == code.value
     assert CANARY not in str(caught.value)
+    assert CANARY not in repr(caught.value)
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize(
+    ("login", "code"),
+    [
+        (
+            SimpleNamespace(
+                success=True,
+                data=SimpleNamespace(authenticated=False),
+            ),
+            BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED,
+        ),
+        (
+            SimpleNamespace(success=True, data=None),
+            BwsErrorCode.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            SimpleNamespace(
+                success=True,
+                data=SimpleNamespace(authenticated="yes"),
+            ),
+            BwsErrorCode.PROVIDER_UNAVAILABLE,
+        ),
+    ],
+)
+def test_login_validates_authenticated_state(login: object, code: BwsErrorCode) -> None:
+    client = FakeClient(login=login)
+
+    with pytest.raises(BwsProviderError) as caught:
+        BwsSecretResolver(
+            config=BwsConfig.from_env(
+                {
+                    "BWS_ACCESS_TOKEN": CANARY,
+                    "BWS_ORGANIZATION_ID": ORGANIZATION_ID,
+                }
+            ),
+            sdk_factory=lambda config: client,
+        )
+
+    assert caught.value.code is code
+
+
+@pytest.mark.parametrize(
+    ("responses", "operation", "code"),
+    [
+        ([sdk_denial()], "construct", BwsErrorCode.PROVIDER_AUTHENTICATION_FAILED),
+        (
+            [SDK_LOGIN_SUCCESS, sdk_denial()],
+            "audit",
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        ),
+        (
+            [SDK_LOGIN_SUCCESS, SDK_PROJECTS_SUCCESS, sdk_denial()],
+            "audit",
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        ),
+        (
+            [
+                SDK_LOGIN_SUCCESS,
+                SDK_PROJECTS_SUCCESS,
+                SDK_IDENTIFIERS_SUCCESS,
+                sdk_denial(),
+            ],
+            "resolve",
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        ),
+    ],
+)
+def test_real_sdk_generic_denial_is_classified_by_operation_stage(
+    responses: list[dict[str, object]], operation: str, code: BwsErrorCode
+) -> None:
+    client = real_sdk_client(responses)
+    config = BwsConfig.from_env(
+        {
+            "BWS_ACCESS_TOKEN": CANARY,
+            "BWS_ORGANIZATION_ID": ORGANIZATION_ID,
+        }
+    )
+
+    with pytest.raises(BwsProviderError) as caught:
+        resolver = BwsSecretResolver(
+            config=config,
+            sdk_factory=lambda adapter_config: client,
+        )
+        if operation == "audit":
+            resolver.audit([reference()])
+        elif operation == "resolve":
+            resolver.resolve(reference())
+
+    assert caught.value.code is code
     assert CANARY not in repr(caught.value)
     assert caught.value.__context__ is None
 
@@ -427,6 +650,113 @@ def test_audit_reports_accessible_match_without_getting_value() -> None:
     assert client.projects_client.organizations == [ORGANIZATION_ID]
     assert client.secrets_client.organizations == [ORGANIZATION_ID]
     assert client.secrets_client.get_calls == []
+
+
+def test_declared_project_uuid_is_canonicalized_in_audit_result() -> None:
+    project_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    client = FakeClient(
+        projects=response([project(project_id)]),
+        identifiers=response([identifier(SECRET_A, "db_password", [project_id])]),
+    )
+    declared = SecretReference(
+        ref="db_password",
+        project=str(project_id).upper(),
+        locations=("apps.api.secrets",),
+    )
+
+    result = make_resolver(client).audit([declared])
+
+    assert result[0].project == str(project_id)
+
+
+def test_invalid_declared_project_fails_before_provider_listing() -> None:
+    client = FakeClient()
+    declared = SecretReference(
+        ref="db_password",
+        project="not-a-uuid",
+        locations=("apps.api.secrets",),
+    )
+
+    with pytest.raises(BwsConfigurationError, match="project"):
+        make_resolver(client).audit([declared])
+
+    assert client.projects_client.organizations == []
+
+
+@pytest.mark.parametrize(
+    ("stage", "payload"),
+    [
+        ("projects", response([project(PROJECT_A, UUID(MIXED_ORGANIZATION_ID))])),
+        (
+            "identifiers",
+            response(
+                [
+                    identifier(
+                        SECRET_A,
+                        "db_password",
+                        [PROJECT_A],
+                        UUID(MIXED_ORGANIZATION_ID),
+                    )
+                ]
+            ),
+        ),
+    ],
+)
+def test_provider_metadata_must_match_configured_organization(stage: str, payload: object) -> None:
+    client = FakeClient(
+        projects=payload if stage == "projects" else response([project(PROJECT_A)]),
+        identifiers=payload
+        if stage == "identifiers"
+        else response([identifier(SECRET_A, "db_password", [PROJECT_A])]),
+    )
+
+    with pytest.raises(BwsProviderError) as caught:
+        make_resolver(client).audit([reference()])
+
+    assert caught.value.code is BwsErrorCode.PROVIDER_UNAVAILABLE
+
+
+class GuardedSecretPayload:
+    def __init__(
+        self,
+        *,
+        secret_id: object = SECRET_A,
+        key: object = "db_password",
+        organization_id: object = UUID(ORGANIZATION_ID),
+        project_id: object = PROJECT_A,
+    ) -> None:
+        self.id = secret_id
+        self.key = key
+        self.organization_id = organization_id
+        self.project_id = project_id
+        self.value_reads = 0
+
+    @property
+    def value(self) -> str:
+        self.value_reads += 1
+        return CANARY
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        GuardedSecretPayload(secret_id=SECRET_B),
+        GuardedSecretPayload(key="stale_key"),
+        GuardedSecretPayload(organization_id=UUID(MIXED_ORGANIZATION_ID)),
+        GuardedSecretPayload(project_id=PROJECT_B),
+        GuardedSecretPayload(secret_id="not-a-uuid"),
+    ],
+)
+def test_resolve_rejects_stale_or_mismatched_get_identity_before_value(
+    payload: GuardedSecretPayload,
+) -> None:
+    client = FakeClient(secret=SimpleNamespace(success=True, data=payload))
+
+    with pytest.raises(BwsProviderError) as caught:
+        make_resolver(client).resolve(reference())
+
+    assert caught.value.code is BwsErrorCode.PROVIDER_UNAVAILABLE
+    assert payload.value_reads == 0
 
 
 def test_sdk_string_ids_are_normalized_without_leaking_secret_id() -> None:
@@ -541,11 +871,15 @@ def test_duplicate_identifier_key_and_project_fails_closed() -> None:
     ("stage", "failure", "code"),
     [
         ("projects", TimeoutError(CANARY), BwsErrorCode.PROVIDER_TIMEOUT),
-        ("projects", RuntimeError(CANARY), BwsErrorCode.PROVIDER_UNAVAILABLE),
+        ("projects", RuntimeError(CANARY), BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED),
         ("projects", SimpleNamespace(success=False), BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED),
         ("identifiers", TimeoutError(CANARY), BwsErrorCode.PROVIDER_TIMEOUT),
-        ("identifiers", RuntimeError(CANARY), BwsErrorCode.PROVIDER_UNAVAILABLE),
-        ("identifiers", SimpleNamespace(success=False), BwsErrorCode.PROVIDER_UNAVAILABLE),
+        ("identifiers", RuntimeError(CANARY), BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED),
+        (
+            "identifiers",
+            SimpleNamespace(success=False),
+            BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        ),
     ],
 )
 def test_audit_provider_failures_are_normalized(
@@ -671,13 +1005,22 @@ def test_resolve_fails_closed_before_get(client: FakeClient, code: BwsErrorCode)
     ("get_response", "code"),
     [
         (TimeoutError(CANARY), BwsErrorCode.PROVIDER_TIMEOUT),
-        (RuntimeError(CANARY), BwsErrorCode.PROVIDER_UNAVAILABLE),
+        (RuntimeError(CANARY), BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED),
         (SimpleNamespace(success=False), BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED),
         (SimpleNamespace(), BwsErrorCode.PROVIDER_UNAVAILABLE),
         (SimpleNamespace(success="yes"), BwsErrorCode.PROVIDER_UNAVAILABLE),
         (SimpleNamespace(success=True, data=None), BwsErrorCode.PROVIDER_UNAVAILABLE),
         (
-            SimpleNamespace(success=True, data=SimpleNamespace(value=object())),
+            SimpleNamespace(
+                success=True,
+                data=SimpleNamespace(
+                    id=SECRET_A,
+                    key="db_password",
+                    organization_id=UUID(ORGANIZATION_ID),
+                    project_id=PROJECT_A,
+                    value=object(),
+                ),
+            ),
             BwsErrorCode.PROVIDER_UNAVAILABLE,
         ),
     ],
