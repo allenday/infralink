@@ -1,0 +1,4 @@
+title = "Infralink secret scanning"
+
+[extend]
+useDefault = true

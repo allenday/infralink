@@ -14,9 +14,9 @@ hosts:
     status: active
     group: production
     cloud: hetzner-cloud
-    tailscale_ip: 100.78.109.111
+    tailscale_ip: 192.0.2.10
     tailscale_name: prod-database
-    public_ip: 91.99.122.86
+    public_ip: 198.51.100.10
     use_exit_node: false
     dns_hostnames:
       - db.internal.example.com
@@ -40,7 +40,7 @@ hosts:
         exposure: internal
 
     provider_metadata:
-      hcloud_project: my-project
+      hcloud_project: example-project
 
     observability:
       ready: true
@@ -55,10 +55,10 @@ hosts:
     status: active
     group: production
     cloud: hetzner-robot
-    tailscale_ip: 100.69.66.115
+    tailscale_ip: 192.0.2.20
     tailscale_name: prod-app-1
-    public_ip: 162.55.23.32
-    public_ip_secondary: 162.55.23.33
+    public_ip: 198.51.100.20
+    public_ip_secondary: 198.51.100.21
     use_exit_node: false
     dns_hostnames:
       - app1.example.com
@@ -96,9 +96,9 @@ hosts:
     status: active
     group: production
     cloud: hetzner-robot
-    tailscale_ip: 100.82.220.106
+    tailscale_ip: 192.0.2.30
     tailscale_name: prod-app-2
-    public_ip: 78.46.72.53
+    public_ip: 198.51.100.30
     use_exit_node: false
 
     roles:
@@ -128,9 +128,9 @@ hosts:
     status: active
     group: infrastructure
     cloud: hetzner-cloud
-    tailscale_ip: 100.91.20.46
+    tailscale_ip: 192.0.2.40
     tailscale_name: monitoring-bastion
-    public_ip: 91.99.181.74
+    public_ip: 198.51.100.40
     use_exit_node: false
 
     roles:
@@ -141,7 +141,7 @@ hosts:
       - tailscale-exit-node
 
     provider_metadata:
-      hcloud_project: my-project
+      hcloud_project: example-project
 
     observability:
       ready: true
@@ -154,13 +154,13 @@ hosts:
     status: terminated
     group: staging
     cloud: gcp
-    public_ip: 34.66.108.223
+    public_ip: 203.0.113.50
 
     roles:
       - postgresql
 
     provider_metadata:
-      gcp_project: my-staging
+      gcp_project: example-staging-project
       gcp_zone: us-central1-a
 
 # Ansible defaults

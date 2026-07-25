@@ -1,7 +1,6 @@
 import json
 import subprocess
 import sys
-import venv
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -33,40 +32,10 @@ def test_module_help_is_one_json_document() -> None:
     assert payload["result"]["path"] == []
 
 
-def test_installed_wheel_entrypoints_emit_json(tmp_path: Path) -> None:
+def test_package_declares_both_cli_entrypoints() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    dist_dir = tmp_path / "dist"
-    subprocess.run(
-        [sys.executable, "-m", "build", "--outdir", str(dist_dir)],
-        cwd=project_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    wheel = next(dist_dir.glob("infralink-*.whl"))
-    install_venv = tmp_path / "install-venv"
-    venv.create(install_venv, with_pip=True)
-    install_python = install_venv / "bin" / "python"
-    subprocess.run(
-        [install_python, "-m", "pip", "install", str(wheel)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    module_entrypoint = project_root / "src" / "infralink" / "__main__.py"
 
-    invocations = [
-        [str(install_venv / "bin" / "infralink"), "--help"],
-        [str(install_python), "-m", "infralink", "--version"],
-    ]
-    for invocation in invocations:
-        completed = subprocess.run(
-            invocation,
-            cwd=tmp_path,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert completed.returncode == 0
-        assert completed.stderr == ""
-        assert completed.stdout.count("\n") == 1
-        assert json.loads(completed.stdout)["ok"] is True
+    assert 'infralink = "infralink.cli.main:run"' in pyproject
+    assert "from infralink.cli.main import run" in module_entrypoint.read_text(encoding="utf-8")

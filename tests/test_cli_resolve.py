@@ -94,13 +94,13 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
             "secret_refs_truncated": False,
         },
         "endpoint": {
-            "host": "91.99.122.86",
+            "host": "198.51.100.10",
             "port": 5432,
             "protocol": "postgresql+psycopg2",
         },
         "connection_template": (
             "postgresql+psycopg2://reporter%2Breadonly:"
-            "${secret:app_postgresql_password}@91.99.122.86:5432/team%2Fanalytics"
+            "${secret:app_postgresql_password}@198.51.100.10:5432/team%2Fanalytics"
         ),
         "secret_refs": {
             "items": ["app_postgresql_password"],
