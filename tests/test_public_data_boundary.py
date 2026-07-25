@@ -28,7 +28,7 @@ UUID = re.compile(
 GCP_KEY = re.compile(
     r"(?<![a-z0-9_])(?:export\s+)?"
     r"(?:(?:gcp_)?project(?:_id)?|google_cloud_project)\s*[:=]\s*"
-    r"[`'\"]?<?([a-z0-9][a-z0-9-]*)>?",
+    r"[`'\"]?((?:<[a-z0-9][a-z0-9-]*>)|(?:[a-z0-9][a-z0-9-]*))",
     re.IGNORECASE,
 )
 BWS_KEY = re.compile(
@@ -55,6 +55,7 @@ BARE_DOMAIN = re.compile(
     r"(?<![a-z0-9_.-])"
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"\.?"
     r"(?![a-z0-9_.-])",
     re.IGNORECASE,
 )
@@ -75,6 +76,7 @@ SAFE_DOTTED_TOKENS = {
     "v0.2.md",
 }
 GCP_PROJECT_ALLOWLIST = {"example-project", "example-staging-project"}
+GCP_PROJECT_PLACEHOLDER = "<project-id>"
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -130,7 +132,7 @@ def _hostname_violation(hostname: str | None) -> str | None:
 
 
 def _is_safe_dotted_token(text: str, match: re.Match[str]) -> bool:
-    candidate = match.group(0).lower()
+    candidate = match.group(0).removesuffix(".").lower()
     if candidate in SAFE_DOTTED_TOKENS:
         return True
     line_start = text.rfind("\n", 0, match.start()) + 1
@@ -202,7 +204,7 @@ def boundary_violations(text: str) -> list[str]:
             violations.append(f"non-RFC5737 address: {address}")
 
     for project in GCP_KEY.findall(text):
-        if project.lower() not in GCP_PROJECT_ALLOWLIST:
+        if project.lower() not in GCP_PROJECT_ALLOWLIST | {GCP_PROJECT_PLACEHOLDER}:
             violations.append("GCP project identifier")
     for project in BWS_KEY.findall(text):
         if UUID.fullmatch(project):
@@ -242,8 +244,12 @@ def boundary_violations(text: str) -> list[str]:
         ),
         ("Run `export GOOGLE_CLOUD_PROJECT=production-123`.", "GCP project identifier"),
         ("Use GCP_PROJECT_ID: production-example-real.", "GCP project identifier"),
+        ("export GOOGLE_CLOUD_PROJECT=<production-123>", "GCP project identifier"),
         ("Dependency: secrets.production.py", "non-example hostname"),
         ("See secrets.production.md for credentials.", "non-example hostname"),
+        ("Dependency: db.production.internal.", "non-example hostname"),
+        ("Dependency: secrets.production.py.", "non-example hostname"),
+        ("See secrets.production.md.", "non-example hostname"),
     ],
 )
 def test_boundary_detector_rejects_each_private_data_class(text: str, expected: str) -> None:
@@ -258,9 +264,12 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     canonical_name: db.internal.example.com
     edge_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2
     gcp_project: example-project
+    GOOGLE_CLOUD_PROJECT=example-staging-project
+    export GOOGLE_CLOUD_PROJECT=<project-id>
     prose: infralink.cli/v1, manifest.json, and resolver.get are identifiers.
     files: registry.yml, edges.yml, PRD.md, and BACKLOG.md are public files.
     path: docs/reference.md is an unambiguous public file path.
+    punctuation: docs/reference.md. Release v0.2.0.
     """
     assert boundary_violations(text) == []
 
