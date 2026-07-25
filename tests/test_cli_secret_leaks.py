@@ -144,7 +144,8 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
         "--edges",
         str(edges_path),
     ]
-    artifacts = tmp_path / "artifacts"
+    monkeypatch.chdir(tmp_path)
+    artifacts = Path("artifacts")
     invocations: dict[tuple[str, ...], tuple[list[str], int, bool]] = {
         (): (source, 0, True),
         ("analyze",): (

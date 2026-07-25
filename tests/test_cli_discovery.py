@@ -445,6 +445,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         "diagram": {"diagram"},
         "docs": {"docs"},
         "resolve": {"resolve"},
+        "secrets": {"secrets-audit", "secrets-inspect"},
         "validate": {"validate"},
         "app": {"app-list", "app-show"},
         "info": {"info"},
@@ -459,15 +460,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
     schema_names = {path.stem for path in (ROOT / "src/infralink/schemas/cli/v1").glob("*.json")}
 
     assert live_commands == set(schema_coverage)
-    assert (
-        set().union(*schema_coverage.values())
-        | {
-            "root",
-            "secrets-inspect",
-            "secrets-audit",
-        }
-        == schema_names
-    )
+    assert set().union(*schema_coverage.values()) | {"root"} == schema_names
 
 
 def test_successful_info_and_resolve_match_checked_in_schemas() -> None:
