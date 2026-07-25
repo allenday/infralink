@@ -14,6 +14,7 @@ from infralink.__about__ import __version__
 from infralink.core.edges import Edge, EdgeSet
 from infralink.core.registry import Registry
 from infralink.core.resolver import EdgeResolver
+from infralink.secrets import SecretAudit, SecretReference, SecretResolver, SecretValue
 
 __all__ = [
     "__version__",
@@ -21,4 +22,8 @@ __all__ = [
     "EdgeSet",
     "Edge",
     "EdgeResolver",
+    "SecretAudit",
+    "SecretReference",
+    "SecretResolver",
+    "SecretValue",
 ]
