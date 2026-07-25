@@ -524,18 +524,21 @@ The adapter:
 
 - accepts an explicit token or the fleet-standard `BWS_ACCESS_TOKEN`
 - defaults to hosted Bitwarden endpoints
-- permits HTTPS endpoint overrides only when certificate and hostname
-  verification are enabled
-- permits plain HTTP only for loopback tests that use fake credentials
+- supports only Bitwarden's hosted HTTPS endpoints in `v0.2.0`
+- permits loopback endpoint configuration only through an injected fake SDK
+  factory using a literal fake credential
 - performs read-only operations
 - supports project-scoped lookup
 - returns normalized provider metadata and opaque values
 - performs no disk caching
 
-Endpoint configuration cannot be loaded from untrusted topology fields.
-Redirects to a different origin are rejected before authorization headers are
-sent. Tests cover insecure schemes, non-loopback HTTP, invalid certificates,
-cross-origin redirects, and token redaction.
+Endpoint configuration cannot be loaded from untrusted topology fields. The
+Bitwarden Python SDK 2.1 does not expose redirect-policy, transport, or
+response-origin hooks, so custom endpoints cannot meet the required
+cross-origin redirect guarantee and are prohibited in `v0.2.0`. Custom endpoint
+support remains deferred until a controllable SDK transport can reject a
+different origin before authorization headers are sent. Tests cover override
+rejection, fake-only loopback configuration, and token redaction.
 
 Machine accounts must have read-only access to the minimum required projects.
 Access tokens, provider payloads, and secret values are excluded from
@@ -550,8 +553,8 @@ loaded topology. It may report:
 - reference identity
 - source location
 - project identity
-- present or missing state
-- accessible or denied state
+- present or `unavailable_or_missing` state
+- accessible or unavailable project state
 - redacted provider error code
 - check timestamp
 
@@ -567,21 +570,24 @@ establish a session or access any configured project. The command then returns
 result.
 
 After a session is established and at least one configured project is
-accessible, denial of another configured project is a project-level audit
-result. Every declared reference in that project reports `accessible: false`
-with `project_access_denied`; the command completes with `ok: true` and exit
-code `1`.
+accessible, another configured project absent from project-list metadata is a
+project-level audit result. Every declared reference in that project reports
+`accessible: false` with `project_unavailable`; the command completes with
+`ok: true` and exit code `1`. The SDK listing surface cannot distinguish a
+missing project from object-level authorization denial, so the public result
+does not claim that distinction.
 
-An object-level denial occurs after its project is accessible but one declared
-reference cannot be read. It reports `accessible: false` with a redacted
-per-reference error code; the command completes with `ok: true` and exit code
-`1`. If the adapter cannot determine whether a denial is provider-wide,
-project-level, or object-specific, it fails closed as a provider failure rather
-than reporting a potentially misleading partial result.
+A declared reference absent from an accessible project's identifier metadata
+reports `accessible: false` with `unavailable_or_missing`; the command
+completes with `ok: true` and exit code `1`. Audit never calls `get()`, so it
+does not invent a distinction between a nonexistent secret and per-object
+authorization denial. Ambiguous provider-wide failures still fail closed
+rather than returning a potentially misleading partial result.
 
-Authentication, authorization, missing-secret, timeout, and
-provider-availability failures remain distinguishable without exposing
-provider response bodies.
+Provider authentication, provider-wide authorization, timeout, and provider
+availability failures remain distinguishable without exposing provider
+response bodies. Missing-secret and per-object authorization outcomes are
+intentionally combined as `unavailable_or_missing`.
 
 Live BWS tests are opt-in and cannot run for untrusted pull requests. Default
 tests use a fake resolver.
@@ -599,7 +605,7 @@ Returns the versioned command tree and safe entry-point actions.
 ### Validate Topology
 
 ```bash
-infralink validate --registry registry.yml --edges edges.yml
+infralink --registry registry.yml --edges edges.yml validate
 ```
 
 Returns a structured validation result. Invalid topology is a completed negative
