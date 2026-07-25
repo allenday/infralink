@@ -27,14 +27,14 @@ UUID = re.compile(
 )
 GCP_KEY = re.compile(
     r"(?<![a-z0-9_])(?:export\s+)?"
-    r"(?:(?:gcp_)?project(?:_id)?|google_cloud_project)\s*[:=]\s*"
-    r"[`'\"]?((?:<[a-z0-9][a-z0-9-]*>)|(?:[a-z0-9][a-z0-9-]*))",
+    r"(?:(?:gcp_)?project(?:_id)?|google_cloud_project)[ \t]*[:=][ \t]*"
+    r"[`'\"]?(?P<value>[^\s`'\"]*)",
     re.IGNORECASE,
 )
 BWS_KEY = re.compile(
     r"(?<![a-z0-9_])(?:export\s+)?"
-    r"bws_(?:project|organization)(?:_id)?\s*[:=]\s*"
-    r"[`'\"]?<?([0-9a-f-]+)>?",
+    r"bws_(?P<kind>project|organization)(?:_id)?[ \t]*[:=][ \t]*"
+    r"[`'\"]?(?P<value>[^\s`'\"]*)",
     re.IGNORECASE,
 )
 HOST_FIELD = re.compile(
@@ -51,14 +51,16 @@ HOSTNAME = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$",
     re.IGNORECASE,
 )
-BARE_DOMAIN = re.compile(
+DOTTED_TOKEN = re.compile(
     r"(?<![a-z0-9_.-])"
-    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    r"\.?"
+    r"(?=[a-z0-9_.-]*\.[a-z0-9])"
+    r"[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?"
+    r"""[.,;:!?)}\]>'"]*"""
     r"(?![a-z0-9_.-])",
     re.IGNORECASE,
 )
+VERSION_IDENTIFIER = re.compile(r"^v?\d+(?:\.\d+){1,3}$", re.IGNORECASE)
+TERMINAL_PROSE_PUNCTUATION = ".,;:!?)]}>'\""
 SAFE_DOTTED_TOKENS = {
     "app-database.md",
     "backlog.md",
@@ -77,6 +79,10 @@ SAFE_DOTTED_TOKENS = {
 }
 GCP_PROJECT_ALLOWLIST = {"example-project", "example-staging-project"}
 GCP_PROJECT_PLACEHOLDER = "<project-id>"
+BWS_PLACEHOLDERS = {
+    "organization": {"<organization-id>", "<organization-uuid>"},
+    "project": {"<project-id>"},
+}
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -131,8 +137,8 @@ def _hostname_violation(hostname: str | None) -> str | None:
     return f"non-example hostname: {candidate}"
 
 
-def _is_safe_dotted_token(text: str, match: re.Match[str]) -> bool:
-    candidate = match.group(0).removesuffix(".").lower()
+def _is_safe_dotted_token(text: str, match: re.Match[str], candidate: str) -> bool:
+    candidate = candidate.lower()
     if candidate in SAFE_DOTTED_TOKENS:
         return True
     line_start = text.rfind("\n", 0, match.start()) + 1
@@ -145,6 +151,25 @@ def _is_safe_dotted_token(text: str, match: re.Match[str]) -> bool:
     }
 
 
+def _dotted_token_violation(
+    text: str,
+    match: re.Match[str],
+    url_matches: tuple[re.Match[str], ...],
+) -> str | None:
+    candidate = match.group(0).rstrip(TERMINAL_PROSE_PUNCTUATION)
+    inside_url = any(
+        url_match.start() <= match.start() and match.end() <= url_match.end()
+        for url_match in url_matches
+    )
+    if (
+        inside_url
+        or VERSION_IDENTIFIER.fullmatch(candidate)
+        or _is_safe_dotted_token(text, match, candidate)
+    ):
+        return None
+    return _hostname_violation(candidate)
+
+
 def boundary_violations(text: str) -> list[str]:
     violations: list[str] = []
     lowered = text.lower()
@@ -152,7 +177,8 @@ def boundary_violations(text: str) -> list[str]:
         violations.append("private suffix")
     violations.extend(f"forbidden name: {name}" for name in FORBIDDEN_NAMES if name in lowered)
 
-    for match in URL.finditer(text):
+    url_matches = tuple(URL.finditer(text))
+    for match in url_matches:
         raw_url = match.group(0).rstrip(".,);")
         safe_template = re.search(r":\$\{secret:[^}\s]+\}@", raw_url) is not None
         parsed = urlsplit(re.sub(r"\$\{secret:[^}\s]+\}", "placeholder", raw_url))
@@ -178,11 +204,8 @@ def boundary_violations(text: str) -> list[str]:
         if hostname_violation is not None:
             violations.append(hostname_violation)
 
-    for match in BARE_DOMAIN.finditer(text):
-        candidate = match.group(0)
-        if _is_safe_dotted_token(text, match):
-            continue
-        hostname_violation = _hostname_violation(candidate)
+    for match in DOTTED_TOKEN.finditer(text):
+        hostname_violation = _dotted_token_violation(text, match, url_matches)
         if hostname_violation is not None:
             violations.append(hostname_violation)
 
@@ -203,12 +226,17 @@ def boundary_violations(text: str) -> list[str]:
         ):
             violations.append(f"non-RFC5737 address: {address}")
 
-    for project in GCP_KEY.findall(text):
+    for match in GCP_KEY.finditer(text):
+        project = match.group("value")
         if project.lower() not in GCP_PROJECT_ALLOWLIST | {GCP_PROJECT_PLACEHOLDER}:
             violations.append("GCP project identifier")
-    for project in BWS_KEY.findall(text):
-        if UUID.fullmatch(project):
-            violations.append("UUID-shaped BWS project ID")
+    for match in BWS_KEY.finditer(text):
+        kind = match.group("kind").lower()
+        value = match.group("value").lower()
+        if value in BWS_PLACEHOLDERS[kind]:
+            continue
+        if not value or UUID.fullmatch(value.strip("<>")) or "<" in value or ">" in value:
+            violations.append(f"BWS {kind} identifier (UUID-shaped BWS project ID)")
     return violations
 
 
@@ -248,8 +276,28 @@ def boundary_violations(text: str) -> list[str]:
         ("Dependency: secrets.production.py", "non-example hostname"),
         ("See secrets.production.md for credentials.", "non-example hostname"),
         ("Dependency: db.production.internal.", "non-example hostname"),
+        ("Dependency: db.production.internal..", "non-example hostname"),
+        ("Dependency: db.production.internal...", "non-example hostname"),
         ("Dependency: secrets.production.py.", "non-example hostname"),
         ("See secrets.production.md.", "non-example hostname"),
+        ("See secrets.production.py...);!?", "non-example hostname"),
+        ("See secrets.production.md...,\"']", "non-example hostname"),
+        ("export GOOGLE_CLOUD_PROJECT=<production-123", "GCP project identifier"),
+        ("export GOOGLE_CLOUD_PROJECT=production-123>", "GCP project identifier"),
+        ("export GOOGLE_CLOUD_PROJECT=<>", "GCP project identifier"),
+        ("export GOOGLE_CLOUD_PROJECT=", "GCP project identifier"),
+        ("export GOOGLE_CLOUD_PROJECT=<project-id", "GCP project identifier"),
+        ("export GOOGLE_CLOUD_PROJECT=project-id>", "GCP project identifier"),
+        (
+            "BWS_PROJECT_ID=<8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2",
+            "BWS project identifier",
+        ),
+        (
+            "BWS_ORGANIZATION_ID=8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2>",
+            "BWS organization identifier",
+        ),
+        ("BWS_PROJECT_ID=<organization-id>", "BWS project identifier"),
+        ("BWS_PROJECT_ID=", "BWS project identifier"),
     ],
 )
 def test_boundary_detector_rejects_each_private_data_class(text: str, expected: str) -> None:
@@ -261,15 +309,19 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     host: 192.0.2.10
     backup: 198.51.100.5
     endpoint: https://api.example.com
+    source: https://example.com/releases/package.whl?download=1
     canonical_name: db.internal.example.com
     edge_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2
     gcp_project: example-project
     GOOGLE_CLOUD_PROJECT=example-staging-project
     export GOOGLE_CLOUD_PROJECT=<project-id>
+    BWS_PROJECT_ID=<project-id>
+    BWS_ORGANIZATION_ID=<organization-id>
+    export BWS_ORGANIZATION_ID="<organization-uuid>"
     prose: infralink.cli/v1, manifest.json, and resolver.get are identifiers.
     files: registry.yml, edges.yml, PRD.md, and BACKLOG.md are public files.
     path: docs/reference.md is an unambiguous public file path.
-    punctuation: docs/reference.md. Release v0.2.0.
+    punctuation: docs/reference.md...);!? Release v0.2.0...,"\']
     """
     assert boundary_violations(text) == []
 
