@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import shlex
 import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
@@ -17,14 +17,12 @@ from infralink import __version__
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
     ArgumentDescriptor,
+    Binding,
     CommandContext,
     CommandDescriptor,
     HelpResult,
     OptionDescriptor,
-    PageInfo,
     RootResult,
-    ServiceListResult,
-    ServiceSummary,
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode
@@ -190,49 +188,69 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
     ("app", "list"): {
         "description": "List application groupings.",
         "arguments": [],
-        "options": [],
+        "options": [
+            {"name": "limit", "type": "integer", "required": False},
+            {"name": "cursor", "type": "string", "required": False},
+            {"name": "collection", "type": "string", "required": False},
+        ],
         "examples": ["infralink app list"],
     },
     ("app", "show"): {
         "description": "Show one application grouping.",
         "arguments": [{"name": "app_id", "type": "string", "required": True}],
-        "options": [],
+        "options": [
+            {"name": "limit", "type": "integer", "required": False},
+            {"name": "cursor", "type": "string", "required": False},
+            {"name": "collection", "type": "string", "required": False},
+        ],
         "examples": ["infralink app show core"],
     },
     ("host",): {
-        "description": "Unavailable until host detail commands are implemented.",
+        "description": "Inspect hosts.",
         "arguments": [],
         "options": [],
         "examples": ["infralink host show host-1"],
     },
     ("host", "show"): {
-        "description": "Unavailable until host detail commands are implemented.",
+        "description": "Show one host.",
         "arguments": [{"name": "host_id", "type": "string", "required": True}],
-        "options": [],
+        "options": [
+            {"name": "limit", "type": "integer", "required": False},
+            {"name": "cursor", "type": "string", "required": False},
+            {"name": "collection", "type": "string", "required": False},
+        ],
         "examples": ["infralink host show host-1"],
     },
     ("edge",): {
-        "description": "Unavailable until edge detail commands are implemented.",
+        "description": "Inspect edges.",
         "arguments": [],
         "options": [],
         "examples": ["infralink edge show edge-1"],
     },
     ("edge", "show"): {
-        "description": "Unavailable until edge detail commands are implemented.",
+        "description": "Show one edge.",
         "arguments": [{"name": "edge_id", "type": "string", "required": True}],
-        "options": [],
+        "options": [
+            {"name": "limit", "type": "integer", "required": False},
+            {"name": "cursor", "type": "string", "required": False},
+            {"name": "collection", "type": "string", "required": False},
+        ],
         "examples": ["infralink edge show edge-1"],
     },
     ("service",): {
-        "description": "Unavailable until service detail commands are implemented.",
+        "description": "Inspect services.",
         "arguments": [],
         "options": [],
         "examples": ["infralink service show api"],
     },
     ("service", "show"): {
-        "description": "Unavailable until service detail commands are implemented.",
+        "description": "Show one service.",
         "arguments": [{"name": "service_id", "type": "string", "required": True}],
-        "options": [],
+        "options": [
+            {"name": "limit", "type": "integer", "required": False},
+            {"name": "cursor", "type": "string", "required": False},
+            {"name": "collection", "type": "string", "required": False},
+        ],
         "examples": ["infralink service show api"],
     },
     ("secrets",): {
@@ -495,20 +513,10 @@ def _emit_help(path: tuple[str, ...], argv: list[str] | None = None) -> None:
 
 
 def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
-    discovery = {
-        "host": ["infralink", "hosts"],
-        "service": ["infralink", "services"],
-        "edge": ["infralink", "edges-list"],
-        "app": ["infralink", "app", "list"],
-    }[entity_type]
-    return CliFailure(
-        code=ErrorCode.ENTITY_NOT_FOUND,
-        message=f"{entity_type.title()} not found",
-        exit_code=3,
-        fix=f"Run {shlex.join(discovery)}",
-        details={"entity_type": entity_type, "requested_id": requested_id},
-        next_actions=[action("list", discovery, f"List {entity_type} records")],
-    )
+    """Compatibility import for commands implemented before query extraction."""
+    from infralink.cli.queries import entity_not_found as query_entity_not_found
+
+    return query_entity_not_found(entity_type, requested_id)
 
 
 def _load_command(name: str) -> click.Command | None:
@@ -552,6 +560,12 @@ def _load_command(name: str) -> click.Command | None:
         return edges_list
     if name == "services":
         return services
+    if name == "host":
+        return host
+    if name == "edge":
+        return edge
+    if name == "service":
+        return service
     return None
 
 
@@ -726,67 +740,182 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
     _emit(payload)
 
 
-@cli.command()
-@pass_context
-def services(ctx: Context) -> None:
-    """List services declared by registry hosts."""
-    registry = ctx.registry
-    service_hosts: dict[str, set[str]] = {}
-    service_ports: dict[str, set[int]] = {}
-    service_protocols: dict[str, set[str]] = {}
-    for host in registry:
-        for service_id in set(host.roles) | set(host.service_names):
-            service_hosts.setdefault(service_id, set()).add(host.uuid)
-            config = host.services.get(service_id, {})
-            port = config.get("port")
-            if isinstance(port, int):
-                service_ports.setdefault(service_id, set()).add(port)
-            protocol = config.get("protocol")
-            if isinstance(protocol, str):
-                service_protocols.setdefault(service_id, set()).add(protocol)
+def _topology_fingerprint(
+    ctx: Context,
+    *,
+    include_registry: bool,
+    include_edges: bool,
+    identifiers: dict[str, str] | None = None,
+) -> str:
+    snapshot: dict[str, Any] = {
+        "registry_path": str(ctx.registry_path),
+        "edges_path": str(ctx.edges_path),
+        "identifiers": identifiers or {},
+    }
+    if include_registry:
+        snapshot["hosts"] = [
+            host.to_dict() for host in sorted(ctx.registry, key=lambda item: item.uuid)
+        ]
+        snapshot["applications"] = [
+            application.to_dict()
+            for application in sorted(ctx.registry.applications, key=lambda item: item.id)
+        ]
+    if include_edges:
+        snapshot["edges"] = [edge.to_dict() for edge in sorted(ctx.edges, key=lambda item: item.id)]
+    serialized = json.dumps(
+        snapshot,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode()
+    return hashlib.sha256(serialized).hexdigest()
 
-    edges = ctx.edges
-    for edge in edges:
-        service_hosts.setdefault(edge.target_service, set()).add(edge.target_host)
-        service_ports.setdefault(edge.target_service, set()).add(edge.target_port)
-        if edge.protocol:
-            service_protocols.setdefault(edge.target_service, set()).add(edge.protocol)
 
-    items = []
-    for service_id in sorted(service_hosts):
-        hosts = sorted(service_hosts[service_id])
-        ports = sorted(service_ports.get(service_id, set()))
-        protocols = sorted(service_protocols.get(service_id, set()))
-        items.append(
-            ServiceSummary(
-                id=service_id,
-                host_count=len(hosts),
-                host_ids=hosts[:128],
-                hosts_truncated=len(hosts) > 128,
-                port_count=len(ports),
-                ports=ports[:64],
-                ports_truncated=len(ports) > 64,
-                protocol_count=len(protocols),
-                protocols=protocols[:32],
-                protocols_truncated=len(protocols) > 32,
+def _page_offset(
+    *,
+    command: str,
+    collection: str,
+    cursor: str | None,
+    fingerprint: str,
+) -> int:
+    if cursor is None:
+        return 0
+    from infralink.cli.pagination import CursorCodec
+
+    return CursorCodec().decode(cursor, command, collection, fingerprint)
+
+
+def _active_collection(
+    collection: str | None,
+    cursor: str | None,
+    allowed: tuple[str, ...],
+) -> str:
+    if cursor is not None and len(allowed) > 1 and collection is None:
+        from infralink.cli.pagination import invalid_cursor
+
+        raise invalid_cursor()
+    selected = collection or allowed[0]
+    if selected not in allowed:
+        from infralink.cli.pagination import invalid_cursor
+
+        raise invalid_cursor()
+    return selected
+
+
+def _next_cursors(
+    command: str,
+    collections: tuple[str, ...],
+    selected: str,
+    offset: int,
+    limit: int,
+    fingerprint: str,
+) -> dict[str, str]:
+    from infralink.cli.pagination import CursorCodec
+
+    codec = CursorCodec()
+    return {
+        collection: codec.encode(
+            command,
+            collection,
+            (offset if collection == selected else 0) + limit,
+            fingerprint,
+        )
+        for collection in collections
+    }
+
+
+def _emit_query_result(
+    *,
+    path: list[str],
+    command_argv: list[str],
+    result: Any,
+    limit: int,
+) -> None:
+    pages: list[tuple[str, Any, str]] = []
+    if hasattr(result, "page"):
+        pages.append(("items", result.page, "result.page.next_cursor"))
+    else:
+        for name in ("services", "projects", "hosts", "ports", "protocols", "secret_refs", "edges"):
+            page = getattr(result, name, None)
+            if page is not None:
+                pages.append((name, page.page, f"result.{name}.page.next_cursor"))
+    actions = [action("help", ["infralink", "help", *path], f"Show {' '.join(path)} help")]
+    for collection, page, source in pages:
+        if page.next_cursor is None:
+            continue
+        actions.append(
+            action(
+                "continue",
+                [
+                    "infralink",
+                    *command_argv,
+                    "--collection",
+                    collection,
+                    "--cursor",
+                    "{cursor}",
+                    "--limit",
+                    str(limit),
+                ],
+                f"Continue {collection}",
+                bindings={
+                    "cursor": Binding(
+                        type="string",
+                        required=True,
+                        source=source,
+                    )
+                },
             )
         )
-    result = ServiceListResult(
-        items=items,
-        page=PageInfo(
-            limit=min(max(100, len(items)), 1000),
-            returned=len(items),
-            total=len(service_hosts),
-            next_cursor=None,
-        ),
+    payload = ok_envelope(_context_for(path=path), result, actions)
+    payload["meta"]["truncated"] = any(page.next_cursor is not None for _, page, _ in pages)
+    _emit(payload)
+
+
+def _page_options(command: Any) -> Any:
+    command = click.option(
+        "--collection",
+        type=str,
+        default=None,
+        help="Paged result field to continue",
+    )(command)
+    command = click.option("--cursor", type=str, default=None)(command)
+    return click.option(
+        "--limit",
+        type=click.IntRange(1, 1000),
+        default=100,
+        show_default=True,
+    )(command)
+
+
+@click.command()
+@_page_options
+@pass_context
+def services(
+    ctx: Context,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    """List services declared by registry hosts."""
+    from infralink.cli.pagination import CursorCodec
+    from infralink.cli.queries import list_services
+
+    selected = _active_collection(collection, cursor, ("items",))
+    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=True)
+    offset = _page_offset(
+        command="services",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
     )
-    _emit(
-        ok_envelope(
-            _context_for(path=["services"]),
-            result,
-            [action("help", ["infralink", "help", "services"], "Show service help")],
-        )
+    result = list_services(
+        ctx.registry,
+        ctx.edges,
+        limit=limit,
+        offset=offset,
+        next_cursor=CursorCodec().encode("services", "items", offset + limit, fingerprint),
     )
+    _emit_query_result(path=["services"], command_argv=["services"], result=result, limit=limit)
 
 
 @cli.command()
@@ -845,93 +974,221 @@ def info(ctx: Context) -> None:
     _emit(payload)
 
 
-@cli.command()
+@click.command()
+@_page_options
 @pass_context
-def hosts(ctx: Context) -> None:
+def hosts(
+    ctx: Context,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
     """List all hosts in registry."""
-    command = click.get_current_context().command_path.replace("cli", "infralink")
-    try:
-        registry = ctx.registry
-    except CliFailure:
-        raise
-    except Exception as exc:
-        payload = error_envelope(
-            command,
-            str(exc),
-            "HOSTS_FAILED",
-            "Ensure registry path is correct.",
-            [{"command": "infralink validate", "description": "Validate registry and edges"}],
-        )
-        _emit(payload)
-        raise SystemExit(1) from exc
+    from infralink.cli.pagination import CursorCodec
+    from infralink.cli.queries import list_hosts
 
-    hosts_payload = []
-    for host in sorted(registry, key=lambda h: h.canonical_name):
-        hosts_payload.append(
-            {
-                "name": host.canonical_name,
-                "uuid": host.uuid,
-                "status": host.status.value,
-                "group": host.group,
-                "cloud": host.cloud,
-                "tailscale_ip": host.tailscale_ip,
-            }
-        )
-
-    result = {"hosts": hosts_payload, "count": len(hosts_payload)}
-    payload = ok_envelope(
-        command,
-        result,
-        [
-            {"command": "infralink info", "description": "Show registry summary"},
-            {"command": "infralink edges-list", "description": "List all edges"},
-        ],
+    selected = _active_collection(collection, cursor, ("items",))
+    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=False)
+    offset = _page_offset(
+        command="hosts",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
     )
-    payload.update(result)
-    _emit(payload)
+    result = list_hosts(
+        ctx.registry,
+        limit=limit,
+        offset=offset,
+        next_cursor=CursorCodec().encode("hosts", "items", offset + limit, fingerprint),
+    )
+    _emit_query_result(path=["hosts"], command_argv=["hosts"], result=result, limit=limit)
 
 
-@cli.command()
+@click.command(name="edges-list")
+@_page_options
 @pass_context
-def edges_list(ctx: Context) -> None:
+def edges_list(
+    ctx: Context,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
     """List all declared edges."""
-    command = click.get_current_context().command_path.replace("cli", "infralink")
-    try:
-        edges = ctx.edges
-    except Exception as exc:
-        payload = error_envelope(
-            command,
-            str(exc),
-            "EDGES_FAILED",
-            "Ensure edges path is correct.",
-            [{"command": "infralink validate", "description": "Validate registry and edges"}],
-        )
-        _emit(payload)
-        raise SystemExit(1) from exc
+    from infralink.cli.pagination import CursorCodec
+    from infralink.cli.queries import list_edges
 
-    edge_payload = []
-    for edge in edges:
-        sources = len(edge.source_hosts) if not edge.is_wildcard_source() else "*"
-        edge_payload.append(
-            {
-                "id": edge.id,
-                "type": edge.type.value,
-                "target_service": edge.target_service,
-                "target_port": edge.target_port,
-                "criticality": edge.criticality.value,
-                "sources": sources,
-            }
-        )
-
-    payload = ok_envelope(
-        command,
-        {"edges": edge_payload, "count": len(edge_payload)},
-        [
-            {"command": "infralink info", "description": "Show registry summary"},
-            {"command": "infralink resolve <edge-id>", "description": "Resolve an edge"},
-        ],
+    selected = _active_collection(collection, cursor, ("items",))
+    fingerprint = _topology_fingerprint(ctx, include_registry=False, include_edges=True)
+    offset = _page_offset(
+        command="edges-list",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
     )
-    _emit(payload)
+    result = list_edges(
+        ctx.edges,
+        limit=limit,
+        offset=offset,
+        next_cursor=CursorCodec().encode("edges-list", "items", offset + limit, fingerprint),
+    )
+    _emit_query_result(
+        path=["edges-list"],
+        command_argv=["edges-list"],
+        result=result,
+        limit=limit,
+    )
+
+
+@click.group()
+def host() -> None:
+    """Inspect hosts."""
+
+
+@host.command(name="show")
+@click.argument("host_id")
+@_page_options
+@pass_context
+def host_show(
+    ctx: Context,
+    host_id: str,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    from infralink.cli.queries import show_host
+
+    selected = _active_collection(collection, cursor, ("services", "projects"))
+    fingerprint = _topology_fingerprint(
+        ctx,
+        include_registry=True,
+        include_edges=False,
+        identifiers={"host_id": host_id},
+    )
+    offset = _page_offset(
+        command="host show",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    result = show_host(
+        ctx.registry,
+        host_id,
+        collection=selected,
+        limit=limit,
+        offset=offset,
+        next_cursors=_next_cursors(
+            "host show",
+            ("services", "projects"),
+            selected,
+            offset,
+            limit,
+            fingerprint,
+        ),
+    )
+    _emit_query_result(
+        path=["host", "show"],
+        command_argv=["host", "show", host_id],
+        result=result,
+        limit=limit,
+    )
+
+
+@click.group()
+def service() -> None:
+    """Inspect services."""
+
+
+@service.command(name="show")
+@click.argument("service_id")
+@_page_options
+@pass_context
+def service_show(
+    ctx: Context,
+    service_id: str,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    from infralink.cli.queries import show_service
+
+    collections = ("hosts", "ports", "protocols")
+    selected = _active_collection(collection, cursor, collections)
+    fingerprint = _topology_fingerprint(
+        ctx,
+        include_registry=True,
+        include_edges=True,
+        identifiers={"service_id": service_id},
+    )
+    offset = _page_offset(
+        command="service show",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    result = show_service(
+        ctx.registry,
+        ctx.edges,
+        service_id,
+        collection=selected,
+        limit=limit,
+        offset=offset,
+        next_cursors=_next_cursors(
+            "service show", collections, selected, offset, limit, fingerprint
+        ),
+    )
+    _emit_query_result(
+        path=["service", "show"],
+        command_argv=["service", "show", service_id],
+        result=result,
+        limit=limit,
+    )
+
+
+@click.group()
+def edge() -> None:
+    """Inspect edges."""
+
+
+@edge.command(name="show")
+@click.argument("edge_id")
+@_page_options
+@pass_context
+def edge_show(
+    ctx: Context,
+    edge_id: str,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    from infralink.cli.pagination import CursorCodec
+    from infralink.cli.queries import show_edge
+
+    selected = _active_collection(collection, cursor, ("secret_refs",))
+    fingerprint = _topology_fingerprint(
+        ctx,
+        include_registry=False,
+        include_edges=True,
+        identifiers={"edge_id": edge_id},
+    )
+    offset = _page_offset(
+        command="edge show",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    result = show_edge(
+        ctx.edges,
+        edge_id,
+        limit=limit,
+        offset=offset,
+        next_cursor=CursorCodec().encode("edge show", "secret_refs", offset + limit, fingerprint),
+    )
+    _emit_query_result(
+        path=["edge", "show"],
+        command_argv=["edge", "show", edge_id],
+        result=result,
+        limit=limit,
+    )
 
 
 def main(args: list[str] | None = None) -> int:

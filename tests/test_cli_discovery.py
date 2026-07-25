@@ -102,12 +102,10 @@ def test_help_describes_every_live_resolve_option() -> None:
     assert {"password", "password_env"}.isdisjoint(option_names)
 
 
-def test_future_help_is_marked_unavailable_without_registering_command() -> None:
+def test_host_detail_help_is_live_and_command_is_registered() -> None:
     payload = payload_for("help", "host", "show")
-    assert "unavailable" in payload["result"]["description"].lower()
-    absent = invoke("host", "show", "host-1")
-    assert absent.exit_code == 2
-    assert json.loads(absent.output)["error"]["code"] == "usage_error"
+    assert "show one host" in payload["result"]["description"].lower()
+    assert isinstance(cli_main._load_command("host"), click.Group)
 
 
 def test_version_is_json() -> None:
@@ -442,7 +440,7 @@ def test_services_include_role_explicit_and_edge_target_identities() -> None:
     assert payload["result"]["page"]["returned"] == payload["result"]["page"]["total"]
 
 
-def test_services_do_not_silently_truncate_101_records(tmp_path: Path) -> None:
+def test_services_paginate_101_records_without_silent_truncation(tmp_path: Path) -> None:
     services = "\n".join(
         f"      service-{index}:\n        port: {10000 + index}\n" for index in range(101)
     )
@@ -457,10 +455,11 @@ def test_services_do_not_silently_truncate_101_records(tmp_path: Path) -> None:
     )
     payload = payload_for("--registry", str(registry), "services")
     generated = [item for item in payload["result"]["items"] if item["id"].startswith("service-")]
-    assert len(generated) == 101
-    assert payload["result"]["page"]["returned"] == payload["result"]["page"]["total"]
-    assert payload["result"]["page"]["next_cursor"] is None
-    assert payload["meta"]["truncated"] is False
+    assert len(generated) <= 100
+    assert payload["result"]["page"]["returned"] == 100
+    assert payload["result"]["page"]["total"] > payload["result"]["page"]["returned"]
+    assert payload["result"]["page"]["next_cursor"] is not None
+    assert payload["meta"]["truncated"] is True
 
 
 @pytest.mark.parametrize(

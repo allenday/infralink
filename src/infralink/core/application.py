@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -34,11 +35,7 @@ class Application:
         If edges is "auto", derives from members. Otherwise uses explicit list.
         """
         if isinstance(self.schema.edges, list):
-            return [
-                all_edges.get_edge(eid)
-                for eid in self.schema.edges
-                if eid in all_edges._id_index
-            ]
+            return [edge for eid in self.schema.edges if (edge := all_edges.get(eid)) is not None]
 
         # Auto-derivation: Edge is part of app if target host is a member
         # AND at least one resolved source host is a member.

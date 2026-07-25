@@ -63,9 +63,9 @@ def test_hosts_json():
     )
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["status"] == "ok"
-    assert isinstance(payload.get("hosts"), list)
-    assert len(payload["hosts"]) > 0
+    assert payload["ok"] is True
+    assert isinstance(payload["result"]["items"], list)
+    assert len(payload["result"]["items"]) > 0
 
 
 def test_resolve_rejects_password_without_leaking_it() -> None:
