@@ -372,6 +372,10 @@ Exit codes are:
 | `70` | Unexpected internal failure |
 | `74` | Artifact I/O failure or retained recovery state |
 
+Exit `74` uses `artifact_io_failed` for storage failures and
+`artifact_recovery_required` when recovery state is retained. `internal_error`
+is reserved for exit `70`.
+
 A negative domain result is not an execution failure. The defined negative
 domain outcomes are:
 

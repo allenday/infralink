@@ -12,7 +12,12 @@ import yaml
 from click.testing import CliRunner
 
 import infralink.cli.artifacts as artifact_helpers
-from infralink.cli.artifacts import write_artifacts
+import infralink.cli.diagram as diagram_command
+from infralink.cli.artifacts import (
+    artifact_recovery_failure,
+    artifact_write_failure,
+    write_artifacts,
+)
 from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.main import cli
 from tests.cli_helpers import assert_schema
@@ -809,7 +814,7 @@ def test_artifact_transaction_rolls_back_later_commit_failure(
             ],
         )
 
-    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
     assert "canary" not in failure.value.message
     assert (output / "first.txt").read_bytes() == b"original-first"
     assert (output / "later.txt").read_bytes() == b"original-later"
@@ -842,7 +847,7 @@ def test_artifact_transaction_cleans_new_directories_after_enospc(
             ],
         )
 
-    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
     assert "canary" not in failure.value.message
     assert not Path("generated").exists()
 
@@ -900,7 +905,7 @@ def test_artifact_transaction_retains_recovery_state_when_restore_fails(
         )
 
     backups = list(output.glob(".infralink-txn-*.bak-*"))
-    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert failure.value.code == ErrorCode.ARTIFACT_RECOVERY_REQUIRED
     assert failure.value.details == {"recovery_state": "retained"}
     assert ".infralink-recovery.json" in failure.value.fix
     assert "canary" not in failure.value.message
@@ -1033,7 +1038,7 @@ def test_artifact_transaction_rolls_back_directory_fsync_failure(
             [(Path("result.txt"), "text/plain", b"replacement")],
         )
 
-    assert failure.value.code == ErrorCode.INTERNAL_ERROR
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
     assert target.read_bytes() == b"original"
     assert restoration_synced
     assert not list(output.glob(".infralink-*"))
@@ -1069,6 +1074,54 @@ def test_artifact_commands_fail_before_mutation_on_unsupported_platform(
     assert payload["error"]["code"] == "unsupported_platform"
     assert "Linux" in payload["error"]["message"]
     assert "Linux" in payload["fix"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code", "expected_details"),
+    [
+        (artifact_write_failure(), "artifact_io_failed", {}),
+        (
+            artifact_recovery_failure(),
+            "artifact_recovery_required",
+            {"recovery_state": "retained"},
+        ),
+    ],
+)
+def test_artifact_command_emits_one_exit_74_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: CliFailure,
+    expected_code: str,
+    expected_details: dict[str, str],
+) -> None:
+    registry, edges = _write_topology(tmp_path)
+
+    def fail_write(*_args, **_kwargs) -> None:
+        raise failure
+
+    monkeypatch.setattr(diagram_command, "write_artifacts", fail_write)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(registry),
+            "--edges",
+            str(edges),
+            "diagram",
+            "--output",
+            "generated",
+        ],
+    )
+    payload = _payload(result)
+
+    assert result.exit_code == 74
+    assert payload["schema_version"] == "infralink.cli/v1"
+    assert payload["error"] == {
+        "code": expected_code,
+        "message": failure.message,
+        "details": expected_details,
+    }
+    assert "result" not in payload
 
 
 @pytest.mark.parametrize(

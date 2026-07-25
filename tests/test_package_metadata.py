@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 try:
@@ -6,12 +7,7 @@ except ModuleNotFoundError:
     import tomli as tomllib
 
 import infralink
-from infralink.cli.artifacts import (
-    artifact_platform_failure,
-    artifact_recovery_failure,
-    artifact_write_failure,
-)
-from infralink.cli.errors import ErrorCode
+import infralink.cli.errors as cli_errors
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,11 +74,13 @@ def test_artifact_commands_publish_their_posix_platform_boundary() -> None:
     )
 
 
-def test_documented_exit_codes_match_artifact_error_behavior() -> None:
-    contract_rows = "\n".join(
-        f"| `{exit_code}` | {meaning} |"
-        for exit_code, meaning in EXIT_CODE_CONTRACT.items()
-    )
+def test_documented_exit_codes_match_runtime_contract() -> None:
+    runtime_contract = {
+        int(exit_code): meaning for exit_code, meaning in cli_errors.EXIT_CODE_MEANINGS.items()
+    }
+    assert set(runtime_contract) == {0, 1, 2, 3, 4, 69, 70, 74}
+    assert runtime_contract == EXIT_CODE_CONTRACT
+
     documents = (
         "PRD.md",
         "README.md",
@@ -92,15 +90,16 @@ def test_documented_exit_codes_match_artifact_error_behavior() -> None:
 
     for document in documents:
         text = (PROJECT_ROOT / document).read_text(encoding="utf-8")
-        assert contract_rows in text, f"{document} has drifted from the exit-code contract"
-
-    platform_failure = artifact_platform_failure()
-    assert (platform_failure.code, platform_failure.exit_code) == (
-        ErrorCode.UNSUPPORTED_PLATFORM,
-        69,
-    )
-    for failure in (artifact_write_failure(), artifact_recovery_failure()):
-        assert (failure.code, failure.exit_code) == (ErrorCode.INTERNAL_ERROR, 74)
+        rows = re.findall(r"^\| `(\d+)` \| ([^|]+) \|$", text, re.MULTILINE)
+        documented_contract = {int(code): meaning.strip() for code, meaning in rows}
+        assert len(documented_contract) == len(rows)
+        assert documented_contract == runtime_contract, (
+            f"{document} has drifted from the exit-code contract"
+        )
+        normalized = " ".join(text.split())
+        assert "`artifact_io_failed`" in text
+        assert "`artifact_recovery_required`" in text
+        assert "`internal_error` is reserved for exit `70`" in normalized
 
 
 def test_release_wheel_includes_the_importable_package() -> None:

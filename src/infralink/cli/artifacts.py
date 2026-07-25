@@ -22,7 +22,7 @@ from infralink.cli.contracts import (
     Binding,
     Page,
 )
-from infralink.cli.errors import CliFailure, ErrorCode
+from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.pagination import page_items, production_cursor_codec
 
 T = TypeVar("T")
@@ -58,9 +58,9 @@ def artifact_usage(message: str) -> CliFailure:
 
 def artifact_write_failure() -> CliFailure:
     return CliFailure(
-        code=ErrorCode.INTERNAL_ERROR,
+        code=ErrorCode.ARTIFACT_IO_FAILED,
         message="Artifact transaction failed",
-        exit_code=74,
+        exit_code=ExitCode.ARTIFACT_IO_ERROR,
         fix="Retry the command after checking output storage",
     )
 
@@ -69,16 +69,16 @@ def artifact_platform_failure() -> CliFailure:
     return CliFailure(
         code=ErrorCode.UNSUPPORTED_PLATFORM,
         message="Secure artifact writes require Linux",
-        exit_code=69,
+        exit_code=ExitCode.UNSUPPORTED_PLATFORM,
         fix="Run artifact-generating commands on Linux",
     )
 
 
 def artifact_recovery_failure() -> CliFailure:
     return CliFailure(
-        code=ErrorCode.INTERNAL_ERROR,
+        code=ErrorCode.ARTIFACT_RECOVERY_REQUIRED,
         message="Artifact transaction requires recovery",
-        exit_code=74,
+        exit_code=ExitCode.ARTIFACT_IO_ERROR,
         fix=f"Preserve output and inspect {_RECOVERY_MANIFEST} before retrying",
         details={"recovery_state": "retained"},
     )

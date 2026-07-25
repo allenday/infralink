@@ -1,11 +1,38 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, dataclass, field
-from enum import Enum
-from typing import Any
+from enum import Enum, IntEnum
+from types import MappingProxyType
+from typing import Any, Final
 
 from infralink.cli.contracts import Action
+
+
+class ExitCode(IntEnum):
+    POSITIVE_RESULT = 0
+    NEGATIVE_RESULT = 1
+    USAGE_ERROR = 2
+    INPUT_ERROR = 3
+    PROVIDER_ERROR = 4
+    UNSUPPORTED_PLATFORM = 69
+    INTERNAL_ERROR = 70
+    ARTIFACT_IO_ERROR = 74
+
+
+EXIT_CODE_MEANINGS: Final[Mapping[ExitCode, str]] = MappingProxyType(
+    {
+        ExitCode.POSITIVE_RESULT: "Positive domain result",
+        ExitCode.NEGATIVE_RESULT: "Completed negative domain result",
+        ExitCode.USAGE_ERROR: "Usage error",
+        ExitCode.INPUT_ERROR: "Input, schema, or entity error",
+        ExitCode.PROVIDER_ERROR: "Provider or authentication failure",
+        ExitCode.UNSUPPORTED_PLATFORM: "Unsupported platform",
+        ExitCode.INTERNAL_ERROR: "Unexpected internal failure",
+        ExitCode.ARTIFACT_IO_ERROR: "Artifact I/O failure or retained recovery state",
+    }
+)
 
 
 class ErrorCode(str, Enum):
@@ -14,6 +41,8 @@ class ErrorCode(str, Enum):
     ENTITY_NOT_FOUND = "entity_not_found"
     INVALID_CURSOR = "invalid_cursor"
     UNSUPPORTED_PLATFORM = "unsupported_platform"
+    ARTIFACT_IO_FAILED = "artifact_io_failed"
+    ARTIFACT_RECOVERY_REQUIRED = "artifact_recovery_required"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     PROVIDER_AUTHENTICATION_FAILED = "provider_authentication_failed"
     PROVIDER_AUTHORIZATION_FAILED = "provider_authorization_failed"

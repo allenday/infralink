@@ -55,6 +55,8 @@ def test_error_codes_are_stable_strings() -> None:
         "ENTITY_NOT_FOUND": "entity_not_found",
         "INVALID_CURSOR": "invalid_cursor",
         "UNSUPPORTED_PLATFORM": "unsupported_platform",
+        "ARTIFACT_IO_FAILED": "artifact_io_failed",
+        "ARTIFACT_RECOVERY_REQUIRED": "artifact_recovery_required",
         "PROVIDER_UNAVAILABLE": "provider_unavailable",
         "PROVIDER_AUTHENTICATION_FAILED": "provider_authentication_failed",
         "PROVIDER_AUTHORIZATION_FAILED": "provider_authorization_failed",
