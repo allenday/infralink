@@ -144,6 +144,27 @@ class TestEdgeResolver:
         ):
             EdgeResolver(registry, edges).get_target_port(edge_id)
 
+    def test_connection_template_rejects_int_subclass_before_rendering(self, registry, edges):
+        class AuthorityInjectingPort(int):
+            rendered = False
+
+            def __format__(self, format_spec):
+                type(self).rendered = True
+                return "5432@attacker.invalid"
+
+        edge_id = "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10"
+        edge = edges.get(edge_id)
+        assert edge is not None
+        edge._schema.to.port = AuthorityInjectingPort(5432)
+
+        with pytest.raises(
+            ResolutionError,
+            match="Invalid target port: expected an integer from 1 to 65535",
+        ):
+            EdgeResolver(registry, edges).get_connection_template(edge_id)
+
+        assert AuthorityInjectingPort.rendered is False
+
     def test_get_target_endpoint(self, registry, edges):
         """Test getting target endpoint."""
         resolver = EdgeResolver(registry, edges)
