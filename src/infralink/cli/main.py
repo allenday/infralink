@@ -906,7 +906,18 @@ def _emit_query_result(
     if hasattr(result, "page"):
         pages.append(("items", result.page, "result.page.next_cursor"))
     else:
-        for name in ("services", "projects", "hosts", "ports", "protocols", "secret_refs", "edges"):
+        for name in (
+            "services",
+            "projects",
+            "hosts",
+            "ports",
+            "protocols",
+            "secret_refs",
+            "edges",
+            "errors",
+            "warnings",
+            "checks",
+        ):
             page = getattr(result, name, None)
             if page is not None:
                 pages.append((name, page.page, f"result.{name}.page.next_cursor"))

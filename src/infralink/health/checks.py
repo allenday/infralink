@@ -40,6 +40,20 @@ class HealthCheckResult:
         }
 
 
+def normalize_health_result(result: HealthCheckResult) -> tuple[str, str | None]:
+    """Return stable health state without exposing provider or endpoint details."""
+    if result.healthy:
+        return "healthy", None
+    if result.check_type == "resolution":
+        return "unavailable", "resolution_failed"
+    message = (result.message or "").casefold()
+    if "timed out" in message or "timeout" in message:
+        return "unavailable", "timeout"
+    if "refused" in message:
+        return "unavailable", "connection_refused"
+    return "unhealthy", "check_failed"
+
+
 def check_tcp(host: str, port: int, timeout: int = 5) -> tuple[bool, float | None, str | None]:
     """
     Perform TCP connectivity check.
@@ -57,7 +71,7 @@ def check_tcp(host: str, port: int, timeout: int = 5) -> tuple[bool, float | Non
         if result == 0:
             return True, latency, None
         return False, latency, f"Connection refused (code: {result})"
-    except socket.timeout:
+    except TimeoutError:
         return False, None, "Connection timed out"
     except socket.gaierror as e:
         return False, None, f"DNS resolution failed: {e}"
@@ -77,8 +91,8 @@ def check_http(
 
     Returns (healthy, latency_ms, error_message).
     """
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     protocol = "https" if https else "http"
     url = f"{protocol}://{host}:{port}{path}"
@@ -99,7 +113,9 @@ def check_http(
         return False, None, f"Request failed: {e}"
 
 
-def check_redis_ping(host: str, port: int, timeout: int = 5) -> tuple[bool, float | None, str | None]:
+def check_redis_ping(
+    host: str, port: int, timeout: int = 5
+) -> tuple[bool, float | None, str | None]:
     """
     Perform Redis PING check.
 
@@ -124,7 +140,7 @@ def check_redis_ping(host: str, port: int, timeout: int = 5) -> tuple[bool, floa
         if b"-NOAUTH" in response:
             # Auth required but service is responding
             return True, latency, "Auth required"
-        return False, latency, f"Unexpected response: {response[:50]}"
+        return False, latency, f"Unexpected response: {response[:50]!r}"
     except Exception as e:
         return False, None, f"Redis check failed: {e}"
 
@@ -205,9 +221,7 @@ def check_all_edges(
 
     Returns list of HealthCheckResult.
     """
-    edges = resolver._edges
-    if critical_only:
-        edges = edges.critical_edges()
+    edges = list(resolver._edges.critical_edges()) if critical_only else list(resolver._edges)
 
     results = []
     for edge in edges:
