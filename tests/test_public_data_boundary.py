@@ -21,7 +21,7 @@ EXPECTED_PUBLIC_FILES = ROOT_PUBLIC_FILES + (
 FORBIDDEN_NAMES = ("cyberstorm-citadel", "reblogme-app", "relaxgg-ax162", "bdsmlr-db")
 ADDRESS_TOKEN = re.compile(
     r"(?<![0-9A-Za-z_.:-])"
-    r"[0-9a-f:](?:[0-9a-f:.]*[0-9a-f])?"
+    r"(?:\[[0-9a-f:.]+\]?|[0-9a-f:](?:[0-9a-f:.]*[0-9a-f])?)"
     r"""[.,;:!?)}\]>'"]*"""
     r"(?![0-9A-Za-z_.:-])",
     re.IGNORECASE,
@@ -35,6 +35,8 @@ PORT_AUTHORITY_TOKEN = re.compile(
     re.IGNORECASE,
 )
 URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
+PROTOCOL_RELATIVE_AUTHORITY = re.compile(r"//[^\s`\"'<>]+")
+SECRET_TEMPLATE = re.compile(r"\$\{secret:[^}\s]+\}")
 UUID = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
     re.IGNORECASE,
@@ -96,6 +98,9 @@ SAFE_DOTTED_TOKENS = {
     "roles.yml",
     "v0.2.md",
 }
+SAFE_LINE_REFERENCE_FILES = {
+    token for token in SAFE_DOTTED_TOKENS if token.endswith((".json", ".md", ".yaml", ".yml"))
+}
 GCP_PROJECT_ALLOWLIST = {"example-project", "example-staging-project"}
 GCP_PROJECT_PLACEHOLDER = "<project-id>"
 BWS_PLACEHOLDERS = {
@@ -138,25 +143,31 @@ def tracked_public_files() -> tuple[Path, ...]:
     return tuple(sorted(tracked))
 
 
-def _normalize_prose_token(value: str, *, preserve_valid_address: bool = False) -> str:
+def _normalize_prose_token(value: str) -> str:
     candidate = value
     while candidate and candidate[-1] in TERMINAL_PROSE_PUNCTUATION:
-        if preserve_valid_address:
-            try:
-                ipaddress.ip_address(candidate)
-            except ValueError:
-                pass
-            else:
-                return candidate
         candidate = candidate[:-1]
     return candidate
 
 
 def _parse_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    try:
-        return ipaddress.ip_address(_normalize_prose_token(value, preserve_valid_address=True))
-    except ValueError:
-        return None
+    candidate = value
+    while candidate:
+        if candidate.startswith("[") != candidate.endswith("]"):
+            if candidate[-1] not in TERMINAL_PROSE_PUNCTUATION:
+                return None
+        literal = (
+            candidate[1:-1] if candidate.startswith("[") and candidate.endswith("]") else candidate
+        )
+        try:
+            return ipaddress.ip_address(literal)
+        except ValueError:
+            if candidate[-1] not in TERMINAL_PROSE_PUNCTUATION:
+                return None
+            if candidate.startswith("[") and candidate[-1] == "]":
+                return None
+            candidate = candidate[:-1]
+    return None
 
 
 def _address_violation(
@@ -189,13 +200,28 @@ def _authority_violation(value: str, *, allow_placeholder: bool = False) -> str 
     candidate = value.strip("`'\"")
     if allow_placeholder and candidate.lower() in SAFE_HOST_PLACEHOLDERS:
         return None
+    normalized_candidate = _normalize_prose_token(candidate)
+    filename, separator, line_number = normalized_candidate.rpartition(":")
+    if separator and line_number.isdigit() and filename.lower() in SAFE_LINE_REFERENCE_FILES:
+        return None
     address = _parse_address(candidate)
     if address is not None:
         return _address_violation(address)
 
     while candidate:
+        authority_text = candidate.split("://", maxsplit=1)[-1].removeprefix("//")
+        userinfo, marker, _remainder = authority_text.partition("@")
+        safe_template_userinfo = marker and re.fullmatch(
+            r"[^:@/]+:\$\{secret:[^}\s]+\}",
+            userinfo,
+        )
+        if marker and safe_template_userinfo is None:
+            return "credential URL userinfo"
+        sanitized_candidate = SECRET_TEMPLATE.sub("secret-placeholder", candidate)
         authority_input = (
-            candidate if "://" in candidate or candidate.startswith("//") else f"//{candidate}"
+            sanitized_candidate
+            if "://" in sanitized_candidate or sanitized_candidate.startswith("//")
+            else f"//{sanitized_candidate}"
         )
         try:
             parsed = urlsplit(authority_input)
@@ -251,10 +277,41 @@ def _dotted_token_violation(
 
 def boundary_violations(text: str) -> list[str]:
     violations: list[str] = []
+    seen_findings: set[tuple[int, int, str, str]] = set()
+    authority_spans: list[tuple[int, int]] = []
 
-    def record(violation: str | None) -> None:
-        if violation is not None and violation not in violations:
+    def record(
+        violation: str | None,
+        *,
+        span: tuple[int, int] = (-1, -1),
+        value: str = "",
+    ) -> None:
+        if violation is None:
+            return
+        category = violation.split(":", maxsplit=1)[0]
+        canonical_value = _normalize_prose_token(value).lower()
+        key = (*span, category, canonical_value)
+        if key not in seen_findings:
+            seen_findings.add(key)
             violations.append(violation)
+
+    def inside_authority_span(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] and span[1] <= end for start, end in authority_spans)
+
+    def process_authority(
+        value: str,
+        span: tuple[int, int],
+        *,
+        allow_placeholder: bool = False,
+    ) -> None:
+        if inside_authority_span(span):
+            return
+        authority_spans.append(span)
+        record(
+            _authority_violation(value, allow_placeholder=allow_placeholder),
+            span=span,
+            value=value,
+        )
 
     lowered = text.lower()
     if ".i.cyberstorm.dev" in lowered:
@@ -263,38 +320,36 @@ def boundary_violations(text: str) -> list[str]:
 
     url_matches = tuple(URL.finditer(text))
     for match in url_matches:
-        raw_url = match.group(0).rstrip(".,);")
-        safe_template = re.search(r":\$\{secret:[^}\s]+\}@", raw_url) is not None
-        sanitized_url = re.sub(r"\$\{secret:[^}\s]+\}", "placeholder", raw_url)
-        try:
-            parsed = urlsplit(sanitized_url)
-        except ValueError:
-            record("invalid endpoint authority")
-        else:
-            if (parsed.username is not None or parsed.password is not None) and not safe_template:
-                record("credential URL userinfo")
-        record(_authority_violation(sanitized_url))
+        process_authority(match.group(0), match.span())
 
-    for value in HOST_FIELD.findall(text):
-        record(_authority_violation(value, allow_placeholder=True))
-    for candidate in HOST_LIST_ITEM.findall(text):
-        record(_authority_violation(candidate))
+    for match in PROTOCOL_RELATIVE_AUTHORITY.finditer(text):
+        process_authority(match.group(0), match.span())
+
+    for match in HOST_FIELD.finditer(text):
+        process_authority(match.group(1), match.span(1), allow_placeholder=True)
+    for match in HOST_LIST_ITEM.finditer(text):
+        process_authority(match.group(1), match.span(1))
 
     for match in PORT_AUTHORITY_TOKEN.finditer(text):
-        if any(
-            url_match.start() <= match.start() and match.end() <= url_match.end()
-            for url_match in url_matches
-        ):
-            continue
-        record(_authority_violation(match.group(0)))
+        process_authority(match.group(0), match.span())
 
     for match in DOTTED_TOKEN.finditer(text):
-        record(_dotted_token_violation(text, match, url_matches))
+        if not inside_authority_span(match.span()):
+            record(
+                _dotted_token_violation(text, match, url_matches),
+                span=match.span(),
+                value=match.group(0),
+            )
 
-    for token in ADDRESS_TOKEN.findall(text):
+    for match in ADDRESS_TOKEN.finditer(text):
+        if inside_authority_span(match.span()):
+            continue
+        token = match.group(0)
         address = _parse_address(token)
         if address is not None:
-            record(_address_violation(address))
+            record(_address_violation(address), span=match.span(), value=str(address))
+        elif "[" in token or "]" in token:
+            record("invalid endpoint authority", span=match.span(), value=token)
 
     for match in GCP_KEY.finditer(text):
         project = match.group("value")
@@ -338,6 +393,13 @@ def boundary_violations(text: str) -> list[str]:
         ("gcp_project: production-123", "GCP project identifier"),
         ("bws_project_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2", "UUID-shaped BWS"),
         ("url: https://user:password@example.com", "credential URL userinfo"),
+        ("host: //user:password@example.com", "credential URL userinfo"),
+        ("endpoint: //user@example.com/path", "credential URL userinfo"),
+        ("Connect to //user:password@example.com/path.", "credential URL userinfo"),
+        (
+            "endpoint: //app:prefix-${secret:example/password}@example.com/path",
+            "credential URL userinfo",
+        ),
         ("host: cyberstorm-citadel", "forbidden name"),
         ("host: db.corp.invalid", "non-example hostname"),
         ("endpoint: https://api.relax.gg/v1", "non-example hostname"),
@@ -381,6 +443,7 @@ def boundary_violations(text: str) -> list[str]:
         ("Dependency: db.production.internal..", "non-example hostname"),
         ("Dependency: db.production.internal...", "non-example hostname"),
         ("Dependency: secrets.production.py.", "non-example hostname"),
+        ("Dependency: secrets.production.py:12", "non-example hostname"),
         ("See secrets.production.md.", "non-example hostname"),
         ("See secrets.production.py...);!?", "non-example hostname"),
         ("See secrets.production.md...,\"']", "non-example hostname"),
@@ -421,6 +484,8 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     endpoint: api.example.com:8443/path
     endpoint: https://api.example.com:443/path
     source: //storage.example.com:443/backup
+    endpoint: //app:${secret:example/password}@example.com/path
+    source: postgresql://app:${secret:example/password}@192.0.2.40:5432/app
     source: https://example.com/releases/package.whl?download=1
     canonical_name: db.internal.example.com
     edge_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2
@@ -432,10 +497,16 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     export BWS_ORGANIZATION_ID="<organization-uuid>"
     prose: infralink.cli/v1, manifest.json, and resolver.get are identifiers.
     files: registry.yml, edges.yml, PRD.md, and BACKLOG.md are public files.
+    line_refs: manifest.json:12 and registry.yml:12 are public file references.
     path: docs/reference.md is an unambiguous public file path.
     punctuation: docs/reference.md...);!? Release v0.2.0...,"\']
     """
     assert boundary_violations(text) == []
+
+
+def test_boundary_detector_reports_atomic_authority_findings() -> None:
+    assert boundary_violations("host: [2001:db8::1]:5432") == ["non-RFC5737 address: 2001:db8::1"]
+    assert boundary_violations("host: [2001:db8::1") == ["invalid endpoint authority"]
 
 
 def test_tracked_public_docs_and_examples_respect_boundary() -> None:
