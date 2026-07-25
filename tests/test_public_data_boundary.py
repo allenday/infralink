@@ -287,10 +287,14 @@ def _dotted_token_violation(
     text: str,
     match: re.Match[str],
     *,
+    inside_url_payload: bool = False,
     inside_url_path: bool = False,
 ) -> str | None:
     candidate = _normalize_prose_token(match.group(0))
     if _parse_address(candidate) is not None:
+        return None
+    percent_escape = text[match.start() - 1 : match.start() + 2]
+    if inside_url_payload and match.start() > 0 and PERCENT_ESCAPE.fullmatch(percent_escape):
         return None
     if (
         "_" in candidate
@@ -320,6 +324,7 @@ def boundary_violations(
     text: str,
     *,
     _scan_url_like_authorities: bool = True,
+    _url_payload: bool = False,
     _url_path_payload: bool = False,
     _semantic_source: tuple[int, int] | None = None,
     _violations: list[str] | None = None,
@@ -329,6 +334,7 @@ def boundary_violations(
     seen_findings = set() if _seen_findings is None else _seen_findings
     authority_spans: list[tuple[int, int]] = []
     bracket_spans: list[tuple[int, int]] = []
+    balanced_bracket_spans: list[tuple[int, int]] = []
     url_source_spans: list[tuple[int, int]] = []
     url_path_spans: list[tuple[int, int]] = []
     decoded_payloads: list[tuple[tuple[int, int], str, bool]] = []
@@ -365,9 +371,17 @@ def boundary_violations(
     def inside_bracket_span(span: tuple[int, int]) -> bool:
         return any(start <= span[0] and span[1] <= end for start, end in bracket_spans)
 
+    def inside_balanced_bracket_span(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] and span[1] <= end for start, end in balanced_bracket_spans)
+
     def inside_url_path(span: tuple[int, int]) -> bool:
         return _url_path_payload or any(
             start <= span[0] and span[1] <= end for start, end in url_path_spans
+        )
+
+    def inside_url_payload(span: tuple[int, int]) -> bool:
+        return _url_payload or any(
+            start <= span[0] and span[1] <= end for start, end in url_source_spans
         )
 
     def queue_decoded_payload(
@@ -462,21 +476,39 @@ def boundary_violations(
         process_authority(match.group(1), match.span(1))
 
     for match in BRACKET_AUTHORITY_TOKEN.finditer(text):
-        token = _normalize_prose_token(match.group(0))
-        if "]" not in token and ":" in token and not starts_in_authority_span(match.span()):
+        raw_token = match.group(0)
+        token = _normalize_prose_token(raw_token)
+        closing_bracket = raw_token.find("]")
+        bracket_literal = raw_token[1:closing_bracket]
+        if (
+            closing_bracket > 0
+            and ":" in bracket_literal
+            and re.fullmatch(
+                r"[0-9a-f:.]+",
+                bracket_literal,
+                re.IGNORECASE,
+            )
+        ):
+            balanced_bracket_spans.append(match.span())
+        if "]" not in raw_token and ":" in token and not starts_in_authority_span(match.span()):
             bracket_spans.append(match.span())
             record("invalid endpoint authority", span=match.span(), value=token)
 
     for match in PORT_AUTHORITY_TOKEN.finditer(text):
-        if not inside_bracket_span(match.span()):
+        if not inside_bracket_span(match.span()) and not inside_balanced_bracket_span(match.span()):
             process_authority(match.group(0), match.span())
 
     for match in DOTTED_TOKEN.finditer(text):
-        if not inside_authority_span(match.span()) and not inside_bracket_span(match.span()):
+        if (
+            not inside_authority_span(match.span())
+            and not inside_bracket_span(match.span())
+            and not inside_balanced_bracket_span(match.span())
+        ):
             record(
                 _dotted_token_violation(
                     text,
                     match,
+                    inside_url_payload=inside_url_payload(match.span()),
                     inside_url_path=inside_url_path(match.span()),
                 ),
                 span=match.span(),
@@ -497,6 +529,7 @@ def boundary_violations(
         boundary_violations(
             decoded_payload,
             _scan_url_like_authorities=False,
+            _url_payload=True,
             _url_path_payload=path_payload,
             _semantic_source=source_span,
             _violations=violations,
@@ -595,6 +628,7 @@ def boundary_violations(
             "excessive URL payload encoding",
         ),
         ("Dependency: dependency.whl", "non-example hostname"),
+        ("Dependency: user%40private.internal", "non-example hostname"),
         ("host: dependency.whl", "non-example hostname"),
         ("endpoint: https://example.com/?target=dependency.whl", "non-example hostname"),
         ("Connect to privatehost:5432.", "non-example hostname"),
@@ -677,6 +711,9 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     source: https://example.com/archive/192.0.2.50
     source: https://example.com/archive/192%2E0%2E2%2E51
     source: https://example.com/users/user@example.com
+    source: https://example.com/users/user%40example.com
+    source: https://example.com/users/user%2540example.com
+    source: https://example.com/users/api%2Eexample.com
     source: https://example.com/?email=user@example.com
     source: https://example.com/#contact=user@example.com
     canonical_name: db.internal.example.com
@@ -697,6 +734,8 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 
 
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
+    assert boundary_violations("Address: [2001:db8::1]") == ["non-RFC5737 address: 2001:db8::1"]
+    assert boundary_violations("Address: [2001:db8::1].") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("host: [2001:db8::1]:5432") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("host: [2001:db8::1") == ["invalid endpoint authority"]
     assert boundary_violations("endpoint: http://[2001:db8::1/path") == [
@@ -714,6 +753,15 @@ def test_boundary_detector_deduplicates_raw_and_decoded_payload_findings() -> No
     assert boundary_violations(
         "endpoint: https://example.com/?setting=GCP_PROJECT_ID=production-123%20"
     ) == ["GCP project identifier"]
+    assert boundary_violations("endpoint: https://example.com/users/user%40private.internal") == [
+        "non-example hostname: private.internal"
+    ]
+    assert boundary_violations("endpoint: https://example.com/users/user%2540private.internal") == [
+        "non-example hostname: private.internal"
+    ]
+    assert boundary_violations("endpoint: https://example.com/users/api%2Eprivate.internal") == [
+        "non-example hostname: api.private.internal"
+    ]
 
 
 def test_boundary_detector_bounds_url_payload_size() -> None:
