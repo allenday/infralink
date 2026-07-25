@@ -26,12 +26,16 @@ UUID = re.compile(
     re.IGNORECASE,
 )
 GCP_KEY = re.compile(
-    r"^\s*(?:(?:gcp_)?project(?:_id)?|google_cloud_project)\s*[:=]\s*(\S+)",
-    re.MULTILINE | re.IGNORECASE,
+    r"(?<![a-z0-9_])(?:export\s+)?"
+    r"(?:(?:gcp_)?project(?:_id)?|google_cloud_project)\s*[:=]\s*"
+    r"[`'\"]?<?([a-z0-9][a-z0-9-]*)>?",
+    re.IGNORECASE,
 )
 BWS_KEY = re.compile(
-    r"^\s*bws_(?:project|organization)(?:_id)?\s*[:=]\s*(\S+)",
-    re.MULTILINE | re.IGNORECASE,
+    r"(?<![a-z0-9_])(?:export\s+)?"
+    r"bws_(?:project|organization)(?:_id)?\s*[:=]\s*"
+    r"[`'\"]?<?([0-9a-f-]+)>?",
+    re.IGNORECASE,
 )
 HOST_FIELD = re.compile(
     r"^\s*(?:host|hostname|canonical_name|tailscale_name|endpoint|url|source)\s*:\s*(\S+)",
@@ -54,20 +58,21 @@ BARE_DOMAIN = re.compile(
     r"(?![a-z0-9_.-])",
     re.IGNORECASE,
 )
-NON_HOST_SUFFIXES = {
-    "bws",
-    "cli",
-    "get",
-    "gz",
-    "json",
-    "load",
-    "md",
-    "py",
-    "tar",
-    "toml",
-    "whl",
-    "yaml",
-    "yml",
+SAFE_DOTTED_TOKENS = {
+    "app-database.md",
+    "backlog.md",
+    "edges.yml",
+    "edgeset.load",
+    "infralink-0.2.0-py3-none-any.whl",
+    "infralink-0.2.0.tar.gz",
+    "infralink.cli",
+    "manifest.json",
+    "prd.md",
+    "registry.load",
+    "registry.yml",
+    "resolver.get",
+    "roles.yml",
+    "v0.2.md",
 }
 GCP_PROJECT_ALLOWLIST = {"example-project", "example-staging-project"}
 
@@ -124,6 +129,20 @@ def _hostname_violation(hostname: str | None) -> str | None:
     return f"non-example hostname: {candidate}"
 
 
+def _is_safe_dotted_token(text: str, match: re.Match[str]) -> bool:
+    candidate = match.group(0).lower()
+    if candidate in SAFE_DOTTED_TOKENS:
+        return True
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    prefix = re.split(r"[\s`'\"(<\[]", text[line_start : match.start()])[-1]
+    return prefix.startswith(("docs/", "examples/")) and candidate.rsplit(".", maxsplit=1)[-1] in {
+        "json",
+        "md",
+        "yaml",
+        "yml",
+    }
+
+
 def boundary_violations(text: str) -> list[str]:
     violations: list[str] = []
     lowered = text.lower()
@@ -159,7 +178,7 @@ def boundary_violations(text: str) -> list[str]:
 
     for match in BARE_DOMAIN.finditer(text):
         candidate = match.group(0)
-        if candidate.rsplit(".", maxsplit=1)[-1].lower() in NON_HOST_SUFFIXES:
+        if _is_safe_dotted_token(text, match):
             continue
         hostname_violation = _hostname_violation(candidate)
         if hostname_violation is not None:
@@ -183,10 +202,10 @@ def boundary_violations(text: str) -> list[str]:
             violations.append(f"non-RFC5737 address: {address}")
 
     for project in GCP_KEY.findall(text):
-        if project.strip("'\"<>").lower() not in GCP_PROJECT_ALLOWLIST:
+        if project.lower() not in GCP_PROJECT_ALLOWLIST:
             violations.append("GCP project identifier")
     for project in BWS_KEY.findall(text):
-        if UUID.fullmatch(project.strip("'\"<>")):
+        if UUID.fullmatch(project):
             violations.append("UUID-shaped BWS project ID")
     return violations
 
@@ -213,6 +232,18 @@ def boundary_violations(text: str) -> list[str]:
         ),
         ("GOOGLE_CLOUD_PROJECT=production-123", "GCP project identifier"),
         ("gcp_project: production-example-real", "GCP project identifier"),
+        (
+            "export BWS_ORGANIZATION_ID=8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2",
+            "UUID-shaped BWS",
+        ),
+        (
+            "Set `BWS_PROJECT_ID: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2` here.",
+            "UUID-shaped BWS",
+        ),
+        ("Run `export GOOGLE_CLOUD_PROJECT=production-123`.", "GCP project identifier"),
+        ("Use GCP_PROJECT_ID: production-example-real.", "GCP project identifier"),
+        ("Dependency: secrets.production.py", "non-example hostname"),
+        ("See secrets.production.md for credentials.", "non-example hostname"),
     ],
 )
 def test_boundary_detector_rejects_each_private_data_class(text: str, expected: str) -> None:
@@ -228,6 +259,8 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     edge_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2
     gcp_project: example-project
     prose: infralink.cli/v1, manifest.json, and resolver.get are identifiers.
+    files: registry.yml, edges.yml, PRD.md, and BACKLOG.md are public files.
+    path: docs/reference.md is an unambiguous public file path.
     """
     assert boundary_violations(text) == []
 
@@ -273,4 +306,5 @@ def test_compatibility_inventory_uses_anchored_runtime_counts() -> None:
     assert "63 anchored `from infralink` imports" in normalized
     assert "0 anchored `import infralink` module imports" in normalized
     assert "four loader-module imports and one prose comment" in normalized
-    assert "1 PostgreSQL, 1 Redis, and 5 generic URL-helper call sites" in normalized
+    assert "1 PostgreSQL, 1 Redis, and 5 generic URL-helper call-shaped occurrences" in normalized
+    assert "generic total includes two documentation examples" in normalized
