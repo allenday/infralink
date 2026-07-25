@@ -5,6 +5,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = PROJECT_ROOT / ".github" / "workflows" / "release-candidate.yml"
+RELEASE = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
 CI = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 SHA_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
@@ -148,6 +149,72 @@ def test_all_workflow_actions_are_pinned_and_no_publish_or_deploy_occurs() -> No
             "ansible-playbook",
         )
         assert not any(command in run_text for command in forbidden)
+
+
+def test_release_is_manual_bound_and_promotes_without_rebuilding() -> None:
+    candidate = load_workflow(CANDIDATE)
+    release = load_workflow(RELEASE)
+    assert "workflow_dispatch" in candidate["on"]
+    assert set(release["on"]) == {"workflow_dispatch"}
+    inputs = release["on"]["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {
+        "source_sha",
+        "artifact_id",
+        "candidate_run_id",
+        "woodpecker_evidence_oci_digest",
+    }
+    assert all(item["required"] == "true" for item in inputs.values())
+
+    text = RELEASE.read_text(encoding="utf-8")
+    commands = all_run_text(release)
+    assert "python -m build" in all_run_text(candidate)
+    assert "python -m build" not in commands
+    assert "twine upload" not in commands
+    assert "gh release create" in commands
+    assert "git tag -a v0.2.0" in commands
+    assert "git push origin refs/tags/v0.2.0" in commands
+    assert "oras pull" in commands
+    assert "cosign verify-blob" in commands
+    assert "security/woodpecker-evidence-cosign.pub" in commands
+    assert "verify_release_promotion.py" in commands
+    assert "gh attestation verify" in commands
+    assert "actions/artifacts/$ARTIFACT_ID" in commands
+    assert "fetch-depth: 0" in text
+    assert "artifact-ids:" in text
+    assert "inputs.candidate_run_id" in text
+    assert "inputs.woodpecker_evidence_oci_digest" in text
+
+    jobs = release["jobs"]
+    assert isinstance(jobs, dict)
+    assert len(jobs) == 1
+    job = next(iter(jobs.values()))
+    assert job["environment"] == "release"
+    assert job["permissions"] == {
+        "actions": "read",
+        "attestations": "read",
+        "contents": "write",
+        "packages": "read",
+    }
+    assert release["permissions"] == {}
+
+
+def test_release_actions_and_tools_are_immutable() -> None:
+    release = load_workflow(RELEASE)
+    for step in all_steps(release):
+        if "uses" in step:
+            assert SHA_ACTION.fullmatch(str(step["uses"])), step["uses"]
+    commands = all_run_text(release)
+    for marker in (
+        "GH_VERSION",
+        "GH_SHA256",
+        "COSIGN_VERSION",
+        "COSIGN_SHA256",
+        "ORAS_VERSION",
+        "ORAS_SHA256",
+    ):
+        assert marker in RELEASE.read_text(encoding="utf-8")
+    assert commands.count("sha256sum --check -") >= 3
+    assert "--platform linux/amd64" not in commands
 
 
 def test_ci_matrix_and_release_gates_are_complete() -> None:

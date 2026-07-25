@@ -143,3 +143,17 @@ def test_write_release_metadata_is_byte_deterministic_and_replaces_old_outputs(
     assert first_checksums.decode() == (
         f"{digest(wheel)}  {wheel.name}\n{digest(sdist)}  {sdist.name}\n"
     )
+
+
+def test_manifest_fields_are_sufficient_for_exact_promotion_binding(tmp_path: Path) -> None:
+    module = load_manifest_module()
+    write_dist(tmp_path / "dist")
+
+    manifest = module.build_manifest(
+        tmp_path / "dist",
+        source_commit="a" * 40,
+        workflow_run_id="12345",
+    )
+
+    assert set(manifest) == {"version", "source_commit", "workflow_run_id", "artifacts"}
+    assert all(set(artifact) == {"name", "sha256"} for artifact in manifest["artifacts"])
