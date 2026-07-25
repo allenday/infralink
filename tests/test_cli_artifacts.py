@@ -852,6 +852,110 @@ def test_artifact_transaction_cleans_new_directories_after_enospc(
     assert not Path("generated").exists()
 
 
+def test_artifact_preflight_reports_uncertain_created_directory_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    real_fsync = os.fsync
+    real_mkdir = os.mkdir
+    real_open = os.open
+    real_rmdir = os.rmdir
+    output_created = False
+    fail_next_parent_sync = False
+
+    def observing_mkdir(path, mode=0o777, *, dir_fd=None):
+        nonlocal output_created
+        result = real_mkdir(path, mode, dir_fd=dir_fd)
+        if path == "generated":
+            output_created = True
+        return result
+
+    def failing_open(path, flags, mode=0o777, *, dir_fd=None):
+        if path == "generated" and output_created:
+            raise OSError(errno.ENOSPC, "preflight-open-canary")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def observing_rmdir(path, *, dir_fd=None):
+        nonlocal fail_next_parent_sync
+        result = real_rmdir(path, dir_fd=dir_fd)
+        if path == "generated":
+            fail_next_parent_sync = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_parent_sync
+        if fail_next_parent_sync and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            fail_next_parent_sync = False
+            raise OSError(errno.EIO, "rmdir-parent-fsync-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "mkdir", observing_mkdir)
+    monkeypatch.setattr(artifact_helpers.os, "open", failing_open)
+    monkeypatch.setattr(artifact_helpers.os, "rmdir", observing_rmdir)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            Path("generated"),
+            [(Path("result.txt"), "text/plain", b"result")],
+        )
+
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
+    assert failure.value.details == {
+        "cleanup_state": "uncertain",
+        "transaction_state": "rolled_back",
+    }
+    assert not Path("generated").exists()
+
+
+def test_artifact_manifest_creation_reports_uncertain_created_directory_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    real_fsync = os.fsync
+    real_open = os.open
+    real_rmdir = os.rmdir
+    fail_next_parent_sync = False
+
+    def failing_open(path, flags, mode=0o777, *, dir_fd=None):
+        if path == ".infralink-recovery.json" and flags & os.O_EXCL:
+            raise OSError(errno.ENOSPC, "manifest-open-canary")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def observing_rmdir(path, *, dir_fd=None):
+        nonlocal fail_next_parent_sync
+        result = real_rmdir(path, dir_fd=dir_fd)
+        if path == "generated":
+            fail_next_parent_sync = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_parent_sync
+        if fail_next_parent_sync and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            fail_next_parent_sync = False
+            raise OSError(errno.EIO, "rmdir-parent-fsync-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "open", failing_open)
+    monkeypatch.setattr(artifact_helpers.os, "rmdir", observing_rmdir)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            Path("generated"),
+            [(Path("result.txt"), "text/plain", b"result")],
+        )
+
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
+    assert failure.value.details == {
+        "cleanup_state": "uncertain",
+        "transaction_state": "rolled_back",
+    }
+    assert not Path("generated").exists()
+
+
 def test_artifact_transaction_preserves_user_owned_transaction_lookalike(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

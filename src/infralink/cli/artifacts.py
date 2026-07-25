@@ -381,18 +381,17 @@ def _close_transaction(
             target.parent_fd = None
     if output_fd is not None:
         os.close(output_fd)
-    for parent_fd, name in reversed(created_directories):
-        if remove_directories:
-            try:
-                os.rmdir(name, dir_fd=parent_fd)
-            except OSError:
-                pass
-            else:
-                try:
-                    _sync_directory(parent_fd)
-                except OSError:
-                    pass
+    cleanup_error: OSError | None = None
+    if remove_directories:
+        try:
+            _remove_created_directories(created_directories, keep=0)
+        except OSError as exc:
+            cleanup_error = exc
+    while created_directories:
+        parent_fd, _name = created_directories.pop()
         os.close(parent_fd)
+    if cleanup_error is not None:
+        raise cleanup_error
 
 
 def _remove_created_directories(
@@ -489,13 +488,17 @@ def write_artifacts(
                         target.relative.name,
                     )
         except (OSError, CliFailure) as exc:
-            _close_transaction(
-                targets,
-                created_directories,
-                remove_directories=True,
-                output_fd=output_fd,
-            )
+            closing_output_fd = output_fd
             output_fd = None
+            try:
+                _close_transaction(
+                    targets,
+                    created_directories,
+                    remove_directories=True,
+                    output_fd=closing_output_fd,
+                )
+            except OSError:
+                raise artifact_cleanup_uncertain_failure("rolled_back") from None
             if isinstance(exc, OSError):
                 raise artifact_write_failure() from None
             raise
@@ -509,13 +512,17 @@ def write_artifacts(
         try:
             _create_manifest(output_fd, transaction, targets)
         except CliFailure:
-            _close_transaction(
-                targets,
-                created_directories,
-                remove_directories=True,
-                output_fd=output_fd,
-            )
+            closing_output_fd = output_fd
             output_fd = None
+            try:
+                _close_transaction(
+                    targets,
+                    created_directories,
+                    remove_directories=True,
+                    output_fd=closing_output_fd,
+                )
+            except OSError:
+                raise artifact_cleanup_uncertain_failure("rolled_back") from None
             raise
         try:
             # Create missing directories and stage every body before committing any.
