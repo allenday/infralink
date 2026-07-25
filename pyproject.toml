@@ -52,6 +52,7 @@ dev = [
     "build>=1.2",
     "twine>=5.1",
     "jsonschema>=4.23",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 docs = [
     "mkdocs>=1.5",
@@ -78,9 +79,6 @@ Source = "https://github.com/cyberstorm-dev/infralink"
 
 [tool.hatch.version]
 path = "src/infralink/__about__.py"
-
-[tool.hatch.build]
-sources = ["src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/infralink"]
