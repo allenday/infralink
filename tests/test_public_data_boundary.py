@@ -37,6 +37,8 @@ PORT_AUTHORITY_TOKEN = re.compile(
 URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
 PROTOCOL_RELATIVE_AUTHORITY = re.compile(r"//[^\s`\"'<>]+")
 SECRET_TEMPLATE = re.compile(r"\$\{secret:[^}\s]+\}")
+PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
+BRACKET_AUTHORITY_TOKEN = re.compile(r"\[[^\s`\"'<>]+")
 UUID = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
     re.IGNORECASE,
@@ -91,7 +93,6 @@ SAFE_DOTTED_TOKENS = {
     "infralink-0.2.0.tar.gz",
     "infralink.cli",
     "manifest.json",
-    "package.whl",
     "prd.md",
     "registry.load",
     "registry.yml",
@@ -109,6 +110,9 @@ BWS_PLACEHOLDERS = {
     "project": {"<project-id>"},
 }
 SAFE_HOST_PLACEHOLDERS = {"${host}", "${hostname}", "<host>", "<hostname>"}
+PATH_FILE_SUFFIXES = (".json", ".md", ".tar.gz", ".whl", ".yaml", ".yml")
+MAX_URL_PAYLOAD_LENGTH = 16_384
+MAX_URL_DECODE_ROUNDS = 4
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -257,8 +261,16 @@ def _authority_violation(value: str, *, allow_placeholder: bool = False) -> str 
     return "invalid endpoint authority"
 
 
-def _is_safe_dotted_token(text: str, match: re.Match[str], candidate: str) -> bool:
+def _is_safe_dotted_token(
+    text: str,
+    match: re.Match[str],
+    candidate: str,
+    *,
+    inside_url_path: bool = False,
+) -> bool:
     candidate = candidate.lower()
+    if inside_url_path and candidate.endswith(PATH_FILE_SUFFIXES):
+        return True
     if candidate in SAFE_DOTTED_TOKENS:
         return True
     line_start = text.rfind("\n", 0, match.start()) + 1
@@ -274,6 +286,8 @@ def _is_safe_dotted_token(text: str, match: re.Match[str], candidate: str) -> bo
 def _dotted_token_violation(
     text: str,
     match: re.Match[str],
+    *,
+    inside_url_path: bool = False,
 ) -> str | None:
     candidate = _normalize_prose_token(match.group(0))
     if _parse_address(candidate) is not None:
@@ -281,21 +295,43 @@ def _dotted_token_violation(
     if (
         "_" in candidate
         or VERSION_IDENTIFIER.fullmatch(candidate)
-        or _is_safe_dotted_token(text, match, candidate)
+        or _is_safe_dotted_token(
+            text,
+            match,
+            candidate,
+            inside_url_path=inside_url_path,
+        )
     ):
         return None
     return _authority_violation(candidate)
+
+
+def _canonical_finding_value(value: str) -> str:
+    candidate = value
+    for _round in range(MAX_URL_DECODE_ROUNDS):
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            break
+        candidate = decoded
+    return _normalize_prose_token(candidate.strip()).lower()
 
 
 def boundary_violations(
     text: str,
     *,
     _scan_url_like_authorities: bool = True,
+    _url_path_payload: bool = False,
+    _semantic_source: tuple[int, int] | None = None,
+    _violations: list[str] | None = None,
+    _seen_findings: set[tuple[int, int, str, str]] | None = None,
 ) -> list[str]:
-    violations: list[str] = []
-    seen_findings: set[tuple[int, int, str, str]] = set()
+    violations = [] if _violations is None else _violations
+    seen_findings = set() if _seen_findings is None else _seen_findings
     authority_spans: list[tuple[int, int]] = []
-    decoded_payloads: list[tuple[tuple[int, int], str]] = []
+    bracket_spans: list[tuple[int, int]] = []
+    url_source_spans: list[tuple[int, int]] = []
+    url_path_spans: list[tuple[int, int]] = []
+    decoded_payloads: list[tuple[tuple[int, int], str, bool]] = []
 
     def record(
         violation: str | None,
@@ -305,15 +341,53 @@ def boundary_violations(
     ) -> None:
         if violation is None:
             return
-        category = violation.split(":", maxsplit=1)[0]
-        canonical_value = _normalize_prose_token(value).lower()
-        key = (*span, category, canonical_value)
+        source_span = _semantic_source or next(
+            (
+                source
+                for source in url_source_spans
+                if source[0] <= span[0] and span[1] <= source[1]
+            ),
+            span,
+        )
+        category, separator, detail = violation.partition(":")
+        canonical_value = _canonical_finding_value(detail if separator else value)
+        key = (*source_span, category.lower(), canonical_value)
         if key not in seen_findings:
             seen_findings.add(key)
             violations.append(violation)
 
     def inside_authority_span(span: tuple[int, int]) -> bool:
         return any(start <= span[0] and span[1] <= end for start, end in authority_spans)
+
+    def starts_in_authority_span(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] < end for start, end in authority_spans)
+
+    def inside_bracket_span(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] and span[1] <= end for start, end in bracket_spans)
+
+    def inside_url_path(span: tuple[int, int]) -> bool:
+        return _url_path_payload or any(
+            start <= span[0] and span[1] <= end for start, end in url_path_spans
+        )
+
+    def queue_decoded_payload(
+        payload: str,
+        source_span: tuple[int, int],
+        *,
+        path_payload: bool,
+    ) -> None:
+        if len(payload) > MAX_URL_PAYLOAD_LENGTH:
+            record("URL payload exceeds scan limit", span=source_span)
+            return
+        normalized = payload
+        for _round in range(MAX_URL_DECODE_ROUNDS):
+            decoded = unquote(normalized)
+            if decoded == normalized:
+                return
+            decoded_payloads.append((source_span, decoded, path_payload))
+            normalized = decoded
+        if PERCENT_ESCAPE.search(normalized):
+            record("excessive URL payload encoding", span=source_span)
 
     def process_authority(
         value: str,
@@ -330,6 +404,7 @@ def boundary_violations(
         )
         if inside_authority_span(authority_span):
             return
+        url_source_spans.append(span)
         authority_spans.append(authority_span)
         record(
             _authority_violation(value, allow_placeholder=allow_placeholder),
@@ -346,15 +421,32 @@ def boundary_violations(
             parsed = urlsplit(authority_input)
         except ValueError:
             return
-        payload = "\n".join(part for part in (parsed.path, parsed.query, parsed.fragment) if part)
-        decoded_payload = unquote(payload)
-        if decoded_payload != payload:
-            decoded_payloads.append((span, decoded_payload))
+        path_end = min(
+            (
+                position
+                for delimiter in "?#"
+                if (position := candidate.find(delimiter, relative_end)) >= 0
+            ),
+            default=len(candidate),
+        )
+        if parsed.path:
+            url_path_spans.append(
+                (
+                    span[0] + left_trimmed + relative_end,
+                    span[0] + left_trimmed + path_end,
+                )
+            )
+            queue_decoded_payload(parsed.path, span, path_payload=True)
+        for payload in (parsed.query, parsed.fragment):
+            if payload:
+                queue_decoded_payload(payload, span, path_payload=False)
 
     lowered = text.lower()
     if ".i.cyberstorm.dev" in lowered:
-        violations.append("private suffix")
-    violations.extend(f"forbidden name: {name}" for name in FORBIDDEN_NAMES if name in lowered)
+        record("private suffix", value=".i.cyberstorm.dev")
+    for name in FORBIDDEN_NAMES:
+        if name in lowered:
+            record(f"forbidden name: {name}", value=name)
 
     url_matches = tuple(URL.finditer(text)) if _scan_url_like_authorities else ()
     for match in url_matches:
@@ -369,19 +461,30 @@ def boundary_violations(
     for match in HOST_LIST_ITEM.finditer(text):
         process_authority(match.group(1), match.span(1))
 
+    for match in BRACKET_AUTHORITY_TOKEN.finditer(text):
+        token = _normalize_prose_token(match.group(0))
+        if "]" not in token and ":" in token and not starts_in_authority_span(match.span()):
+            bracket_spans.append(match.span())
+            record("invalid endpoint authority", span=match.span(), value=token)
+
     for match in PORT_AUTHORITY_TOKEN.finditer(text):
-        process_authority(match.group(0), match.span())
+        if not inside_bracket_span(match.span()):
+            process_authority(match.group(0), match.span())
 
     for match in DOTTED_TOKEN.finditer(text):
-        if not inside_authority_span(match.span()):
+        if not inside_authority_span(match.span()) and not inside_bracket_span(match.span()):
             record(
-                _dotted_token_violation(text, match),
+                _dotted_token_violation(
+                    text,
+                    match,
+                    inside_url_path=inside_url_path(match.span()),
+                ),
                 span=match.span(),
                 value=match.group(0),
             )
 
     for match in ADDRESS_TOKEN.finditer(text):
-        if inside_authority_span(match.span()):
+        if inside_authority_span(match.span()) or inside_bracket_span(match.span()):
             continue
         token = match.group(0)
         address = _parse_address(token)
@@ -390,24 +493,31 @@ def boundary_violations(
         elif "[" in token or "]" in token:
             record("invalid endpoint authority", span=match.span(), value=token)
 
-    for source_span, decoded_payload in decoded_payloads:
-        for violation in boundary_violations(
+    for source_span, decoded_payload, path_payload in decoded_payloads:
+        boundary_violations(
             decoded_payload,
             _scan_url_like_authorities=False,
-        ):
-            record(violation, span=source_span, value=decoded_payload)
+            _url_path_payload=path_payload,
+            _semantic_source=source_span,
+            _violations=violations,
+            _seen_findings=seen_findings,
+        )
 
     for match in GCP_KEY.finditer(text):
         project = match.group("value")
         if project.lower() not in GCP_PROJECT_ALLOWLIST | {GCP_PROJECT_PLACEHOLDER}:
-            violations.append("GCP project identifier")
+            record("GCP project identifier", span=match.span(), value=project)
     for match in BWS_KEY.finditer(text):
         kind = match.group("kind").lower()
         value = match.group("value").lower()
         if value in BWS_PLACEHOLDERS[kind]:
             continue
         if not value or UUID.fullmatch(value.strip("<>")) or "<" in value or ">" in value:
-            violations.append(f"BWS {kind} identifier (UUID-shaped BWS project ID)")
+            record(
+                f"BWS {kind} identifier (UUID-shaped BWS project ID)",
+                span=match.span(),
+                value=value,
+            )
     return violations
 
 
@@ -461,12 +571,32 @@ def boundary_violations(
         ("endpoint: //example.com/path/db.production.internal", "non-example hostname"),
         ("endpoint: example.com/path/db.production.internal", "non-example hostname"),
         ("endpoint: https://example.com/path/db%2Eproduction%2Einternal", "non-example hostname"),
+        (
+            "endpoint: https://example.com/path/db%252Eproduction%252Einternal",
+            "non-example hostname",
+        ),
+        (
+            "endpoint: https://example.com/path/db%25252Eproduction%25252Einternal",
+            "non-example hostname",
+        ),
         ("endpoint: https://example.com/?target=10.0.0.7", "non-RFC5737 address"),
         ("endpoint: https://example.com/path/10%2E0%2E0%2E7", "non-RFC5737 address"),
+        ("endpoint: https://example.com/path/10%252E0%252E0%252E7", "non-RFC5737 address"),
+        (
+            "endpoint: https://example.com/path/10%25252E0%25252E0%25252E7",
+            "non-RFC5737 address",
+        ),
         (
             "endpoint: https://example.com/?setting=GCP_PROJECT_ID%3Dproduction-123",
             "GCP project identifier",
         ),
+        (
+            "endpoint: https://example.com/path/db%252525252Eproduction.internal",
+            "excessive URL payload encoding",
+        ),
+        ("Dependency: dependency.whl", "non-example hostname"),
+        ("host: dependency.whl", "non-example hostname"),
+        ("endpoint: https://example.com/?target=dependency.whl", "non-example hostname"),
         ("Connect to privatehost:5432.", "non-example hostname"),
         ("Connect to db.production.internal:5432/path.", "non-example hostname"),
         ("host: privatehost:notaport", "invalid endpoint authority"),
@@ -543,6 +673,7 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     endpoint: //app:${secret:example/password}@example.com/path
     source: postgresql://app:${secret:example/password}@192.0.2.40:5432/app
     source: https://example.com/releases/package.whl?download=1
+    source: https://example.com/releases/dependency.whl
     source: https://example.com/archive/192.0.2.50
     source: https://example.com/archive/192%2E0%2E2%2E51
     source: https://example.com/users/user@example.com
@@ -570,6 +701,25 @@ def test_boundary_detector_reports_atomic_authority_findings() -> None:
     assert boundary_violations("host: [2001:db8::1") == ["invalid endpoint authority"]
     assert boundary_violations("endpoint: http://[2001:db8::1/path") == [
         "invalid endpoint authority"
+    ]
+    assert boundary_violations("Connect to [2001:db8::1:443/path?target=10.0.0.7") == [
+        "invalid endpoint authority"
+    ]
+
+
+def test_boundary_detector_deduplicates_raw_and_decoded_payload_findings() -> None:
+    assert boundary_violations("endpoint: https://example.com/path/db.production.internal%20") == [
+        "non-example hostname: db.production.internal"
+    ]
+    assert boundary_violations(
+        "endpoint: https://example.com/?setting=GCP_PROJECT_ID=production-123%20"
+    ) == ["GCP project identifier"]
+
+
+def test_boundary_detector_bounds_url_payload_size() -> None:
+    oversized_path = "a" * (MAX_URL_PAYLOAD_LENGTH + 1)
+    assert boundary_violations(f"endpoint: https://example.com/{oversized_path}") == [
+        "URL payload exceeds scan limit"
     ]
 
 
