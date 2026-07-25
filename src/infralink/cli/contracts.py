@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 T = TypeVar("T")
 
@@ -71,11 +78,30 @@ class Envelope(ContractModel, Generic[T]):
 
     @model_validator(mode="after")
     def enforce_outcome(self) -> Envelope[T]:
-        success = self.ok and self.result is not None and self.error is None
-        failure = not self.ok and self.result is None and self.error is not None
+        success = (
+            self.ok
+            and self.result is not None
+            and self.error is None
+            and "error" not in self.model_fields_set
+        )
+        failure = (
+            not self.ok
+            and self.result is None
+            and self.error is not None
+            and "result" not in self.model_fields_set
+        )
         if not (success or failure):
             raise ValueError("ok must select exactly one of result or error")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_outcome(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        serialized = cast(dict[str, Any], handler(self))
+        if self.ok:
+            serialized.pop("error", None)
+        else:
+            serialized.pop("result", None)
+        return serialized
 
 
 class Diagnostic(ContractModel):

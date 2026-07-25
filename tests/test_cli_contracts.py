@@ -8,6 +8,11 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 from infralink.cli.contracts import (
     Action,
     AnalyzeResult,
@@ -71,6 +76,13 @@ SCHEMA_NAMES = (
     "secrets-inspect",
     "secrets-audit",
 )
+
+
+def test_project_requires_the_minimum_supported_pydantic_release() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        project = tomllib.load(pyproject_file)["project"]
+
+    assert "pydantic>=2.11,<3" in project["dependencies"]
 
 
 def context() -> CommandContext:
@@ -212,6 +224,61 @@ def test_envelope_rejects_inconsistent_outcomes(
             error=error,
             next_actions=[],
         )
+
+
+def test_success_rejects_explicit_inactive_error_field() -> None:
+    with pytest.raises(ValidationError, match="ok must select exactly one"):
+        Envelope[VersionResult](
+            ok=True,
+            command=context(),
+            result=VersionResult(
+                version="0.2.0",
+                cli_schema_version="infralink.cli/v1",
+            ),
+            error=None,
+            next_actions=[],
+        )
+
+
+def test_failure_rejects_explicit_inactive_result_field() -> None:
+    with pytest.raises(ValidationError, match="ok must select exactly one"):
+        Envelope[VersionResult](
+            ok=False,
+            command=context(),
+            result=None,
+            error=ErrorDetail(code="failed", message="Failed"),
+            next_actions=[],
+        )
+
+
+@pytest.mark.parametrize("method", ["model_dump", "model_dump_json"])
+def test_normal_serialized_envelopes_match_their_schema(method: str) -> None:
+    success = Envelope[VersionResult](
+        ok=True,
+        command=context(),
+        result=VersionResult(
+            version="0.2.0",
+            cli_schema_version="infralink.cli/v1",
+        ),
+        next_actions=[],
+    )
+    failure = Envelope[VersionResult](
+        ok=False,
+        command=context(),
+        error=ErrorDetail(code="failed", message="Failed"),
+        next_actions=[],
+    )
+    schema = json.loads(
+        (ROOT / "src/infralink/schemas/cli/v1/version.json").read_text(encoding="utf-8")
+    )
+    validator = Draft202012Validator(schema)
+
+    for envelope in (success, failure):
+        serialized = getattr(envelope, method)()
+        payload = json.loads(serialized) if isinstance(serialized, str) else serialized
+        validator.validate(payload)
+        assert ("result" in payload) is payload["ok"]
+        assert ("error" in payload) is not payload["ok"]
 
 
 def test_action_binding_and_diagnostic_literals_are_closed() -> None:
@@ -390,3 +457,29 @@ def test_generated_schema_publishes_and_enforces_outcome_invariant(name: str) ->
     ]
     validator = Draft202012Validator(schema)
     assert all(not validator.is_valid(document) for document in invalid_documents)
+
+
+def test_checked_in_schemas_exactly_match_current_generation() -> None:
+    from scripts.generate_cli_schemas import render_schemas
+
+    expected = render_schemas()
+    schema_dir = ROOT / "src/infralink/schemas/cli/v1"
+    actual_names = {path.name for path in schema_dir.glob("*.json")}
+
+    assert actual_names == set(expected)
+    for filename, rendered in expected.items():
+        assert (schema_dir / filename).read_bytes() == rendered.encode("utf-8")
+
+
+def test_schema_generation_removes_retired_json_files(tmp_path: Path) -> None:
+    from scripts.generate_cli_schemas import write_schemas
+
+    stale = tmp_path / "retired-command.json"
+    stale.write_text("{}\n", encoding="utf-8")
+
+    write_schemas(tmp_path)
+
+    assert not stale.exists()
+    assert {path.name for path in tmp_path.glob("*.json")} == {
+        f"{name}.json" for name in SCHEMA_NAMES
+    }

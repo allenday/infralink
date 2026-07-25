@@ -72,14 +72,28 @@ OUTCOME_INVARIANT = [
 ]
 
 
-def main() -> None:
-    OUTPUT.mkdir(parents=True, exist_ok=True)
+def render_schemas() -> dict[str, str]:
+    rendered_schemas: dict[str, str] = {}
     for name, model in MODELS.items():
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["oneOf"] = OUTCOME_INVARIANT
-        rendered = json.dumps(schema, indent=2, sort_keys=True) + "\n"
-        (OUTPUT / f"{name}.json").write_text(rendered, encoding="utf-8")
+        rendered_schemas[f"{name}.json"] = json.dumps(schema, indent=2, sort_keys=True) + "\n"
+    return rendered_schemas
+
+
+def write_schemas(output: Path = OUTPUT) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    rendered_schemas = render_schemas()
+    for schema_path in output.glob("*.json"):
+        if schema_path.name not in rendered_schemas:
+            schema_path.unlink()
+    for filename, rendered in rendered_schemas.items():
+        (output / filename).write_text(rendered, encoding="utf-8")
+
+
+def main() -> None:
+    write_schemas()
 
 
 if __name__ == "__main__":
