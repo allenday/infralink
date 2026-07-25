@@ -280,7 +280,7 @@ class HostSchema(NodeSchema):
 
     @field_validator("managed_services", mode="before")
     @classmethod
-    def normalize_managed_services(cls, v: Any) -> dict[str, ServiceConfig]:
+    def normalize_managed_services(cls, v: dict[str, Any] | list[str]) -> dict[str, Any]:
         """Convert legacy list format to dict format."""
         if isinstance(v, list):
             # Legacy format: ["nginx", "postgresql"]
@@ -290,7 +290,7 @@ class HostSchema(NodeSchema):
 
     @field_validator("services", mode="before")
     @classmethod
-    def normalize_services(cls, v: Any) -> dict[str, ServiceConfig]:
+    def normalize_services(cls, v: dict[str, Any] | list[str]) -> dict[str, Any]:
         """Convert legacy list format to dict format (backward compat)."""
         if isinstance(v, list):
             return {name: {} for name in v}
@@ -298,7 +298,7 @@ class HostSchema(NodeSchema):
 
     @field_validator("roles", mode="before")
     @classmethod
-    def normalize_roles(cls, v: Any) -> list[str]:
+    def normalize_roles(cls, v: dict[str, Any] | list[str]) -> list[str]:
         """Convert legacy dict format to list format."""
         if isinstance(v, dict):
             # Legacy format: {"airflow-worker": {"concurrency": 10}}
@@ -469,6 +469,7 @@ class HealthCheckConfig(StrictModel):
     query: str | None = None  # For query checks
     conditions: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
+    explicit: bool = Field(default=False, exclude=True)
 
 
 class EdgeSourceSelector(StrictModel):

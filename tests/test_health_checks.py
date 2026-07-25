@@ -4,6 +4,7 @@ import urllib.error
 import pytest
 
 from infralink.core.edges import Edge
+from infralink.core.resolver import ResolutionError
 from infralink.health.checks import (
     HealthCheckResult,
     check_edge_health,
@@ -29,6 +30,14 @@ class _Resolver:
     def get_target_ip(self, edge_id: str) -> str:
         return "192.0.2.1"
 
+    def get_target_port(self, edge_id: str) -> int:
+        return 5432
+
+
+class _MissingPortResolver(_Resolver):
+    def get_target_port(self, edge_id: str) -> int:
+        raise ResolutionError(f"No target port declared for edge {edge_id}")
+
 
 def _edge(check_type: str = "tcp") -> Edge:
     return Edge(
@@ -44,6 +53,18 @@ def _edge(check_type: str = "tcp") -> Edge:
             "healthcheck": {"type": check_type},
         }
     )
+
+
+def test_missing_target_port_is_a_stable_resolution_failure() -> None:
+    result = check_edge_health(_edge(), _MissingPortResolver())  # type: ignore[arg-type]
+
+    assert result.healthy is False
+    assert result.check_type == "resolution"
+    assert result.error_code == "resolution_failed"
+    assert result.message == (
+        "No target port declared for edge 00000000-0000-4000-8000-000000000001"
+    )
+    assert result.target_endpoint == "unknown"
 
 
 @pytest.mark.parametrize(

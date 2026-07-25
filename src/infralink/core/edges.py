@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import yaml
 
@@ -61,7 +62,7 @@ class Edge:
         return self._schema.to.service
 
     @property
-    def target_port(self) -> int:
+    def target_port(self) -> int | None:
         return self._schema.to.port
 
     @property
@@ -83,12 +84,8 @@ class Edge:
     @property
     def healthcheck(self) -> HealthCheckConfig:
         if self._schema.healthcheck is None:
-            hc = HealthCheckConfig()
-            setattr(hc, "explicit", False)
-            return hc
-        hc = self._schema.healthcheck
-        setattr(hc, "explicit", True)
-        return hc
+            return HealthCheckConfig(explicit=False)
+        return self._schema.healthcheck.model_copy(update={"explicit": True})
 
     @property
     def auth_type(self) -> str:

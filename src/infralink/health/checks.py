@@ -251,7 +251,7 @@ def check_edge_health(
 
     try:
         target_ip = resolver.get_target_ip(edge.id)
-        target_port = edge.target_port
+        target_port = resolver.get_target_port(edge.id)
         target_endpoint = f"{target_ip}:{target_port}"
     except ResolutionError as e:
         return HealthCheckResult(

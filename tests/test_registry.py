@@ -1,10 +1,9 @@
 """Tests for registry module."""
 
 import pytest
-from pathlib import Path
 import yaml
 
-from infralink.core.registry import Registry, Host
+from infralink.core.registry import Host, Registry
 from infralink.core.schema import HostStatus
 
 
@@ -179,6 +178,7 @@ class TestRegistry:
         assert "d1b9e5d5-36b0-459d-a556-96622811fbd5" in registry
         assert "test-host-1" in registry
         assert "nonexistent" not in registry
+
 
 def test_load_dir(tmp_path):
     """Load per-host manifests from a directory."""
