@@ -19,7 +19,13 @@ EXPECTED_PUBLIC_FILES = ROOT_PUBLIC_FILES + (
     PROJECT_ROOT / "docs" / "compatibility" / "v0.2.md",
 )
 FORBIDDEN_NAMES = ("cyberstorm-citadel", "reblogme-app", "relaxgg-ax162", "bdsmlr-db")
-TOKEN = re.compile(r"(?<![0-9A-Za-z_.-])[0-9A-Fa-f:.]+(?![0-9A-Za-z_.-])")
+ADDRESS_TOKEN = re.compile(
+    r"(?<![0-9A-Za-z_.:-])"
+    r"[0-9a-f:](?:[0-9a-f:.]*[0-9a-f])?"
+    r"""[.,;:!?)}\]>'"]*"""
+    r"(?![0-9A-Za-z_.:-])",
+    re.IGNORECASE,
+)
 URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
 UUID = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
@@ -61,6 +67,11 @@ DOTTED_TOKEN = re.compile(
 )
 VERSION_IDENTIFIER = re.compile(r"^v?\d+(?:\.\d+){1,3}$", re.IGNORECASE)
 TERMINAL_PROSE_PUNCTUATION = ".,;:!?)]}>'\""
+DOCUMENTATION_IPV4_RANGES = (
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+)
 SAFE_DOTTED_TOKENS = {
     "app-database.md",
     "backlog.md",
@@ -118,10 +129,41 @@ def tracked_public_files() -> tuple[Path, ...]:
     return tuple(sorted(tracked))
 
 
+def _normalize_prose_token(value: str, *, preserve_valid_address: bool = False) -> str:
+    candidate = value
+    while candidate and candidate[-1] in TERMINAL_PROSE_PUNCTUATION:
+        if preserve_valid_address:
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                pass
+            else:
+                return candidate
+        candidate = candidate[:-1]
+    return candidate
+
+
+def _parse_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(_normalize_prose_token(value, preserve_valid_address=True))
+    except ValueError:
+        return None
+
+
+def _address_violation(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> str | None:
+    if isinstance(address, ipaddress.IPv4Address) and any(
+        address in network for network in DOCUMENTATION_IPV4_RANGES
+    ):
+        return None
+    return f"non-RFC5737 address: {address}"
+
+
 def _hostname_violation(hostname: str | None) -> str | None:
     if hostname is None:
         return None
-    candidate = hostname.rstrip(".").lower()
+    candidate = _normalize_prose_token(hostname).lower()
     if UUID.fullmatch(candidate):
         return None
     try:
@@ -156,7 +198,9 @@ def _dotted_token_violation(
     match: re.Match[str],
     url_matches: tuple[re.Match[str], ...],
 ) -> str | None:
-    candidate = match.group(0).rstrip(TERMINAL_PROSE_PUNCTUATION)
+    candidate = _normalize_prose_token(match.group(0))
+    if _parse_address(candidate) is not None:
+        return None
     inside_url = any(
         url_match.start() <= match.start() and match.end() <= url_match.end()
         for url_match in url_matches
@@ -209,22 +253,13 @@ def boundary_violations(text: str) -> list[str]:
         if hostname_violation is not None:
             violations.append(hostname_violation)
 
-    for token in TOKEN.findall(text):
-        candidate = token.strip("[](),;")
-        try:
-            address = ipaddress.ip_address(candidate)
-        except ValueError:
+    for token in ADDRESS_TOKEN.findall(text):
+        address = _parse_address(token)
+        if address is None:
             continue
-        documentation_ranges = (
-            ipaddress.ip_network("192.0.2.0/24"),
-            ipaddress.ip_network("198.51.100.0/24"),
-            ipaddress.ip_network("203.0.113.0/24"),
-        )
-        if not (
-            isinstance(address, ipaddress.IPv4Address)
-            and any(address in network for network in documentation_ranges)
-        ):
-            violations.append(f"non-RFC5737 address: {address}")
+        address_violation = _address_violation(address)
+        if address_violation is not None:
+            violations.append(address_violation)
 
     for match in GCP_KEY.finditer(text):
         project = match.group("value")
@@ -245,6 +280,21 @@ def boundary_violations(text: str) -> list[str]:
     [
         ("host: 10.0.0.7", "non-RFC5737 address"),
         ("host: 2001:db8::1", "non-RFC5737 address"),
+        ("Address: 10.0.0.7.", "non-RFC5737 address"),
+        ("Address: 10.0.0.7..", "non-RFC5737 address"),
+        ("Address: 10.0.0.7...", "non-RFC5737 address"),
+        ("Address: 10.0.0.7...);!?", "non-RFC5737 address"),
+        ("Address: 2001:db8::1.", "non-RFC5737 address"),
+        ("Address: 2001:db8::1...", "non-RFC5737 address"),
+        ("Address: 2001:db8::1...,\"']", "non-RFC5737 address"),
+        ("Address: 2001:db8::", "non-RFC5737 address"),
+        ("Address: 2001:db8::...);", "non-RFC5737 address"),
+        ("host: 10.0.0.7...", "non-RFC5737 address"),
+        ("host: 2001:db8::1...);", "non-RFC5737 address"),
+        ("endpoint: http://10.0.0.7.", "non-RFC5737 address"),
+        ("endpoint: http://10.0.0.7...", "non-RFC5737 address"),
+        ("endpoint: http://10.0.0.7...);!?", "non-RFC5737 address"),
+        ("endpoint: http://[2001:db8::1].", "non-RFC5737 address"),
         ("host: service.i.cyberstorm.dev", "private suffix"),
         ("gcp_project: production-123", "GCP project identifier"),
         ("bws_project_id: 8d11e0b6-14b0-4f12-a6ed-5a76a8a0dbf2", "UUID-shaped BWS"),
@@ -308,6 +358,8 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     text = """
     host: 192.0.2.10
     backup: 198.51.100.5
+    prose_address: 203.0.113.9...);!?
+    source: http://192.0.2.20...);!?
     endpoint: https://api.example.com
     source: https://example.com/releases/package.whl?download=1
     canonical_name: db.internal.example.com
