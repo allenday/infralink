@@ -12,12 +12,13 @@ from infralink.core.edges import Edge, EdgeSet
 from infralink.core.registry import Host, Registry
 from infralink.core.schema import SAFE_SECRET_REF_PATTERN
 
-_CONNECTION_SCHEME = re.compile(
-    r"(?P<base>postgres|postgresql|mysql|mariadb|redis|rediss)"
-    r"(?:\+(?P<driver>[A-Za-z0-9][A-Za-z0-9._-]*))?\Z",
+_DATABASE_SCHEME = re.compile(
+    r"(?P<base>postgres|postgresql|mysql|mariadb)"
+    r"(?:\+(?P<driver>[A-Za-z0-9][A-Za-z0-9.-]*))?\Z",
     re.ASCII | re.IGNORECASE,
 )
-_GENERIC_SCHEME_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9+._-]*\Z", re.ASCII)
+_URI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*\Z", re.ASCII)
+_REDIS_SCHEME = re.compile(r"redis|rediss", re.ASCII | re.IGNORECASE)
 _DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z", re.ASCII)
 _SUPPORTED_SCHEME_PREFIXES = (
     "postgres",
@@ -112,7 +113,7 @@ class EdgeResolver:
         edge = self.get_edge(edge_id)
         host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
-        protocol = edge.protocol or "tcp"
+        protocol = _normalize_uri_scheme(edge.protocol or "tcp")
 
         # Build URL
         if user and password:
@@ -143,19 +144,22 @@ class EdgeResolver:
         edge_id: str,
         *,
         password: str | None = None,
-        db: int = 0,
+        db: int | str = 0,
+        driver: str = "redis",
         prefer_ip: str = "tailscale",
     ) -> str:
         """Build a Redis connection URL."""
         _warn_legacy_url_method("get_redis_url")
         password = _require_plain_secret(password)
+        scheme = _normalize_redis_scheme(driver)
+        database = _normalize_redis_database(db)
         host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
 
         if password:
             encoded_password = _encode_uri_component(password, "password")
-            return f"redis://:{encoded_password}@{host}:{port}/{db}"
-        return f"redis://{host}:{port}/{db}"
+            return f"{scheme}://:{encoded_password}@{host}:{port}/{database}"
+        return f"{scheme}://{host}:{port}/{database}"
 
     def get_postgres_url(
         self,
@@ -170,6 +174,7 @@ class EdgeResolver:
         """Build a PostgreSQL connection URL."""
         _warn_legacy_url_method("get_postgres_url")
         encoded_secret = _require_plain_secret(password)
+        scheme = _normalize_database_scheme(driver, {"postgres", "postgresql"})
         host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
         if encoded_secret is None:
@@ -177,7 +182,7 @@ class EdgeResolver:
         encoded_user = _encode_uri_component(user, "user")
         encoded_password = _encode_uri_component(encoded_secret, "password")
         encoded_database = _encode_uri_component(database, "database")
-        return f"{driver}://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_database}"
+        return f"{scheme}://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_database}"
 
     def get_mysql_url(
         self,
@@ -192,6 +197,7 @@ class EdgeResolver:
         """Build a MySQL/MariaDB connection URL."""
         _warn_legacy_url_method("get_mysql_url")
         encoded_secret = _require_plain_secret(password)
+        scheme = _normalize_database_scheme(driver, {"mysql", "mariadb"})
         host = _format_authority_host(self.get_target_ip(edge_id, prefer_ip))
         port = self.get_target_port(edge_id)
         if encoded_secret is None:
@@ -199,14 +205,14 @@ class EdgeResolver:
         encoded_user = _encode_uri_component(user, "user")
         encoded_password = _encode_uri_component(encoded_secret, "password")
         encoded_database = _encode_uri_component(database, "database")
-        return f"{driver}://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_database}"
+        return f"{scheme}://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_database}"
 
     def get_connection_template(
         self,
         edge_id: str,
         *,
         user: str | None = None,
-        database: str | None = None,
+        database: str | int | None = None,
         prefer_ip: str | bool = True,
     ) -> str | None:
         """Build a safe connection template containing no plaintext secret."""
@@ -223,15 +229,17 @@ class EdgeResolver:
         resolved_user = user if user is not None else declared_auth.username
         resolved_database = database if database is not None else declared_auth.database
         encoded_user = _encode_coordinate(resolved_user, "user")
-        encoded_database = _encode_coordinate(resolved_database, "database")
         placeholder = _secret_placeholder(edge.secret_ref)
 
         base_scheme = scheme.partition("+")[0]
         if base_scheme in {"redis", "rediss"}:
-            redis_database = encoded_database if encoded_database is not None else "0"
+            redis_database = _normalize_redis_database(
+                resolved_database if resolved_database is not None else 0
+            )
             auth = _template_auth(encoded_user, placeholder, password_only=True)
             return f"{scheme}://{auth}{host}:{port}/{redis_database}"
 
+        encoded_database = _encode_coordinate(resolved_database, "database")
         auth = _template_auth(encoded_user, placeholder)
         path = f"/{encoded_database}" if encoded_database is not None else ""
         return f"{scheme}://{auth}{host}:{port}{path}"
@@ -367,7 +375,7 @@ def _normalize_ip_preference(prefer_ip: str | bool) -> str:
     return prefer_ip
 
 
-def _encode_coordinate(value: str | None, name: str) -> str | None:
+def _encode_coordinate(value: object, name: str) -> str | None:
     if value is None:
         return None
     if type(value) is not str:
@@ -384,16 +392,56 @@ def _encode_uri_component(value: object, name: str) -> str:
 def _normalize_connection_scheme(protocol: str | None) -> str | None:
     if protocol is None or protocol == "":
         return None
-    match = _CONNECTION_SCHEME.fullmatch(protocol)
-    if match is not None:
-        return protocol.lower()
-
-    lowered = protocol.lower()
-    if _GENERIC_SCHEME_TOKEN.fullmatch(protocol) is None or lowered.startswith(
-        _SUPPORTED_SCHEME_PREFIXES
-    ):
+    normalized = _normalize_uri_scheme(
+        protocol,
+        error_message="Edge has an invalid connection scheme",
+    )
+    if _DATABASE_SCHEME.fullmatch(normalized) is not None:
+        return normalized
+    if _REDIS_SCHEME.fullmatch(normalized) is not None:
+        return normalized
+    if normalized.startswith(_SUPPORTED_SCHEME_PREFIXES):
         raise ResolutionError("Edge has an invalid connection scheme")
     return None
+
+
+def _normalize_uri_scheme(
+    scheme: object,
+    *,
+    error_message: str = "Edge has an invalid URI scheme",
+) -> str:
+    if type(scheme) is not str or _URI_SCHEME.fullmatch(scheme) is None:
+        raise ResolutionError(error_message)
+    return scheme.lower()
+
+
+def _normalize_database_scheme(driver: object, allowed_bases: set[str]) -> str:
+    normalized = _normalize_uri_scheme(
+        driver,
+        error_message="Edge has an invalid database URI scheme",
+    )
+    match = _DATABASE_SCHEME.fullmatch(normalized)
+    if match is None or match.group("base") not in allowed_bases:
+        raise ResolutionError("Edge has an invalid database URI scheme")
+    return normalized
+
+
+def _normalize_redis_scheme(driver: object) -> str:
+    normalized = _normalize_uri_scheme(
+        driver,
+        error_message="Edge has an invalid Redis URI scheme",
+    )
+    if _REDIS_SCHEME.fullmatch(normalized) is None:
+        raise ResolutionError("Edge has an invalid Redis URI scheme")
+    return normalized
+
+
+def _normalize_redis_database(database: object) -> str:
+    if type(database) is int and database >= 0:
+        return str(database)
+    if type(database) is str and re.fullmatch(r"[0-9]+", database, re.ASCII) is not None:
+        return database.lstrip("0") or "0"
+    raise ResolutionError("Edge has an invalid Redis database")
 
 
 def _format_authority_host(host: object) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
+from infralink.core.schema import SAFE_SECRET_REF_PATTERN
 from infralink.secrets.base import SecretReference
 
 
@@ -14,8 +15,10 @@ def collect_secret_references(
     """Collect declared edge secret references without provider access."""
     grouped: dict[tuple[str, str | None], set[str]] = {}
     for edge in edges:
-        if not edge.secret_ref:
+        if edge.secret_ref is None:
             continue
+        if SAFE_SECRET_REF_PATTERN.fullmatch(edge.secret_ref) is None:
+            raise ValueError("Topology contains an unsafe secret reference")
         target = registry.get_by_uuid(edge.target_host)
         project = target.bws_project if target else None
         grouped.setdefault((edge.secret_ref, project), set()).add(

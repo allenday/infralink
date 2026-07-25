@@ -244,6 +244,157 @@ class TestEdgeResolver:
             assert unquote(parsed.path.removeprefix("/")) == "db +/@"
 
     @pytest.mark.parametrize(
+        ("protocol", "expected"),
+        [
+            ("POSTGRESQL+PSYCOPG2", "postgresql+psycopg2"),
+            ("Custom.Scheme+TLS", "custom.scheme+tls"),
+        ],
+    )
+    def test_deprecated_generic_url_validates_and_normalizes_scheme(
+        self, registry, protocol, expected
+    ):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": protocol,
+                    }
+                ]
+            }
+        )
+
+        with pytest.deprecated_call():
+            result = EdgeResolver(registry, edges).get_url(SECRET_EDGE_ID)
+
+        assert result.startswith(f"{expected}://")
+
+    @pytest.mark.parametrize(
+        "protocol",
+        ["bad_scheme", "postgresql://attacker", "postgresql\n", "1postgres"],
+    )
+    def test_deprecated_generic_url_rejects_invalid_scheme(self, registry, protocol):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": protocol,
+                    }
+                ]
+            }
+        )
+
+        with pytest.deprecated_call():
+            with pytest.raises(ResolutionError, match="invalid URI scheme"):
+                EdgeResolver(registry, edges).get_url(SECRET_EDGE_ID)
+
+    @pytest.mark.parametrize(
+        ("method_name", "driver", "expected"),
+        [
+            ("get_postgres_url", "POSTGRESQL+PSYCOPG2", "postgresql+psycopg2"),
+            ("get_postgres_url", "POSTGRES+PSYCOPG", "postgres+psycopg"),
+            ("get_mysql_url", "MYSQL+PYMYSQL", "mysql+pymysql"),
+            ("get_mysql_url", "MARIADB+CONNECTOR", "mariadb+connector"),
+        ],
+    )
+    def test_deprecated_database_url_normalizes_expected_driver_family(
+        self, registry, edges, method_name, driver, expected
+    ):
+        with pytest.deprecated_call():
+            result = getattr(EdgeResolver(registry, edges), method_name)(
+                "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10",
+                user="user",
+                password="password",
+                database="database",
+                driver=driver,
+            )
+
+        assert result.startswith(f"{expected}://")
+
+    @pytest.mark.parametrize(
+        ("method_name", "driver"),
+        [
+            ("get_postgres_url", "mysql+pymysql"),
+            ("get_postgres_url", "postgresql_bad"),
+            ("get_postgres_url", "postgresql://attacker"),
+            ("get_postgres_url", "postgresql\n"),
+            ("get_mysql_url", "postgresql+psycopg2"),
+            ("get_mysql_url", "mysql_bad"),
+            ("get_mysql_url", "mysql://attacker"),
+        ],
+    )
+    def test_deprecated_database_url_rejects_invalid_driver_family(
+        self, registry, edges, method_name, driver
+    ):
+        with pytest.deprecated_call():
+            with pytest.raises(ResolutionError, match="invalid database URI scheme"):
+                getattr(EdgeResolver(registry, edges), method_name)(
+                    "9d8d0b1e-4e21-4f49-9c0c-2b1d9b9e6a10",
+                    user="user",
+                    password="password",
+                    database="database",
+                    driver=driver,
+                )
+
+    @pytest.mark.parametrize(
+        ("driver", "database", "expected_prefix", "expected_suffix"),
+        [
+            ("REDIS", 0, "redis://", "/0"),
+            ("REDISS", "007", "rediss://", "/7"),
+        ],
+    )
+    def test_deprecated_redis_url_accepts_exact_scheme_and_decimal_database(
+        self, registry, edges, driver, database, expected_prefix, expected_suffix
+    ):
+        with pytest.deprecated_call():
+            result = EdgeResolver(registry, edges).get_redis_url(
+                "c8c1a6a4-55c6-4a1b-9c14-1a4e0f615d8f",
+                driver=driver,
+                db=database,
+            )
+
+        assert result.startswith(expected_prefix)
+        assert result.endswith(expected_suffix)
+
+    @pytest.mark.parametrize(
+        ("driver", "database"),
+        [
+            ("redis+tls", 0),
+            ("redis://attacker", 0),
+            ("mysql", 0),
+            ("redis", "foo"),
+            ("redis", -1),
+            ("redis", "1/2"),
+            ("redis", True),
+        ],
+    )
+    def test_deprecated_redis_url_rejects_scheme_or_database(
+        self, registry, edges, driver, database
+    ):
+        with pytest.deprecated_call():
+            with pytest.raises(ResolutionError):
+                EdgeResolver(registry, edges).get_redis_url(
+                    "c8c1a6a4-55c6-4a1b-9c14-1a4e0f615d8f",
+                    driver=driver,
+                    db=database,
+                )
+
+    @pytest.mark.parametrize(
         ("protocol", "port", "user", "database", "expected"),
         [
             (
@@ -347,7 +498,7 @@ class TestEdgeResolver:
             ("MYSQL+PYMYSQL", "mysql+pymysql"),
             ("MARIADB+CONNECTOR", "mariadb+connector"),
             ("REDIS", "redis"),
-            ("REDISS+TLS", "rediss+tls"),
+            ("REDISS", "rediss"),
         ],
     )
     def test_get_connection_template_emits_normalized_validated_scheme(
@@ -385,6 +536,7 @@ class TestEdgeResolver:
             "postgresql+driver@attacker",
             "postgresql\n",
             "redis:evil",
+            "redis+tls",
         ],
     )
     def test_get_connection_template_rejects_malformed_supported_scheme(self, registry, protocol):
@@ -537,6 +689,70 @@ class TestEdgeResolver:
         assert "invalid connection host" in str(exc_info.value)
         assert authority not in str(exc_info.value)
 
+    @pytest.mark.parametrize(
+        ("database", "expected"),
+        [
+            (0, "/0"),
+            (7, "/7"),
+            ("007", "/7"),
+        ],
+    )
+    def test_redis_template_normalizes_nonnegative_decimal_database(
+        self, registry, database, expected
+    ):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "queue",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "redis",
+                            "port": 6379,
+                        },
+                        "protocol": "redis",
+                        "auth": {"type": "password", "secret_ref": "redis-password"},
+                    }
+                ]
+            }
+        )
+
+        result = EdgeResolver(registry, edges).get_connection_template(
+            SECRET_EDGE_ID,
+            database=database,
+        )
+
+        assert result is not None
+        assert result.endswith(expected)
+
+    @pytest.mark.parametrize("database", ["foo", -1, "-1", "1/2", "1.0", True])
+    def test_redis_template_rejects_invalid_database(self, registry, database):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "queue",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "redis",
+                            "port": 6379,
+                        },
+                        "protocol": "redis",
+                    }
+                ]
+            }
+        )
+
+        with pytest.raises(ResolutionError, match="invalid Redis database"):
+            EdgeResolver(registry, edges).get_connection_template(
+                SECRET_EDGE_ID,
+                database=database,
+            )
+
     def test_get_connection_template_without_secret_is_password_free(self, registry, edges):
         resolver = EdgeResolver(registry, edges)
 
@@ -571,7 +787,7 @@ class TestEdgeResolver:
         assert EdgeResolver(registry, edges).get_connection_template(OTLP_EDGE_ID) is None
 
     def test_password_edge_with_unsafe_secret_reference_fails_topology_validation(self, registry):
-        with pytest.raises(ValidationError, match="valid nonempty secret_ref"):
+        with pytest.raises(ValidationError, match="safe secret_ref"):
             EdgeSet.from_dict(
                 {
                     "edges": [

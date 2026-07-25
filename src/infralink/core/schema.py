@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SAFE_SECRET_REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z", re.ASCII)
+SAFE_SECRET_REF_PATTERN = re.compile(r"[A-Za-z0-9._-]+\Z", re.ASCII)
 
 
 class StrictModel(BaseModel):
@@ -412,12 +413,45 @@ class AuthConfig(StrictModel):
     mount_path: str | None = None
 
     @model_validator(mode="after")
-    def require_password_secret_reference(self) -> AuthConfig:
-        if self.type == "password" and (
-            self.secret_ref is None or SAFE_SECRET_REF_PATTERN.fullmatch(self.secret_ref) is None
+    def validate_auth_credentials(self) -> AuthConfig:
+        if (
+            self.secret_ref is not None
+            and SAFE_SECRET_REF_PATTERN.fullmatch(self.secret_ref) is None
         ):
-            raise ValueError("password auth requires a valid nonempty secret_ref")
+            raise ValueError("auth requires a safe secret_ref")
+
+        if self.type == "none":
+            if self.secret_ref is not None:
+                raise ValueError("none auth forbids secret_ref")
+            return self
+
+        if self.type in {"password", "basic", "token"}:
+            if self.secret_ref is None:
+                raise ValueError(f"{self.type} auth requires secret_ref")
+            return self
+
+        if self.type == "certificate":
+            if self.mount_path is not None and not _is_safe_certificate_mount(self.mount_path):
+                raise ValueError("certificate auth requires a safe absolute mount_path")
+            if self.secret_ref is None and self.mount_path is None:
+                raise ValueError(
+                    "certificate auth requires secret_ref or a safe absolute mount_path"
+                )
         return self
+
+
+def _is_safe_certificate_mount(mount_path: str | None) -> bool:
+    if (
+        mount_path is None
+        or len(mount_path) < 2
+        or not mount_path.startswith("/")
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in mount_path
+        )
+    ):
+        return False
+    return ".." not in PurePosixPath(mount_path).parts
 
 
 class HealthCheckConfig(StrictModel):
