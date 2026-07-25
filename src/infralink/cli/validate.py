@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import click
+
+from infralink.cli.errors import CliFailure
 
 try:
     from infralink.cli.main import Context, pass_context
 except ModuleNotFoundError:
     Context = object  # type: ignore[misc,assignment]
 
-    def pass_context(func):  # type: ignore[misc]
+    def pass_context(func: Any) -> Any:
         return func
 
 from infralink.cli.output import error_envelope, ok_envelope
@@ -60,12 +63,16 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
     # Load and validate registry
     try:
         registry = ctx.registry
+    except CliFailure:
+        raise
     except Exception as e:
         errors.append(f"Registry validation failed: {e}")
 
     # Load and validate edges
     try:
         edges = ctx.edges
+    except CliFailure:
+        raise
     except Exception as e:
         errors.append(f"Edge validation failed: {e}")
 
@@ -93,12 +100,12 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
     if check_resolution and "registry" in dir() and "edges" in dir():
         resolver = EdgeResolver(registry, edges)
         resolution_errors, resolution_warnings = resolver.validate_all()
-        
+
         if resolution_warnings:
             click.echo("\nResolution Warnings:", err=True)
             for warn in resolution_warnings:
                 click.secho(f"  - {warn}", fg="yellow", err=True)
-                
+
         if resolution_errors:
             for err in resolution_errors:
                 errors.append(err)

@@ -63,7 +63,7 @@ bws = [
 ]
 
 [project.scripts]
-infralink = "infralink.cli.main:cli"
+infralink = "infralink.cli.main:run"
 
 [project.entry-points."infralink.commands"]
 check = "infralink.cli.check:check"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import FrozenInstanceError, dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -20,7 +20,7 @@ class ErrorCode(str, Enum):
     INTERNAL_ERROR = "internal_error"
 
 
-@dataclass(frozen=True)
+@dataclass
 class CliFailure(Exception):
     code: ErrorCode
     message: str
@@ -28,6 +28,19 @@ class CliFailure(Exception):
     fix: str
     details: dict[str, Any] = field(default_factory=dict)
     next_actions: list[Action] = field(default_factory=list)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        immutable_fields = {
+            "code",
+            "message",
+            "exit_code",
+            "fix",
+            "details",
+            "next_actions",
+        }
+        if name in immutable_fields and hasattr(self, name):
+            raise FrozenInstanceError(f"cannot assign to field {name!r}")
+        object.__setattr__(self, name, value)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "details", deepcopy(self.details))
