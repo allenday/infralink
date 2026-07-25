@@ -192,7 +192,11 @@ def _looks_like_bracketed_endpoint(text: str, start: int, value: str) -> bool:
     if not marker or not hostname:
         return False
     hostname = hostname.lower()
-    if "." in hostname or "host" in hostname:
+    if (
+        "." in hostname
+        or hostname in {"host", "hostname", "localhost", "privatehost"}
+        or re.search(r"(?:^|[-_])host(?:name)?$", hostname) is not None
+    ):
         return True
     prefix = text[max(0, start - 32) : start]
     return (
@@ -813,6 +817,13 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
     assert boundary_violations("Use [key:value] in generic prose.") == []
     assert boundary_violations("Use [key:123] [year:2026] [line:12] [HTTP:200].") == []
+    assert (
+        boundary_violations("Use [ghost:value] [ghost:123] [hostile:notaport] [cohost:5432].") == []
+    )
+    assert boundary_violations("Use [host:notaport] [db-host:notaport].") == [
+        "invalid endpoint authority",
+        "invalid endpoint authority",
+    ]
     assert boundary_violations("Use [key:value][privatehost:5432] in prose.") == [
         "non-example hostname: privatehost"
     ]
