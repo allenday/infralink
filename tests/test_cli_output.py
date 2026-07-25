@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import copy
 import json
-from dataclasses import FrozenInstanceError
+import pickle
+from collections.abc import Callable
+from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+from pydantic import BaseModel
 
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
@@ -25,6 +29,22 @@ from infralink.cli.output import (
     ok_envelope,
     redact_argv,
 )
+from infralink.cli.resolve import resolve
+
+
+class NestedCredential(BaseModel):
+    token: str
+    metadata: dict[str, str]
+
+
+@dataclass
+class DataclassCredential:
+    password_env: str
+
+
+class OpaqueCredential:
+    def __init__(self, token: str) -> None:
+        self.token = token
 
 
 def test_error_codes_are_stable_strings() -> None:
@@ -76,6 +96,40 @@ def test_cli_failure_copies_boundaries_and_logs_only_its_message() -> None:
     assert failure.next_actions[0].argv == ["infralink", "check"]
     assert str(failure) == "Health check failed"
     assert failure.args == ("Health check failed",)
+
+
+@pytest.mark.parametrize(
+    "roundtrip",
+    [
+        copy.copy,
+        copy.deepcopy,
+        lambda failure: pickle.loads(pickle.dumps(failure)),
+    ],
+    ids=["copy", "deepcopy", "pickle"],
+)
+def test_cli_failure_reconstructs_with_isolated_nested_data(
+    roundtrip: Callable[[CliFailure], CliFailure],
+) -> None:
+    original = CliFailure(
+        ErrorCode.INTERNAL_ERROR,
+        "Health check failed",
+        1,
+        "Retry",
+        {"attempt": {"hosts": ["one"]}},
+        [action("retry", ["infralink", "check"], "Retry")],
+    )
+
+    reconstructed = roundtrip(original)
+    reconstructed.details["attempt"]["hosts"].append("two")
+    reconstructed.next_actions[0].argv.append("--mutated")
+
+    assert reconstructed.code is ErrorCode.INTERNAL_ERROR
+    assert reconstructed.exit_code == 1
+    assert reconstructed.fix == "Retry"
+    assert str(reconstructed) == "Health check failed"
+    assert reconstructed.args == ("Health check failed",)
+    assert original.details == {"attempt": {"hosts": ["one"]}}
+    assert original.next_actions[0].argv == ["infralink", "check"]
 
 
 def test_action_is_typed_canonical_and_does_not_alias_inputs() -> None:
@@ -152,6 +206,24 @@ def test_redact_argv_redacts_live_short_password_alias() -> None:
     ]
 
 
+def test_click_parser_accepts_attached_short_password_value() -> None:
+    with resolve.make_context("resolve", ["edge-1", "-pcanary-secret"]) as context:
+        assert context.params["password"] == "canary-secret"
+
+
+def test_redact_argv_redacts_attached_short_password_without_matching_long_prefixes() -> None:
+    assert redact_argv(["infralink", "resolve", "edge-1", "-pcanary-secret"]) == [
+        "infralink",
+        "resolve",
+        "edge-1",
+        "-p[REDACTED]",
+    ]
+    assert redact_argv(["infralink", "--profile=canary-secret"]) == [
+        "infralink",
+        "--profile=canary-secret",
+    ]
+
+
 def test_redact_argv_does_not_consume_adjacent_sensitive_options() -> None:
     redacted = redact_argv(["infralink", "--token", "--password", "canary-secret"])
 
@@ -220,6 +292,47 @@ def test_command_context_recursively_sanitizes_and_copies_nested_values() -> Non
         "nested": {"PassWord": "[REDACTED]"},
     }
     assert payload["command"]["parsed"]["args"]["ordinary"] == {"values": ["before"]}
+
+
+def test_command_context_sanitizes_supported_models_in_success_and_error_envelopes() -> None:
+    model = NestedCredential(
+        token="canary-secret",
+        metadata={"Access-Token": "canary-secret", "region": "west"},
+    )
+    structured = {
+        "model": model,
+        "dataclass": DataclassCredential(password_env="canary-secret"),
+    }
+
+    context = command_context(["infralink"], [], structured, [], {"models": [model]})
+    model.metadata["region"] = "changed"
+    success = ok_envelope(context, {"valid": True}, [])
+    failure = error_envelope(
+        context,
+        CliFailure(ErrorCode.INTERNAL_ERROR, "Failed", 1, "Retry"),
+    )
+
+    assert "canary-secret" not in json.dumps(success)
+    assert "canary-secret" not in json.dumps(failure)
+    assert success["command"]["parsed"]["args"] == {
+        "model": {
+            "token": "[REDACTED]",
+            "metadata": {"Access-Token": "[REDACTED]", "region": "west"},
+        },
+        "dataclass": {"password_env": "[REDACTED]"},
+    }
+    assert failure["command"] == success["command"]
+
+
+def test_command_context_rejects_unsupported_structured_values() -> None:
+    with pytest.raises(TypeError, match="unsupported command context value"):
+        command_context(
+            ["infralink"],
+            [],
+            {"credential": OpaqueCredential("canary-secret")},
+            [],
+            {},
+        )
 
 
 def test_ok_envelope_contains_structured_command_and_action() -> None:

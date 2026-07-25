@@ -37,3 +37,21 @@ class CliFailure(Exception):
             [repair.model_copy(deep=True) for repair in self.next_actions],
         )
         object.__setattr__(self, "args", (self.message,))
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        type[CliFailure],
+        tuple[ErrorCode, str, int, str, dict[str, Any], list[Action]],
+    ]:
+        return (
+            type(self),
+            (
+                self.code,
+                self.message,
+                self.exit_code,
+                self.fix,
+                self.details,
+                self.next_actions,
+            ),
+        )

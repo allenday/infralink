@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import fields, is_dataclass
 from typing import Any, cast, overload
+
+from pydantic import BaseModel
 
 from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
 from infralink.cli.errors import CliFailure
@@ -15,7 +19,8 @@ SENSITIVE_OPTIONS = {
 }
 _REDACTED = "[REDACTED]"
 _SENSITIVE_KEYS = {"access_token", "password", "password_env", "token"}
-_SENSITIVE_ARGV_OPTIONS = SENSITIVE_OPTIONS | {"-p"}
+_SENSITIVE_SHORT_OPTIONS = {"-p"}
+_SENSITIVE_ARGV_OPTIONS = SENSITIVE_OPTIONS | _SENSITIVE_SHORT_OPTIONS
 
 
 def redact_argv(argv: list[str]) -> list[str]:
@@ -40,27 +45,49 @@ def redact_argv(argv: list[str]) -> list[str]:
             index += 1
             continue
 
+        attached_short = next(
+            (
+                short
+                for short in _SENSITIVE_SHORT_OPTIONS
+                if value.startswith(short)
+                and len(value) > len(short)
+                and not value.startswith("--")
+            ),
+            None,
+        )
+        if attached_short is not None:
+            redacted.append(f"{attached_short}{_REDACTED}")
+            index += 1
+            continue
+
         redacted.append(value)
         index += 1
     return redacted
 
 
 def _sanitize_value(value: Any) -> Any:
-    if isinstance(value, dict):
+    if isinstance(value, BaseModel):
+        return _sanitize_value(value.model_dump(mode="json"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return _sanitize_value(
+            {field.name: getattr(value, field.name) for field in fields(value)}
+        )
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("unsupported command context value: non-string mapping key")
         return {
-            deepcopy(key): (
+            key: (
                 _REDACTED
-                if isinstance(key, str)
-                and key.casefold().replace("-", "_") in _SENSITIVE_KEYS
+                if key.casefold().replace("-", "_") in _SENSITIVE_KEYS
                 else _sanitize_value(item)
             )
             for key, item in value.items()
         }
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_sanitize_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_sanitize_value(item) for item in value)
-    return deepcopy(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(f"unsupported command context value: {type(value).__name__}")
 
 
 def command_context(
