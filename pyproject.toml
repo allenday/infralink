@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "infralink"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Infrastructure topology modeling with UUID-based nodes and typed edges"
 readme = "README.md"
 license = "MIT"
@@ -49,10 +49,16 @@ dev = [
     "mypy>=1.0",
     "ruff>=0.1.0",
     "types-PyYAML",
+    "build>=1.2",
+    "twine>=5.1",
+    "jsonschema>=4.23",
 ]
 docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.0",
+]
+bws = [
+    "bitwarden-sdk>=2.1,<3",
 ]
 
 [project.scripts]
@@ -66,13 +72,18 @@ validate = "infralink.cli.validate:validate"
 resolve = "infralink.cli.resolve:resolve"
 
 [project.urls]
-Homepage = "https://github.com/example/infralink"
-Documentation = "https://github.com/example/infralink#readme"
-Repository = "https://github.com/example/infralink"
-Issues = "https://github.com/example/infralink/issues"
+Homepage = "https://github.com/cyberstorm-dev/infralink"
+Issues = "https://github.com/cyberstorm-dev/infralink/issues"
+Source = "https://github.com/cyberstorm-dev/infralink"
+
+[tool.hatch.version]
+path = "src/infralink/__about__.py"
 
 [tool.hatch.build]
 sources = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infralink"]
 
 [tool.ruff]
 target-version = "py310"
