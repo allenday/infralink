@@ -77,6 +77,15 @@ def test_secret_value_has_no_instance_dictionary() -> None:
     assert_canary_absent(exc_info.value)
 
 
+def test_secret_value_rejects_state_extraction_without_leaking() -> None:
+    secret = SecretValue(CANARY)
+
+    with pytest.raises(TypeError) as exc_info:
+        secret.__getstate__()
+
+    assert_canary_absent(exc_info.value)
+
+
 def test_secret_value_is_redacted_in_exception_text() -> None:
     secret = SecretValue(CANARY)
 

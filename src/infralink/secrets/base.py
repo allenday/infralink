@@ -41,8 +41,8 @@ class SecretValue:
     def __deepcopy__(self, memo: dict[int, object]) -> NoReturn:
         raise TypeError("SecretValue cannot be copied")
 
-    def __reduce__(self) -> NoReturn:
-        raise TypeError("SecretValue cannot be pickled")
+    def __getstate__(self) -> NoReturn:
+        raise TypeError("SecretValue state cannot be extracted")
 
     def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
         raise TypeError("SecretValue cannot be pickled")
