@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 import click
@@ -110,6 +109,7 @@ def check(
 
     if critical_only:
         edges_to_check = [e for e in edges_to_check if e.is_critical]
+    edges_to_check.sort(key=lambda edge: edge.id)
 
     health_results = []
     for edge in edges_to_check:
@@ -128,24 +128,16 @@ def check(
     ]
     healthy_count = sum(item.healthy for item in checks)
     selected = _active_collection(collection, cursor, ("checks",))
-    result_hash = hashlib.sha256(
-        json.dumps(
-            [item.model_dump(mode="json") for item in checks],
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
     fingerprint = _topology_fingerprint(
         ctx,
         include_registry=True,
         include_edges=True,
         identifiers={
-            "edge_ids": json.dumps(edge_ids),
+            "selected_edge_ids": json.dumps([edge.id for edge in edges_to_check]),
             "edge_type": str(edge_type),
             "criticality": str(criticality),
             "critical_only": str(critical_only),
             "timeout": str(timeout),
-            "results": result_hash,
         },
     )
     offset = _page_offset(

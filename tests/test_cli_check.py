@@ -23,6 +23,7 @@ def _health(
     criticality: str = "medium",
     check_type: str = "tcp",
     latency_ms: float | None = None,
+    error_code: str | None = None,
 ) -> HealthCheckResult:
     return HealthCheckResult(
         edge_id=edge_id,
@@ -34,6 +35,7 @@ def _health(
         criticality=criticality,
         check_type=check_type,
         timestamp=123456.0,
+        error_code=error_code,
     )
 
 
@@ -109,6 +111,7 @@ def test_check_returns_typed_completed_result_without_sensitive_fields(
             criticality=criticality,
             check_type=check_type,
             latency_ms=1.25 if healthy else None,
+            error_code=error_code,
         ),
     )
 
@@ -236,16 +239,28 @@ def test_check_critical_only_is_preserved_in_continuation(
     assert first["result"]["summary"] == {"total": 2, "healthy": 2, "unhealthy": 0}
 
 
-def test_check_cursor_is_bound_to_filters_timeout_and_results(
+def test_check_cursor_ignores_recomputed_health_observations_but_binds_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = {"healthy": True}
+    observations = {"invocation": 0}
+
+    def changing_health(edge, resolver, timeout):
+        observations["invocation"] += 1
+        healthy = observations["invocation"] <= 2
+        return _health(
+            edge.id,
+            healthy=healthy,
+            message=None if healthy else "provider canary",
+            latency_ms=float(observations["invocation"]),
+        )
+
     monkeypatch.setattr(
         "infralink.cli.check.check_edge_health",
-        lambda edge, resolver, timeout: _health(edge.id, healthy=state["healthy"]),
+        changing_health,
     )
     first = json.loads(_invoke("--type", "database", "--timeout", "9", "--limit", "1").output)
     cursor = first["result"]["checks"]["page"]["next_cursor"]
+    first_id = first["result"]["checks"]["items"][0]["edge_id"]
 
     payload, signature = cursor.split(".")
     tampered = f"{payload[:-1]}A.{signature}"
@@ -277,8 +292,7 @@ def test_check_cursor_is_bound_to_filters_timeout_and_results(
     assert mismatched.exit_code == 2
     assert json.loads(mismatched.output)["error"]["code"] == "invalid_cursor"
 
-    state["healthy"] = False
-    stale = _invoke(
+    replay = _invoke(
         "--type",
         "database",
         "--timeout",
@@ -290,8 +304,20 @@ def test_check_cursor_is_bound_to_filters_timeout_and_results(
         "--cursor",
         cursor,
     )
-    assert stale.exit_code == 2
-    assert json.loads(stale.output)["error"]["code"] == "invalid_cursor"
+    replay_payload = json.loads(replay.output)
+    assert replay.exit_code == 1
+    assert replay_payload["ok"] is True
+    assert replay_payload["result"]["checks"]["page"] == {
+        "limit": 1,
+        "returned": 1,
+        "total": 2,
+        "next_cursor": None,
+    }
+    assert replay_payload["result"]["checks"]["items"][0]["edge_id"] != first_id
+    assert (
+        replay_payload["result"]["checks"]["items"][0]["latency_ms"]
+        > first["result"]["checks"]["items"][0]["latency_ms"]
+    )
 
 
 def test_check_expected_load_failure_and_unexpected_failure_use_boundary(

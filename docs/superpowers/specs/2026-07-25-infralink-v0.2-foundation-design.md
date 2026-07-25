@@ -450,6 +450,11 @@ Other paged fields deterministically return their first page, preserving the
 command result schema. A cursor supplied without the required collection, or
 for a different collection or input set, returns a usage error.
 
+Health checks are recomputed on every `check` invocation; a cursor is not a
+snapshot of prior observations. The cursor selects a stable, sorted edge
+collection and is bound to topology sources, selected edge IDs, filters, and
+timeout, but not to volatile latency or health outcomes.
+
 Root command descriptors and fixed summaries are schema-bounded and do not
 paginate. Nested detail is summarized by default and expanded only through an
 explicit option or follow-up command. Generated documents and diagrams require

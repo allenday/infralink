@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import socket
 import time
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ class HealthCheckResult:
     criticality: str
     check_type: str
     timestamp: float
+    error_code: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -37,6 +39,7 @@ class HealthCheckResult:
             "criticality": self.criticality,
             "check_type": self.check_type,
             "timestamp": self.timestamp,
+            "error_code": self.error_code,
         }
 
 
@@ -44,14 +47,54 @@ def normalize_health_result(result: HealthCheckResult) -> tuple[str, str | None]
     """Return stable health state without exposing provider or endpoint details."""
     if result.healthy:
         return "healthy", None
+    if result.error_code is not None:
+        unavailable = {
+            "connection_refused",
+            "network_unreachable",
+            "resolution_failed",
+            "timeout",
+        }
+        if result.error_code in unavailable:
+            return "unavailable", result.error_code
+        if result.error_code in {"check_failed", "network_error"}:
+            return "unhealthy", result.error_code
+        return "unhealthy", "check_failed"
     if result.check_type == "resolution":
         return "unavailable", "resolution_failed"
     message = (result.message or "").casefold()
-    if "timed out" in message or "timeout" in message:
+    if message == "connection timed out":
         return "unavailable", "timeout"
-    if "refused" in message:
+    if message == "connection refused":
         return "unavailable", "connection_refused"
+    if message == "network unreachable":
+        return "unavailable", "network_unreachable"
+    if message == "network error":
+        return "unhealthy", "network_error"
     return "unhealthy", "check_failed"
+
+
+def _tcp_message(result: int) -> str:
+    if result == errno.ECONNREFUSED:
+        return "Connection refused"
+    if result == errno.ETIMEDOUT:
+        return "Connection timed out"
+    if result in {errno.ENETUNREACH, errno.EHOSTUNREACH}:
+        return "Network unreachable"
+    return "Network error"
+
+
+def _error_code(check_type: str, healthy: bool, message: str | None) -> str | None:
+    if healthy:
+        return None
+    if check_type == "resolution":
+        return "resolution_failed"
+    stable_messages = {
+        "Connection refused": "connection_refused",
+        "Connection timed out": "timeout",
+        "Network unreachable": "network_unreachable",
+        "Network error": "network_error",
+    }
+    return stable_messages.get(message or "", "check_failed")
 
 
 def check_tcp(host: str, port: int, timeout: int = 5) -> tuple[bool, float | None, str | None]:
@@ -70,13 +113,13 @@ def check_tcp(host: str, port: int, timeout: int = 5) -> tuple[bool, float | Non
 
         if result == 0:
             return True, latency, None
-        return False, latency, f"Connection refused (code: {result})"
+        return False, latency, _tcp_message(result)
     except TimeoutError:
         return False, None, "Connection timed out"
-    except socket.gaierror as e:
-        return False, None, f"DNS resolution failed: {e}"
-    except OSError as e:
-        return False, None, f"Network error: {e}"
+    except socket.gaierror:
+        return False, None, "DNS resolution failed"
+    except OSError:
+        return False, None, "Network error"
 
 
 def check_http(
@@ -172,6 +215,7 @@ def check_edge_health(
             criticality=edge.criticality.value,
             check_type="resolution",
             timestamp=timestamp,
+            error_code="resolution_failed",
         )
 
     # Determine check type
@@ -208,6 +252,7 @@ def check_edge_health(
         criticality=edge.criticality.value,
         check_type=check_type,
         timestamp=timestamp,
+        error_code=_error_code(check_type, healthy, message),
     )
 
 
