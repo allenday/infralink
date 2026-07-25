@@ -716,6 +716,19 @@ def test_provider_metadata_must_match_configured_organization(stage: str, payloa
     assert caught.value.code is BwsErrorCode.PROVIDER_UNAVAILABLE
 
 
+def test_project_metadata_requires_organization_identity() -> None:
+    client = FakeClient(
+        projects=response([SimpleNamespace(id=PROJECT_A)]),
+        identifiers=response([identifier(SECRET_A, "db_password", [PROJECT_A])]),
+    )
+
+    with pytest.raises(BwsProviderError) as caught:
+        make_resolver(client).audit([reference()])
+
+    assert caught.value.code is BwsErrorCode.PROVIDER_UNAVAILABLE
+    assert client.secrets_client.organizations == []
+
+
 class GuardedSecretPayload:
     def __init__(
         self,
@@ -761,7 +774,14 @@ def test_resolve_rejects_stale_or_mismatched_get_identity_before_value(
 
 def test_sdk_string_ids_are_normalized_without_leaking_secret_id() -> None:
     client = FakeClient(
-        projects=response([SimpleNamespace(id=str(PROJECT_A))]),
+        projects=response(
+            [
+                SimpleNamespace(
+                    id=str(PROJECT_A),
+                    organization_id=ORGANIZATION_ID,
+                )
+            ]
+        ),
         identifiers=response(
             [
                 identifier(

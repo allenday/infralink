@@ -287,10 +287,8 @@ class BwsSecretResolver:
         project_ids: set[str] = set()
         for item in items:
             project_id = self._normalize_id(_safe_attr(item, "id"))
-            organization_id = _safe_attr(item, "organization_id")
-            if organization_id is not _MISSING and (
-                self._normalize_id(organization_id) != self._config.organization_id
-            ):
+            organization_id = self._normalize_id(_safe_attr(item, "organization_id"))
+            if organization_id != self._config.organization_id:
                 raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
             if project_id in project_ids:
                 raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
