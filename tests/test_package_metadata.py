@@ -6,8 +6,25 @@ except ModuleNotFoundError:
     import tomli as tomllib
 
 import infralink
+from infralink.cli.artifacts import (
+    artifact_platform_failure,
+    artifact_recovery_failure,
+    artifact_write_failure,
+)
+from infralink.cli.errors import ErrorCode
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+EXIT_CODE_CONTRACT = {
+    0: "Positive domain result",
+    1: "Completed negative domain result",
+    2: "Usage error",
+    3: "Input, schema, or entity error",
+    4: "Provider or authentication failure",
+    69: "Unsupported platform",
+    70: "Unexpected internal failure",
+    74: "Artifact I/O failure or retained recovery state",
+}
 
 
 def load_pyproject() -> dict[str, object]:
@@ -59,6 +76,31 @@ def test_artifact_commands_publish_their_posix_platform_boundary() -> None:
     assert "Artifact-generating commands require POSIX" in (PROJECT_ROOT / "README.md").read_text(
         encoding="utf-8"
     )
+
+
+def test_documented_exit_codes_match_artifact_error_behavior() -> None:
+    contract_rows = "\n".join(
+        f"| `{exit_code}` | {meaning} |"
+        for exit_code, meaning in EXIT_CODE_CONTRACT.items()
+    )
+    documents = (
+        "PRD.md",
+        "README.md",
+        "docs/releases/v0.2.0.md",
+        "docs/superpowers/specs/2026-07-25-infralink-v0.2-foundation-design.md",
+    )
+
+    for document in documents:
+        text = (PROJECT_ROOT / document).read_text(encoding="utf-8")
+        assert contract_rows in text, f"{document} has drifted from the exit-code contract"
+
+    platform_failure = artifact_platform_failure()
+    assert (platform_failure.code, platform_failure.exit_code) == (
+        ErrorCode.UNSUPPORTED_PLATFORM,
+        69,
+    )
+    for failure in (artifact_write_failure(), artifact_recovery_failure()):
+        assert (failure.code, failure.exit_code) == (ErrorCode.INTERNAL_ERROR, 74)
 
 
 def test_release_wheel_includes_the_importable_package() -> None:

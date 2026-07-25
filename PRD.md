@@ -17,15 +17,27 @@ boundary; optional adapters may integrate with external providers.
 - Stable `infralink.cli/v1` JSON envelopes for every CLI outcome.
 - Shallow parsed command metadata, typed results, stable errors, bounded
   collections, opaque continuation cursors, and actionable next steps.
-- Exit `0` for positive results, `1` for negative domain results, `2` for
-  usage, `3` for input/schema/entity failures, `4` for provider failures, and
-  `70` for unexpected internal failures.
+- Stable exit codes for domain results, contract failures, platform support,
+  artifact I/O, and unexpected failures.
 - Safe connection templates containing `secret_ref` placeholders, never
   resolved credentials.
 - Offline declared-secret inventory and optional read-only hosted BWS audit.
 - Deterministic diagram and documentation artifacts with transactional writes.
 - Reproducible wheel/sdist metadata, repository secret scanning, public-data
   boundary checks, and a manually dispatched attested candidate workflow.
+
+The stable exit-code contract is:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Positive domain result |
+| `1` | Completed negative domain result |
+| `2` | Usage error |
+| `3` | Input, schema, or entity error |
+| `4` | Provider or authentication failure |
+| `69` | Unsupported platform |
+| `70` | Unexpected internal failure |
+| `74` | Artifact I/O failure or retained recovery state |
 
 ## CLI Surface
 

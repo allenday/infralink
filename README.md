@@ -87,7 +87,9 @@ Exit codes are stable:
 | `2` | Usage error |
 | `3` | Input, schema, or entity error |
 | `4` | Provider or authentication failure |
+| `69` | Unsupported platform |
 | `70` | Unexpected internal failure |
+| `74` | Artifact I/O failure or retained recovery state |
 
 ## Python API
 

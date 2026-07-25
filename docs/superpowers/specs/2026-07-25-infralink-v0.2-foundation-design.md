@@ -363,12 +363,14 @@ Exit codes are:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Operation completed with a positive domain result |
-| `1` | Operation completed with a negative domain result |
-| `2` | Command usage error |
-| `3` | Input loading or schema error |
+| `0` | Positive domain result |
+| `1` | Completed negative domain result |
+| `2` | Usage error |
+| `3` | Input, schema, or entity error |
 | `4` | Provider or authentication failure |
+| `69` | Unsupported platform |
 | `70` | Unexpected internal failure |
+| `74` | Artifact I/O failure or retained recovery state |
 
 A negative domain result is not an execution failure. The defined negative
 domain outcomes are:
