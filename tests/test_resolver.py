@@ -1,6 +1,6 @@
 """Tests for resolver module."""
 
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import pytest
 from pydantic import ValidationError
@@ -490,6 +490,101 @@ class TestEdgeResolver:
             "postgres://declared%20user:${secret:db-password}@100.78.109.111:5432/declared%2Fdb"
         )
 
+    def test_connection_template_parses_after_hierarchical_secret_substitution(self, registry):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": "postgresql",
+                        "auth": {
+                            "type": "password",
+                            "secret_ref": "production/db-password",
+                            "username": "app",
+                        },
+                    }
+                ]
+            }
+        )
+        template = EdgeResolver(registry, edges).get_connection_template(SECRET_EDGE_ID)
+
+        assert template is not None
+        placeholder = "${secret:production/db-password}"
+        assert placeholder in template
+
+        resolved = template.replace(placeholder, quote("p@ss word", safe=""))
+        parsed = urlsplit(resolved)
+
+        assert parsed.scheme == "postgresql"
+        assert parsed.username == "app"
+        assert unquote(parsed.password or "") == "p@ss word"
+
+    def test_basic_auth_connection_template_uses_secret_placeholder(self, registry):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": "postgresql",
+                        "auth": {
+                            "type": "basic",
+                            "secret_ref": "production/db-password",
+                            "username": "app",
+                        },
+                    }
+                ]
+            }
+        )
+
+        result = EdgeResolver(registry, edges).get_connection_template(SECRET_EDGE_ID)
+
+        assert result is not None
+        assert "app:${secret:production/db-password}@" in result
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            {"type": "token", "secret_ref": "production/api-token"},
+            {"type": "certificate", "secret_ref": "production/client-cert"},
+            {"type": "certificate", "mount_path": "/run/certs/client.pem"},
+        ],
+    )
+    def test_non_userinfo_auth_returns_no_connection_template(self, registry, auth):
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": "postgresql",
+                        "auth": auth,
+                    }
+                ]
+            }
+        )
+
+        assert EdgeResolver(registry, edges).get_connection_template(SECRET_EDGE_ID) is None
+
     @pytest.mark.parametrize(
         ("protocol", "expected_scheme"),
         [
@@ -762,8 +857,9 @@ class TestEdgeResolver:
             database="app",
         )
 
-        assert result == "postgresql+psycopg2://app%20user@100.78.109.111:5432/app"
+        assert result == "postgresql+psycopg2://100.78.109.111:5432/app"
         assert "secret" not in result
+        assert "@" not in result
 
     def test_get_connection_template_returns_none_for_non_connection_protocol(self, registry):
         edges = EdgeSet.from_dict(

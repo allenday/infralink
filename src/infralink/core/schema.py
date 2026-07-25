@@ -9,7 +9,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SAFE_SECRET_REF_PATTERN = re.compile(r"[A-Za-z0-9._-]+\Z", re.ASCII)
+SAFE_SECRET_REF_PATTERN = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*\Z",
+    re.ASCII,
+)
 
 
 class StrictModel(BaseModel):

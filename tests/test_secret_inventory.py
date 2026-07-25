@@ -16,6 +16,7 @@ EDGE_NO_PROJECT = "33333333-3333-4333-8333-333333333333"
 EDGE_MISSING_HOST = "44444444-4444-4444-8444-444444444444"
 EDGE_WITHOUT_SECRET = "55555555-5555-4555-8555-555555555555"
 EDGE_SHARED_NO_PROJECT = "66666666-6666-4666-8666-666666666666"
+EDGE_HIERARCHICAL = "77777777-7777-4777-8777-777777777777"
 
 
 def _edge(
@@ -91,6 +92,7 @@ def test_collect_secret_references_groups_deduplicates_and_sorts() -> None:
                 _edge(EDGE_NO_PROJECT, "host-c", "alpha-ref"),
                 _edge(EDGE_MISSING_HOST, "missing", "missing-ref"),
                 _edge(EDGE_SHARED_NO_PROJECT, "missing", "shared-ref"),
+                _edge(EDGE_HIERARCHICAL, "host-a", "production/db-password"),
                 _edge(EDGE_WITHOUT_SECRET, "host-a", None),
             ]
         }
@@ -110,6 +112,11 @@ def test_collect_secret_references_groups_deduplicates_and_sorts() -> None:
             ref="missing-ref",
             project=None,
             locations=(f"edges.{EDGE_MISSING_HOST}.auth.secret_ref",),
+        ),
+        SecretReference(
+            ref="production/db-password",
+            project="project-a",
+            locations=(f"edges.{EDGE_HIERARCHICAL}.auth.secret_ref",),
         ),
         SecretReference(
             ref="shared-ref",
@@ -146,3 +153,38 @@ def test_collect_secret_references_does_not_share_mutable_locations() -> None:
 
     assert first == copied
     assert first[0].locations == (f"edges.{EDGE_A}.auth.secret_ref",)
+
+
+def test_inventory_reports_token_and_certificate_references() -> None:
+    from infralink.secrets.inventory import collect_secret_references
+
+    registry = Registry.from_dict(
+        {"hosts": {"host-a": {"canonical_name": "target", "bws_project": "project-a"}}}
+    )
+    edges = EdgeSet.from_dict(
+        {
+            "edges": [
+                {
+                    **_edge(EDGE_A, "host-a", None),
+                    "auth": {
+                        "type": "token",
+                        "secret_ref": "production/api-token",
+                    },
+                },
+                {
+                    **_edge(EDGE_Z, "host-a", None),
+                    "auth": {
+                        "type": "certificate",
+                        "secret_ref": "production/client-cert",
+                    },
+                },
+            ]
+        }
+    )
+
+    references = collect_secret_references(registry, edges)
+
+    assert [reference.ref for reference in references] == [
+        "production/api-token",
+        "production/client-cert",
+    ]

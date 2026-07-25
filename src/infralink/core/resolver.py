@@ -215,21 +215,34 @@ class EdgeResolver:
         database: str | int | None = None,
         prefer_ip: str | bool = True,
     ) -> str | None:
-        """Build a safe connection template containing no plaintext secret."""
+        """Build a secret-substitution template, not a directly parseable URI.
+
+        The ``${secret:<ref>}`` placeholder must be replaced with an encoded
+        credential before parsing the final URI.
+        """
         edge = self.get_edge(edge_id)
         scheme = _normalize_connection_scheme(edge.protocol)
         if scheme is None:
+            return None
+
+        declared_auth = edge._schema.auth
+        if declared_auth.type in {"token", "certificate"}:
             return None
 
         preference = _normalize_ip_preference(prefer_ip)
         host = _format_authority_host(self.get_target_ip(edge_id, preference))
         port = self.get_target_port(edge_id)
 
-        declared_auth = edge._schema.auth
-        resolved_user = user if user is not None else declared_auth.username
+        resolved_user = (
+            None
+            if declared_auth.type == "none"
+            else user
+            if user is not None
+            else declared_auth.username
+        )
         resolved_database = database if database is not None else declared_auth.database
         encoded_user = _encode_coordinate(resolved_user, "user")
-        placeholder = _secret_placeholder(edge.secret_ref)
+        placeholder = None if declared_auth.type == "none" else _secret_placeholder(edge.secret_ref)
 
         base_scheme = scheme.partition("+")[0]
         if base_scheme in {"redis", "rediss"}:

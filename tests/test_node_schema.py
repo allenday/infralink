@@ -34,8 +34,8 @@ def test_host_schema_allows_extra_fields():
 @pytest.mark.parametrize(
     ("auth_type", "secret_ref"),
     [
-        ("none", "bad/ref"),
-        ("password", "bad/ref"),
+        ("none", "/bad"),
+        ("password", "bad//ref"),
         ("basic", "bad:ref"),
         ("token", "bad}ref"),
         ("certificate", "bad ref"),
@@ -44,6 +44,29 @@ def test_host_schema_allows_extra_fields():
 def test_every_nonnull_secret_reference_uses_shared_safe_syntax(auth_type, secret_ref):
     with pytest.raises(ValidationError, match="safe secret_ref"):
         AuthConfig(type=auth_type, secret_ref=secret_ref)
+
+
+@pytest.mark.parametrize("auth_type", ["password", "basic", "token", "certificate"])
+def test_credential_auth_accepts_hierarchical_secret_reference(auth_type):
+    auth = AuthConfig(type=auth_type, secret_ref="production/db-password")
+
+    assert auth.secret_ref == "production/db-password"
+
+
+@pytest.mark.parametrize(
+    "secret_ref",
+    [
+        "/production/db-password",
+        "production/db-password/",
+        "production//db-password",
+        "production/./db-password",
+        "production/../db-password",
+        "production/.../db-password",
+    ],
+)
+def test_secret_reference_rejects_empty_dot_and_traversal_segments(secret_ref):
+    with pytest.raises(ValidationError, match="safe secret_ref"):
+        AuthConfig(type="password", secret_ref=secret_ref)
 
 
 @pytest.mark.parametrize("auth_type", ["password", "basic", "token"])
