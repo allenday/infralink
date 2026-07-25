@@ -34,6 +34,9 @@ EXIT_CODE_MEANINGS: Final[Mapping[ExitCode, str]] = MappingProxyType(
     }
 )
 
+INTERNAL_ERROR_MESSAGE = "An unexpected internal error occurred"
+INTERNAL_ERROR_FIX = "Retry the command or report the failure"
+
 
 class ErrorCode(str, Enum):
     USAGE_ERROR = "usage_error"
@@ -96,6 +99,16 @@ class CliFailure(Exception):
         object.__delattr__(self, name)
 
     def __post_init__(self) -> None:
+        try:
+            normalized_exit_code = ExitCode(self.exit_code)
+        except (TypeError, ValueError):
+            object.__setattr__(self, "code", ErrorCode.INTERNAL_ERROR)
+            object.__setattr__(self, "message", INTERNAL_ERROR_MESSAGE)
+            object.__setattr__(self, "fix", INTERNAL_ERROR_FIX)
+            object.__setattr__(self, "details", {})
+            object.__setattr__(self, "next_actions", [])
+            normalized_exit_code = ExitCode.INTERNAL_ERROR
+        object.__setattr__(self, "exit_code", normalized_exit_code)
         object.__setattr__(self, "details", deepcopy(self.details))
         object.__setattr__(
             self,
@@ -121,3 +134,12 @@ class CliFailure(Exception):
                 self.next_actions,
             ),
         )
+
+
+def internal_failure() -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.INTERNAL_ERROR,
+        message=INTERNAL_ERROR_MESSAGE,
+        exit_code=ExitCode.INTERNAL_ERROR,
+        fix=INTERNAL_ERROR_FIX,
+    )

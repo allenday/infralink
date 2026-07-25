@@ -31,7 +31,7 @@ from infralink.cli.contracts import (
     ServiceSummary,
     VersionResult,
 )
-from infralink.cli.errors import CliFailure, ErrorCode
+from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.output import (
     command_context,
     error_envelope,
@@ -630,7 +630,7 @@ class JsonGroup(click.Group):
         normalized = _normalize_discovery_aliases(incoming)
         invocation_token = _INVOCATION_ARGS.set(incoming)
         emitted_token = _ENVELOPE_EMITTED.set(False)
-        exit_code = 0
+        exit_code: int = ExitCode.POSITIVE_RESULT
         try:
             try:
                 result = super().main(
@@ -641,7 +641,7 @@ class JsonGroup(click.Group):
                     **extra,
                 )
                 if isinstance(result, int):
-                    exit_code = result
+                    exit_code = ExitCode(result)
             except click.UsageError:
                 path, _, _ = _parse_invocation(redact_argv(incoming))
                 artifact_command = (
@@ -650,7 +650,7 @@ class JsonGroup(click.Group):
                 usage_failure = CliFailure(
                     code=ErrorCode.USAGE_ERROR,
                     message="Invalid command usage",
-                    exit_code=2,
+                    exit_code=ExitCode.USAGE_ERROR,
                     fix=(
                         "Provide an explicit safe relative --output directory"
                         if artifact_command is not None
@@ -677,28 +677,19 @@ class JsonGroup(click.Group):
                 exit_code = cli_failure.exit_code
             except SystemExit as system_exit:
                 if _ENVELOPE_EMITTED.get() and isinstance(system_exit.code, int):
-                    exit_code = system_exit.code
+                    try:
+                        exit_code = ExitCode(system_exit.code)
+                    except ValueError:
+                        exit_code = ExitCode.INTERNAL_ERROR
                 else:
-                    internal_failure = CliFailure(
-                        code=ErrorCode.INTERNAL_ERROR,
-                        message="An unexpected internal error occurred",
-                        exit_code=70,
-                        fix="Retry the command or report the failure",
-                        next_actions=[],
-                    )
-                    _emit(error_envelope(_context_for(incoming), internal_failure))
-                    exit_code = internal_failure.exit_code
+                    failure = internal_failure()
+                    _emit(error_envelope(_context_for(incoming), failure))
+                    exit_code = failure.exit_code
             except Exception:
-                internal_failure = CliFailure(
-                    code=ErrorCode.INTERNAL_ERROR,
-                    message="An unexpected internal error occurred",
-                    exit_code=70,
-                    fix="Retry the command or report the failure",
-                    next_actions=[],
-                )
+                failure = internal_failure()
                 if not _ENVELOPE_EMITTED.get():
-                    _emit(error_envelope(_context_for(incoming), internal_failure))
-                exit_code = internal_failure.exit_code
+                    _emit(error_envelope(_context_for(incoming), failure))
+                exit_code = failure.exit_code
         finally:
             _ENVELOPE_EMITTED.reset(emitted_token)
             _INVOCATION_ARGS.reset(invocation_token)
