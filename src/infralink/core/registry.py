@@ -70,6 +70,11 @@ class Host:
         return self._schema.projects
 
     @property
+    def group(self) -> str | None:
+        """First project, retained for backward compatibility."""
+        return self.projects[0] if self.projects else None
+
+    @property
     def cloud(self) -> str | None:
         return self._schema.cloud
 

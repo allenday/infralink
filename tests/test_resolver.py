@@ -186,8 +186,10 @@ class TestEdgeResolver:
         """Test validating all edges."""
         resolver = EdgeResolver(registry, edges)
 
-        errors = resolver.validate_all()
+        errors, warnings = resolver.validate_all()
         assert errors == []
+        assert len(warnings) == 2
+        assert all("missing an explicit healthcheck" in warning for warning in warnings)
 
     def test_validate_all_with_missing_target(self, registry):
         """Test validation with missing target host."""
@@ -202,11 +204,13 @@ class TestEdgeResolver:
                         "service": "postgresql",
                         "port": 5432,
                     },
+                    "healthcheck": {"type": "tcp"},
                 }
             ]
         })
         resolver = EdgeResolver(registry, edges)
 
-        errors = resolver.validate_all()
+        errors, warnings = resolver.validate_all()
         assert len(errors) == 1
         assert "not found" in errors[0]
+        assert warnings == []

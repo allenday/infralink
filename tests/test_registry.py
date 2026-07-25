@@ -63,6 +63,18 @@ class TestHost:
         assert host.cloud == "hetzner-cloud"
         assert host.tailscale_ip == "100.78.109.111"
 
+    def test_group_compatibility_uses_first_project(self):
+        host = Host(
+            "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+            {
+                "canonical_name": "test-host",
+                "status": "active",
+                "projects": ["production", "shared"],
+            },
+        )
+
+        assert host.group == "production"
+
     def test_host_services(self, sample_registry_data):
         """Test host service queries."""
         uuid = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
