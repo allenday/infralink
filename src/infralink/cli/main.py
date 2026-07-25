@@ -46,6 +46,8 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
+_DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
+_PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
 
 
 class Context:
@@ -477,8 +479,12 @@ def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
 
 
 def _emit(payload: dict[str, Any]) -> None:
+    serialized = json.dumps(payload, separators=(",", ":"))
     _ENVELOPE_EMITTED.set(True)
-    click.echo(json.dumps(payload, separators=(",", ":")))
+    if _DEFER_ENVELOPE.get():
+        _PENDING_ENVELOPE.set(serialized)
+    else:
+        click.echo(serialized)
 
 
 def _help_result(path: tuple[str, ...]) -> HelpResult:
@@ -630,7 +636,10 @@ class JsonGroup(click.Group):
         normalized = _normalize_discovery_aliases(incoming)
         invocation_token = _INVOCATION_ARGS.set(incoming)
         emitted_token = _ENVELOPE_EMITTED.set(False)
+        deferred_token = _DEFER_ENVELOPE.set(True)
+        pending_token = _PENDING_ENVELOPE.set(None)
         exit_code: int = ExitCode.POSITIVE_RESULT
+        pending_envelope: str | None = None
         try:
             try:
                 result = super().main(
@@ -641,7 +650,12 @@ class JsonGroup(click.Group):
                     **extra,
                 )
                 if isinstance(result, int):
-                    exit_code = ExitCode(result)
+                    try:
+                        exit_code = ExitCode(result)
+                    except ValueError:
+                        failure = internal_failure()
+                        _emit(error_envelope(_context_for(incoming), failure))
+                        exit_code = failure.exit_code
             except click.UsageError:
                 path, _, _ = _parse_invocation(redact_argv(incoming))
                 artifact_command = (
@@ -680,7 +694,9 @@ class JsonGroup(click.Group):
                     try:
                         exit_code = ExitCode(system_exit.code)
                     except ValueError:
-                        exit_code = ExitCode.INTERNAL_ERROR
+                        failure = internal_failure()
+                        _emit(error_envelope(_context_for(incoming), failure))
+                        exit_code = failure.exit_code
                 else:
                     failure = internal_failure()
                     _emit(error_envelope(_context_for(incoming), failure))
@@ -691,8 +707,13 @@ class JsonGroup(click.Group):
                     _emit(error_envelope(_context_for(incoming), failure))
                 exit_code = failure.exit_code
         finally:
+            pending_envelope = _PENDING_ENVELOPE.get()
+            _PENDING_ENVELOPE.reset(pending_token)
+            _DEFER_ENVELOPE.reset(deferred_token)
             _ENVELOPE_EMITTED.reset(emitted_token)
             _INVOCATION_ARGS.reset(invocation_token)
+        if pending_envelope is not None:
+            click.echo(pending_envelope)
         if standalone_mode:
             raise SystemExit(exit_code)
         return exit_code
