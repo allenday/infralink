@@ -11,6 +11,7 @@ def action(
     description: str,
     *,
     bindings: dict[str, Binding] | None = None,
+    safe: bool = True,
 ) -> Action:
     active_bindings = {
         name: binding.model_copy(deep=True) for name, binding in (bindings or {}).items()
@@ -21,7 +22,7 @@ def action(
         argv=copied_argv,
         command=shlex.join(copied_argv),
         description=description,
-        safe=True,
+        safe=safe,
         templated=bool(active_bindings),
         bindings=active_bindings,
     )

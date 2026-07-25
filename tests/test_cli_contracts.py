@@ -143,7 +143,7 @@ def secret() -> SecretReferenceStatus:
     return SecretReferenceStatus(
         ref="secret://api",
         location_count=1,
-        location_preview=[SourceLocation(source="edges", path="edges.edge-1.secret_ref")],
+        location_preview=[SourceLocation(source="edges", path="edges.edge-1.auth.secret_ref")],
         locations_truncated=False,
         project="core",
         present=True,
@@ -395,7 +395,7 @@ def test_all_command_result_contracts_have_typed_minimum_shapes() -> None:
         ArtifactResult(artifacts=page([artifact]), summary={"artifact_count": 1}),
         SecretsInspectResult(
             references=page([secret()]),
-            locations=page([SourceLocation(source="edges", path="edges.edge-1.secret_ref")]),
+            locations=page([SourceLocation(source="edges", path="edges.edge-1.auth.secret_ref")]),
             summary={"total": 1, "present": 0, "missing": 0, "accessible": 0, "denied": 0},
         ),
         SecretsAuditResult(

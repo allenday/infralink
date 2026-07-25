@@ -258,21 +258,21 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink service show api"],
     },
     ("secrets",): {
-        "description": "Unavailable until secret commands are implemented.",
+        "description": "Inspect declared secret references or audit provider metadata.",
         "arguments": [],
         "options": [],
         "examples": ["infralink secrets inspect"],
     },
     ("secrets", "inspect"): {
-        "description": "Unavailable until secret commands are implemented.",
+        "description": "Inspect declared secret-reference metadata without provider access.",
         "arguments": [],
-        "options": [{"name": "ref", "type": "string", "required": False}],
+        "options": [],
         "examples": ["infralink secrets inspect"],
     },
     ("secrets", "audit"): {
-        "description": "Unavailable until secret commands are implemented.",
+        "description": "Audit declared secret-reference metadata with a provider.",
         "arguments": [],
-        "options": [{"name": "provider", "type": "string", "required": False}],
+        "options": [],
         "examples": ["infralink secrets audit"],
     },
 }
@@ -570,6 +570,10 @@ def _load_command(name: str) -> click.Command | None:
         return edge
     if name == "service":
         return service
+    if name == "secrets":
+        from infralink.cli.secrets import secrets
+
+        return secrets
     return None
 
 
@@ -902,6 +906,9 @@ def _emit_query_result(
     command_argv: list[str],
     result: Any,
     limit: int,
+    extra_actions: list[Any] | None = None,
+    resolved: dict[str, Any] | None = None,
+    content_truncated: bool = False,
 ) -> None:
     pages: list[tuple[str, Any, str]] = []
     if hasattr(result, "page"):
@@ -918,12 +925,15 @@ def _emit_query_result(
             "errors",
             "warnings",
             "checks",
+            "references",
+            "locations",
         ):
             page = getattr(result, name, None)
             if page is not None:
                 pages.append((name, page.page, f"result.{name}.page.next_cursor"))
     actions = [action("help", ["infralink", "help", *path], f"Show {' '.join(path)} help")]
     actions.extend(_summary_detail_actions(ctx, result, path, command_argv))
+    actions.extend(extra_actions or [])
     for collection, page, source in pages:
         if page.next_cursor is None:
             continue
@@ -950,8 +960,12 @@ def _emit_query_result(
                 },
             )
         )
-    payload = ok_envelope(_context_for(path=path), result, actions)
-    payload["meta"]["truncated"] = any(page.next_cursor is not None for _, page, _ in pages)
+    command_context = _context_for(path=path)
+    command_context.resolved.update(resolved or {})
+    payload = ok_envelope(command_context, result, actions)
+    payload["meta"]["truncated"] = content_truncated or any(
+        page.next_cursor is not None for _, page, _ in pages
+    )
     _emit(payload)
 
 
