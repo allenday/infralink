@@ -483,13 +483,13 @@ def boundary_violations(
         if (
             closing_bracket > 0
             and ":" in bracket_literal
-            and re.fullmatch(
-                r"[0-9a-f:.]+",
-                bracket_literal,
-                re.IGNORECASE,
-            )
+            and not starts_in_authority_span(match.span())
         ):
-            balanced_bracket_spans.append(match.span())
+            if _parse_address(f"[{bracket_literal}]") is None:
+                bracket_spans.append(match.span())
+                record("invalid endpoint authority", span=match.span(), value=token)
+            else:
+                balanced_bracket_spans.append(match.span())
         if "]" not in raw_token and ":" in token and not starts_in_authority_span(match.span()):
             bracket_spans.append(match.span())
             record("invalid endpoint authority", span=match.span(), value=token)
@@ -736,6 +736,7 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
     assert boundary_violations("Address: [2001:db8::1]") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("Address: [2001:db8::1].") == ["non-RFC5737 address: 2001:db8::1"]
+    assert boundary_violations("Address: [2001:db8::gg].") == ["invalid endpoint authority"]
     assert boundary_violations("host: [2001:db8::1]:5432") == ["non-RFC5737 address: 2001:db8::1"]
     assert boundary_violations("host: [2001:db8::1") == ["invalid endpoint authority"]
     assert boundary_violations("endpoint: http://[2001:db8::1/path") == [
