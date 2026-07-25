@@ -38,11 +38,14 @@ def _decode_segment(value: str) -> bytes:
     if not value:
         raise ValueError("empty segment")
     padding = "=" * (-len(value) % 4)
-    return base64.b64decode(
+    decoded = base64.b64decode(
         value + padding,
         altchars=b"-_",
         validate=True,
     )
+    if _encode_segment(decoded) != value:
+        raise ValueError("noncanonical segment")
+    return decoded
 
 
 def load_cursor_key() -> bytes:

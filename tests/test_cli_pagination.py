@@ -26,6 +26,18 @@ def _signed_cursor(payload: object, key: bytes = b"test-only-key") -> str:
     return f"{encoded.decode()}.{signature.decode()}"
 
 
+def _noncanonical_segment(encoded: str) -> str:
+    decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    for replacement in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_":
+        candidate = f"{encoded[:-1]}{replacement}"
+        if (
+            candidate != encoded
+            and base64.urlsafe_b64decode(candidate + "=" * (-len(candidate) % 4)) == decoded
+        ):
+            return candidate
+    raise AssertionError("segment has no noncanonical base64url representation")
+
+
 def test_cursor_is_canonical_and_bound_to_command_collection_and_inputs() -> None:
     codec = CursorCodec(key=b"test-only-key")
     cursor = codec.encode(
@@ -123,6 +135,40 @@ def test_cursor_rejects_tampering() -> None:
     assert error.value.code == ErrorCode.INVALID_CURSOR
 
 
+def test_cursor_rejects_noncanonical_payload_encoding() -> None:
+    codec = CursorCodec(key=b"test-only-key")
+    payload, _ = codec.encode("hosts", "items", 1, "sha").split(".")
+    noncanonical_payload = _noncanonical_segment(payload)
+    signature = base64.urlsafe_b64encode(
+        hmac.new(b"test-only-key", noncanonical_payload.encode(), hashlib.sha256).digest()
+    ).rstrip(b"=")
+    cursor = f"{noncanonical_payload}.{signature.decode()}"
+
+    with pytest.raises(CliFailure) as error:
+        codec.decode(cursor, "hosts", "items", "sha")
+
+    assert error.value.code == ErrorCode.INVALID_CURSOR
+    assert error.value.message == "Cursor is invalid or no longer applicable"
+    assert error.value.fix == "Restart the command without --cursor"
+    assert error.value.details == {}
+    assert cursor not in str(error.value)
+
+
+def test_cursor_rejects_noncanonical_signature_encoding() -> None:
+    codec = CursorCodec(key=b"test-only-key")
+    payload, signature = codec.encode("hosts", "items", 1, "sha").split(".")
+    cursor = f"{payload}.{_noncanonical_segment(signature)}"
+
+    with pytest.raises(CliFailure) as error:
+        codec.decode(cursor, "hosts", "items", "sha")
+
+    assert error.value.code == ErrorCode.INVALID_CURSOR
+    assert error.value.message == "Cursor is invalid or no longer applicable"
+    assert error.value.fix == "Restart the command without --cursor"
+    assert error.value.details == {}
+    assert cursor not in str(error.value)
+
+
 def test_cursor_rejects_signed_noncanonical_json() -> None:
     payload = b'{"v":1, "command":"hosts","collection":"items","offset":1,"fingerprint":"sha"}'
     cursor = _signed_cursor(payload)
@@ -156,6 +202,7 @@ def test_cursor_key_environment_override_accepts_only_32_base64url_bytes(
         "not-base64!",
         base64.urlsafe_b64encode(b"short").decode(),
         base64.b64encode(b"\xff" * 32).decode(),
+        f"{encoded}=",
         f"{encoded}==",
     ]:
         monkeypatch.setenv("INFRALINK_CURSOR_KEY", invalid)
