@@ -84,6 +84,19 @@ def artifact_recovery_failure() -> CliFailure:
     )
 
 
+def artifact_cleanup_uncertain_failure(transaction_state: str) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.ARTIFACT_IO_FAILED,
+        message="Artifact transaction cleanup durability is uncertain",
+        exit_code=74,
+        fix="Inspect the output directory before retrying the command",
+        details={
+            "cleanup_state": "uncertain",
+            "transaction_state": transaction_state,
+        },
+    )
+
+
 def require_output(output: Path | None) -> Path:
     if output is None:
         raise artifact_usage("An explicit output directory is required")
@@ -220,6 +233,8 @@ class _TransactionTarget:
     backup: str | None = None
     backup_moved: bool = False
     committed: bool = False
+    backup_renamed: bool = False
+    target_renamed: bool = False
 
 
 def _lock_directory(directory_fd: int) -> None:
@@ -345,7 +360,7 @@ def _unlink_if_present(parent_fd: int, name: str | None) -> None:
     try:
         os.unlink(name, dir_fd=parent_fd)
     except FileNotFoundError:
-        pass
+        _sync_directory(parent_fd)
     else:
         _sync_directory(parent_fd)
 
@@ -380,6 +395,39 @@ def _close_transaction(
         os.close(parent_fd)
 
 
+def _remove_created_directories(
+    created_directories: list[tuple[int, str]],
+    *,
+    keep: int,
+) -> None:
+    while len(created_directories) > keep:
+        parent_fd, name = created_directories.pop()
+        try:
+            os.rmdir(name, dir_fd=parent_fd)
+            _sync_directory(parent_fd)
+        finally:
+            os.close(parent_fd)
+
+
+def _manifest_exists(output_fd: int) -> bool:
+    try:
+        os.stat(_RECOVERY_MANIFEST, dir_fd=output_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def _remove_manifest(output_fd: int, *, transaction_state: str) -> None:
+    try:
+        _unlink_if_present(output_fd, _RECOVERY_MANIFEST)
+    except OSError:
+        if _manifest_exists(output_fd):
+            raise artifact_recovery_failure() from None
+        raise artifact_cleanup_uncertain_failure(transaction_state) from None
+
+
 def write_artifacts(
     output: Path,
     generated: list[tuple[Path, str, bytes]],
@@ -399,6 +447,7 @@ def write_artifacts(
     except OSError:
         raise artifact_write_failure() from None
     created_directories: list[tuple[int, str]] = []
+    output_directory_count = 0
     output_fd: int | None = None
     try:
         try:
@@ -414,6 +463,7 @@ def write_artifacts(
                 )
             finally:
                 os.close(output_preflight_fd)
+            output_directory_count = len(created_directories)
             _lock_directory(output_fd)
 
             # Existing recovery state is never guessed at or prefix-deleted.
@@ -504,8 +554,9 @@ def write_artifacts(
                         src_dir_fd=target.parent_fd,
                         dst_dir_fd=target.parent_fd,
                     )
-                    target.backup_moved = True
+                    target.backup_renamed = True
                     _sync_directory(target.parent_fd)
+                    target.backup_moved = True
                     _sync_manifest(output_fd, transaction, targets, "committing")
                 os.replace(
                     target.temporary,
@@ -513,16 +564,18 @@ def write_artifacts(
                     src_dir_fd=target.parent_fd,
                     dst_dir_fd=target.parent_fd,
                 )
+                target.target_renamed = True
+                _sync_directory(target.parent_fd)
                 target.temporary = None
                 target.committed = True
-                _sync_directory(target.parent_fd)
                 _sync_manifest(output_fd, transaction, targets, "committing")
         except (OSError, CliFailure):
             restoration_failed = False
             for target in reversed(targets):
                 if target.parent_fd is None:
                     continue
-                if target.backup_moved and target.backup is not None:
+                target_restoration_failed = False
+                if (target.backup_renamed or target.backup_moved) and target.backup is not None:
                     try:
                         os.replace(
                             target.backup,
@@ -530,26 +583,34 @@ def write_artifacts(
                             src_dir_fd=target.parent_fd,
                             dst_dir_fd=target.parent_fd,
                         )
+                        _sync_directory(target.parent_fd)
                     except OSError:
                         restoration_failed = True
+                        target_restoration_failed = True
                     else:
+                        target.backup_renamed = False
                         target.backup_moved = False
                         target.committed = False
-                        try:
-                            _sync_directory(target.parent_fd)
-                        except OSError:
-                            restoration_failed = True
-                elif target.committed and not target.existed:
+                        if target.target_renamed:
+                            target.target_renamed = False
+                            target.temporary = None
+                elif (target.target_renamed or target.committed) and not target.existed:
                     try:
                         _unlink_if_present(target.parent_fd, target.relative.name)
                     except OSError:
                         restoration_failed = True
+                        target_restoration_failed = True
                     else:
+                        target.target_renamed = False
                         target.committed = False
-                try:
-                    _unlink_if_present(target.parent_fd, target.temporary)
-                except OSError:
-                    restoration_failed = True
+                        target.temporary = None
+                if not target_restoration_failed:
+                    try:
+                        _unlink_if_present(target.parent_fd, target.temporary)
+                    except OSError:
+                        restoration_failed = True
+                    else:
+                        target.temporary = None
             if restoration_failed:
                 try:
                     _sync_manifest(output_fd, transaction, targets, "recovery_required")
@@ -564,8 +625,15 @@ def write_artifacts(
                 output_fd = None
                 raise artifact_recovery_failure() from None
             try:
-                _unlink_if_present(output_fd, _RECOVERY_MANIFEST)
+                _remove_created_directories(
+                    created_directories,
+                    keep=output_directory_count,
+                )
             except OSError:
+                try:
+                    _sync_manifest(output_fd, transaction, targets, "recovery_required")
+                except CliFailure:
+                    pass
                 _close_transaction(
                     targets,
                     created_directories,
@@ -574,10 +642,32 @@ def write_artifacts(
                 )
                 output_fd = None
                 raise artifact_recovery_failure() from None
+            try:
+                _remove_manifest(output_fd, transaction_state="rolled_back")
+            except CliFailure:
+                _close_transaction(
+                    targets,
+                    created_directories,
+                    remove_directories=False,
+                    output_fd=output_fd,
+                )
+                output_fd = None
+                raise
+            try:
+                _remove_created_directories(created_directories, keep=0)
+            except OSError:
+                _close_transaction(
+                    targets,
+                    created_directories,
+                    remove_directories=False,
+                    output_fd=output_fd,
+                )
+                output_fd = None
+                raise artifact_cleanup_uncertain_failure("rolled_back") from None
             _close_transaction(
                 targets,
                 created_directories,
-                remove_directories=True,
+                remove_directories=False,
                 output_fd=output_fd,
             )
             output_fd = None
@@ -591,6 +681,7 @@ def write_artifacts(
             except OSError:
                 cleanup_failed = True
             else:
+                target.backup_renamed = False
                 target.backup_moved = False
         if cleanup_failed:
             try:
@@ -606,8 +697,8 @@ def write_artifacts(
             output_fd = None
             raise artifact_recovery_failure()
         try:
-            _unlink_if_present(output_fd, _RECOVERY_MANIFEST)
-        except OSError:
+            _remove_manifest(output_fd, transaction_state="committed")
+        except CliFailure:
             _close_transaction(
                 targets,
                 created_directories,
@@ -615,7 +706,7 @@ def write_artifacts(
                 output_fd=output_fd,
             )
             output_fd = None
-            raise artifact_recovery_failure() from None
+            raise
         _close_transaction(
             targets,
             created_directories,

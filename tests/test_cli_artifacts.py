@@ -1044,6 +1044,258 @@ def test_artifact_transaction_rolls_back_directory_fsync_failure(
     assert not list(output.glob(".infralink-*"))
 
 
+def test_artifact_transaction_retains_durable_state_when_restore_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    target = output / "nested/result.txt"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"original")
+    real_fsync = os.fsync
+    real_replace = os.replace
+    fail_next_directory_sync = False
+
+    def observing_replace(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        nonlocal fail_next_directory_sync
+        result = real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+        if destination == "result.txt" and (".tmp-" in str(source) or ".bak-" in str(source)):
+            fail_next_directory_sync = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_directory_sync
+        if fail_next_directory_sync and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            fail_next_directory_sync = False
+            raise OSError(errno.EIO, "ordered-directory-fsync-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "replace", observing_replace)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [(Path("nested/result.txt"), "text/plain", b"replacement")],
+        )
+
+    manifest = json.loads((output / ".infralink-recovery.json").read_text())
+    assert failure.value.code == ErrorCode.ARTIFACT_RECOVERY_REQUIRED
+    assert manifest["phase"] == "recovery_required"
+    assert manifest["targets"] == [
+        {
+            "backup": manifest["targets"][0]["backup"],
+            "backup_moved": True,
+            "committed": False,
+            "existed": True,
+            "path": "nested/result.txt",
+            "temporary": manifest["targets"][0]["temporary"],
+        }
+    ]
+    assert manifest["targets"][0]["backup"].endswith(".bak-0")
+    assert manifest["targets"][0]["temporary"].endswith(".tmp-0")
+
+
+def test_artifact_transaction_reports_committed_cleanup_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    real_fsync = os.fsync
+    real_unlink = os.unlink
+    fail_next_directory_sync = False
+
+    def observing_unlink(path, *, dir_fd=None):
+        nonlocal fail_next_directory_sync
+        result = real_unlink(path, dir_fd=dir_fd)
+        if path == ".infralink-recovery.json":
+            fail_next_directory_sync = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_directory_sync
+        if fail_next_directory_sync and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            fail_next_directory_sync = False
+            raise OSError(errno.EIO, "final-manifest-fsync-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "unlink", observing_unlink)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [(Path("result.txt"), "text/plain", b"complete")],
+        )
+
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
+    assert failure.value.details == {
+        "cleanup_state": "uncertain",
+        "transaction_state": "committed",
+    }
+    assert (output / "result.txt").read_bytes() == b"complete"
+    assert not (output / ".infralink-recovery.json").exists()
+
+
+def test_artifact_transaction_reports_rolled_back_cleanup_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    target = output / "result.txt"
+    target.write_bytes(b"original")
+    real_fsync = os.fsync
+    real_replace = os.replace
+    real_unlink = os.unlink
+    fail_next_directory_sync = False
+
+    def failing_replace(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        if destination == "result.txt" and ".tmp-" in str(source):
+            raise OSError(errno.EIO, "commit-failure-canary")
+        return real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    def observing_unlink(path, *, dir_fd=None):
+        nonlocal fail_next_directory_sync
+        result = real_unlink(path, dir_fd=dir_fd)
+        if path == ".infralink-recovery.json":
+            fail_next_directory_sync = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_directory_sync
+        if fail_next_directory_sync and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            fail_next_directory_sync = False
+            raise OSError(errno.EIO, "final-manifest-fsync-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "replace", failing_replace)
+    monkeypatch.setattr(artifact_helpers.os, "unlink", observing_unlink)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [(Path("result.txt"), "text/plain", b"replacement")],
+        )
+
+    assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
+    assert failure.value.details == {
+        "cleanup_state": "uncertain",
+        "transaction_state": "rolled_back",
+    }
+    assert target.read_bytes() == b"original"
+    assert not (output / ".infralink-recovery.json").exists()
+
+
+@pytest.mark.parametrize("failed_directory_sync", range(1, 10))
+def test_artifact_transaction_single_directory_fsync_failure_is_truthful(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_directory_sync: int,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    target = output / "result.txt"
+    target.write_bytes(b"original")
+    real_fsync = os.fsync
+    directory_syncs = 0
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal directory_syncs
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_syncs += 1
+            if directory_syncs == failed_directory_sync:
+                raise OSError(errno.EIO, "single-fsync-sweep-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [(Path("result.txt"), "text/plain", b"replacement")],
+        )
+
+    manifest = output / ".infralink-recovery.json"
+    if failure.value.code == ErrorCode.ARTIFACT_RECOVERY_REQUIRED:
+        assert failure.value.details == {"recovery_state": "retained"}
+        assert manifest.is_file()
+    elif failure.value.details.get("cleanup_state") == "uncertain":
+        assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
+        assert failure.value.details["transaction_state"] in {"committed", "rolled_back"}
+        assert not manifest.exists()
+    else:
+        assert failure.value.code == ErrorCode.ARTIFACT_IO_FAILED
+        assert failure.value.details == {}
+
+
+def test_artifact_transaction_retains_manifest_when_nested_rmdir_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    output = Path("generated")
+    output.mkdir()
+    real_fsync = os.fsync
+    real_open = os.open
+    real_rmdir = os.rmdir
+    staged = 0
+    fail_next_directory_sync = False
+
+    def failing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal staged
+        if flags & os.O_EXCL and ".tmp-" in str(path):
+            staged += 1
+            if staged == 2:
+                raise OSError(errno.ENOSPC, "stage-failure-canary")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def observing_rmdir(path, *, dir_fd=None):
+        nonlocal fail_next_directory_sync
+        result = real_rmdir(path, dir_fd=dir_fd)
+        fail_next_directory_sync = True
+        return result
+
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fail_next_directory_sync
+        if fail_next_directory_sync and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            fail_next_directory_sync = False
+            raise OSError(errno.EIO, "rmdir-fsync-canary")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(artifact_helpers.os, "open", failing_open)
+    monkeypatch.setattr(artifact_helpers.os, "rmdir", observing_rmdir)
+    monkeypatch.setattr(artifact_helpers.os, "fsync", failing_fsync)
+
+    with pytest.raises(CliFailure) as failure:
+        write_artifacts(
+            output,
+            [
+                (Path("nested/first.txt"), "text/plain", b"first"),
+                (Path("other/later.txt"), "text/plain", b"later"),
+            ],
+        )
+
+    assert failure.value.code == ErrorCode.ARTIFACT_RECOVERY_REQUIRED
+    assert (output / ".infralink-recovery.json").is_file()
+
+
 def test_artifact_commands_fail_before_mutation_on_unsupported_platform(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
