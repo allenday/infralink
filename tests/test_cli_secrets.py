@@ -15,6 +15,7 @@ import infralink.cli.secrets as secret_commands
 from infralink.adapters.bws import BwsConfigurationError, BwsErrorCode, BwsProviderError
 from infralink.cli.main import cli
 from infralink.secrets import SecretAudit
+from tests.cli_helpers import source_checkout_env
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST_A = "11111111-1111-4111-8111-111111111111"
@@ -607,6 +608,7 @@ raise SystemExit(main([]))
         check=False,
         capture_output=True,
         text=True,
+        env=source_checkout_env(),
     )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["ok"] is True

@@ -176,6 +176,23 @@ def test_edge_summary_contains_only_safe_declared_fields(edges: EdgeSet) -> None
     assert "auth" not in dumped
 
 
+def test_missing_edge_ports_remain_truthful_across_public_queries(
+    registry: Registry, edges: EdgeSet
+) -> None:
+    listed_edge = next(item for item in list_edges(edges).items if item.id == EDGE_D)
+    listed_service = next(item for item in list_services(registry, edges).items if item.id == "api")
+    shown_service = show_service(registry, edges, "api")
+    shown_app = show_app(registry, edges, "test-app")
+    app_edge = next(item for item in shown_app.edges.items if item.id == EDGE_D)
+
+    assert listed_edge.to == {"host": HOST_B, "service": "api"}
+    assert 443 in listed_service.ports
+    assert all(type(port) is int for port in listed_service.ports)
+    assert shown_service.ports.items == listed_service.ports
+    assert app_edge.to == {"host": HOST_B, "service": "api"}
+    assert all(type(port) is int for service in shown_app.services.items for port in service.ports)
+
+
 def test_detail_queries_return_complete_typed_pages(registry: Registry, edges: EdgeSet) -> None:
     host = show_host(registry, HOST_A, collection="services", limit=100)
     service = show_service(registry, edges, "api", collection="hosts", limit=100)

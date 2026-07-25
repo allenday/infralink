@@ -84,8 +84,9 @@ def _service_identities(registry: Registry, edges: EdgeSet) -> dict[str, _Servic
     for edge in edges:
         identity = identities.setdefault(edge.target_service, _ServiceIdentity())
         identity.hosts.add(edge.target_host)
-        if isinstance(edge.target_port, int):
-            identity.ports.add(edge.target_port)
+        port = edge.declared_target_port
+        if port is not None:
+            identity.ports.add(port)
         if edge.protocol:
             identity.protocols.add(edge.protocol)
     return identities
@@ -117,11 +118,13 @@ def edge_summary(edge: Edge) -> EdgeSummary:
         source["selector"] = edge.source_selector
     if edge.source_service is not None:
         source["service"] = edge.source_service
-    target = {
+    target: dict[str, Any] = {
         "host": edge.target_host,
         "service": edge.target_service,
-        "port": edge.target_port,
     }
+    port = edge.declared_target_port
+    if port is not None:
+        target["port"] = port
     refs = sorted({edge.secret_ref} if edge.secret_ref else set())
     return EdgeSummary.model_validate(
         {
@@ -177,8 +180,9 @@ def _app_service_identities(
         if edge_identity is None:
             continue
         edge_identity.hosts.add(edge.target_host)
-        if isinstance(edge.target_port, int) and not isinstance(edge.target_port, bool):
-            edge_identity.ports.add(edge.target_port)
+        port = edge.declared_target_port
+        if port is not None:
+            edge_identity.ports.add(port)
         if edge.protocol:
             edge_identity.protocols.add(edge.protocol)
     return identities

@@ -23,6 +23,7 @@ from infralink.adapters.bws import (
     _default_sdk_factory,
 )
 from infralink.secrets.base import SecretAudit, SecretReference, SecretValue
+from tests.cli_helpers import source_checkout_env
 
 HOSTED_API_URL = "https://api.bitwarden.com"
 HOSTED_IDENTITY_URL = "https://identity.bitwarden.com"
@@ -388,6 +389,7 @@ import infralink.adapters.bws
         check=False,
         capture_output=True,
         text=True,
+        env=source_checkout_env(),
     )
 
     assert completed.returncode == 0, completed.stderr

@@ -63,8 +63,13 @@ class Edge:
         return self._schema.to.service
 
     @property
+    def declared_target_port(self) -> int | None:
+        """Return the optional port exactly as declared in topology."""
+        return self._schema.to.port
+
+    @property
     def target_port(self) -> int:
-        port = self._schema.to.port
+        port = self.declared_target_port
         if port is None:
             raise ResolutionError("No target port declared")
         return port
