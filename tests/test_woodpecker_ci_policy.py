@@ -9,6 +9,20 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".woodpecker.yml"
+EXPECTED_COMMANDS = [
+    "apt-get update",
+    "apt-get install --yes --no-install-recommends git",
+    'python -m pip install --disable-pip-version-check -e ".[dev]"',
+    "python -m ruff format --check src tests scripts",
+    "python -m ruff check src tests scripts",
+    "python -m mypy src scripts",
+    "python -m pytest",
+    "python scripts/generate_cli_schemas.py",
+    "git diff --exit-code",
+    'test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"',
+    "python -m build",
+    "python -m twine check dist/*",
+]
 
 
 def _walk(value: Any) -> Iterator[tuple[str | None, Any]]:
@@ -25,35 +39,22 @@ def _walk(value: Any) -> Iterator[tuple[str | None, Any]]:
 def test_quality_pipeline_contract() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
-    assert workflow["when"] == [
-        {"event": "push"},
-        {"event": "pull_request"},
-        {"event": "manual"},
-    ]
-    assert workflow["matrix"]["PYTHON_VERSION"] == ["3.10", "3.11", "3.12"]
-
-    steps = workflow["steps"]
-    assert set(steps) == {"quality"}
-    quality = steps["quality"]
     # One matrix-interpolated image field cannot select distinct patch or digest
     # pins without replacing this single-step contract with conditional steps.
-    assert quality["image"] == "python:${PYTHON_VERSION}-slim-bookworm"
-
-    commands = quality["commands"]
-    required_commands = [
-        'python -m pip install --disable-pip-version-check -e ".[dev]"',
-        "python -m ruff format --check src tests scripts",
-        "python -m ruff check src tests scripts",
-        "python -m mypy src scripts",
-        "python -m pytest",
-        "python scripts/generate_cli_schemas.py",
-        "git diff --exit-code",
-        'test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"',
-        "python -m build",
-        "python -m twine check dist/*",
-    ]
-    positions = [commands.index(command) for command in required_commands]
-    assert positions == sorted(positions)
+    assert workflow == {
+        "when": [
+            {"event": "push"},
+            {"event": "pull_request"},
+            {"event": "manual"},
+        ],
+        "matrix": {"PYTHON_VERSION": ["3.10", "3.11", "3.12"]},
+        "steps": {
+            "quality": {
+                "image": "python:${PYTHON_VERSION}-slim-bookworm",
+                "commands": EXPECTED_COMMANDS,
+            }
+        },
+    }
 
 
 def test_quality_pipeline_has_no_operational_capabilities() -> None:

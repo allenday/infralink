@@ -90,6 +90,21 @@ def test_config_blocks_credential_extraction_protocols() -> None:
     assert not hasattr(config, "__dict__")
 
 
+def test_config_owns_fail_closed_state_protocols() -> None:
+    assert BwsConfig.__getstate__.__module__ == "infralink.adapters.bws"
+    assert BwsConfig.__reduce_ex__.__qualname__ == "BwsConfig.__reduce_ex__"
+    config = BwsConfig.from_env(
+        {
+            "BWS_ACCESS_TOKEN": CANARY,
+            "BWS_ORGANIZATION_ID": ORGANIZATION_ID,
+        }
+    )
+
+    with pytest.raises(TypeError, match="cannot be restored") as caught:
+        config.__setstate__([CANARY])
+    assert CANARY not in str(caught.value)
+
+
 @pytest.mark.parametrize(
     "name",
     ["BWS_API_URL", "BWS_IDENTITY_URL", "BWS_TRUSTED_HOSTS"],

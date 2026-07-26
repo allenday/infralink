@@ -26,6 +26,14 @@ _FORBIDDEN_ENVIRONMENT_KEYS = frozenset({"BWS_API_URL", "BWS_IDENTITY_URL", "BWS
 _MISSING = object()
 
 
+def _reject_bws_config_state(_config: object) -> NoReturn:
+    raise TypeError("BwsConfig state cannot be extracted")
+
+
+def _reject_bws_config_state_restore(_config: object, _state: object) -> NoReturn:
+    raise TypeError("BwsConfig state cannot be restored")
+
+
 class BwsErrorCode(str, Enum):
     """Safe categories for adapter failures."""
 
@@ -145,9 +153,6 @@ class BwsConfig:
     def __deepcopy__(self, memo: dict[int, object]) -> NoReturn:
         raise TypeError("BwsConfig cannot be copied")
 
-    def __getstate__(self) -> NoReturn:
-        raise TypeError("BwsConfig state cannot be extracted")
-
     def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
         raise TypeError("BwsConfig cannot be pickled")
 
@@ -182,6 +187,12 @@ class BwsConfig:
             identity_url=identity_url,
             test_only=True,
         )
+
+
+# Python 3.10 replaces both guards when frozen dataclass slots are generated.
+_bws_config_type = cast(Any, BwsConfig)
+_bws_config_type.__getstate__ = _reject_bws_config_state
+_bws_config_type.__setstate__ = _reject_bws_config_state_restore
 
 
 def _default_sdk_factory(config: BwsConfig) -> _SdkClient:
