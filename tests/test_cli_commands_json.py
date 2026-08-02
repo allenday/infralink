@@ -3,6 +3,8 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from infralink.cli.main import cli
+
 
 def _write_registry(path: str) -> None:
     with open(path, "w", encoding="utf-8") as handle:
@@ -34,8 +36,6 @@ edges:
 """
         )
 
-from infralink.cli.main import cli
-
 
 def test_info_json():
     runner = CliRunner()
@@ -61,12 +61,14 @@ def test_edges_list_json():
     with runner.isolated_filesystem():
         _write_registry("registry.yml")
         _write_edges("edges.yml")
-        result = runner.invoke(cli, ["--registry", "registry.yml", "--edges", "edges.yml", "edges-list"])
+        result = runner.invoke(
+            cli, ["--registry", "registry.yml", "--edges", "edges.yml", "edges-list"]
+        )
     payload = json.loads(result.output)
     assert payload["ok"] is True
 
 
-def test_diagram_stdout_json():
+def test_diagram_stdout_is_a_json_usage_error():
     runner = CliRunner()
 
     with runner.isolated_filesystem():
@@ -75,18 +77,23 @@ def test_diagram_stdout_json():
 
         result = runner.invoke(
             cli,
-            ["--registry", "registry.yml", "--edges", "edges.yml", "diagram", "--format", "d2", "--stdout"],
+            [
+                "--registry",
+                "registry.yml",
+                "--edges",
+                "edges.yml",
+                "diagram",
+                "--format",
+                "d2",
+                "--output",
+                "generated",
+                "--stdout",
+            ],
         )
+        assert not Path("generated").exists()
 
     payload = json.loads(result.output)
-    assert payload["ok"] is True
-    assert payload["result"]["stdout"] is True
-
-    outputs = payload["result"]["outputs"]
-    assert len(outputs) == 1
-    assert outputs[0]["format"] == "d2"
-    assert "content" in outputs[0]
-    assert "path" not in outputs[0]
-
-    # Ensure nothing was written to the default output directory
-    assert not Path("docs/diagrams").exists()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "usage_error"
+    assert "--output" in payload["fix"]
+    assert "content" not in result.output

@@ -10,11 +10,11 @@ This package provides tools for:
 - Generating documentation from topology declarations
 """
 
-__version__ = "0.1.0"
-
+from infralink.__about__ import __version__
+from infralink.core.edges import Edge, EdgeSet
 from infralink.core.registry import Registry
-from infralink.core.edges import EdgeSet, Edge
 from infralink.core.resolver import EdgeResolver
+from infralink.secrets import SecretAudit, SecretReference, SecretResolver, SecretValue
 
 __all__ = [
     "__version__",
@@ -22,4 +22,8 @@ __all__ = [
     "EdgeSet",
     "Edge",
     "EdgeResolver",
+    "SecretAudit",
+    "SecretReference",
+    "SecretResolver",
+    "SecretValue",
 ]

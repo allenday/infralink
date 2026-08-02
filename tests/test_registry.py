@@ -1,10 +1,9 @@
 """Tests for registry module."""
 
 import pytest
-from pathlib import Path
 import yaml
 
-from infralink.core.registry import Registry, Host
+from infralink.core.registry import Host, Registry
 from infralink.core.schema import HostStatus
 
 
@@ -62,6 +61,18 @@ class TestHost:
         assert host.group == "production"
         assert host.cloud == "hetzner-cloud"
         assert host.tailscale_ip == "100.78.109.111"
+
+    def test_group_compatibility_uses_first_project(self):
+        host = Host(
+            "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+            {
+                "canonical_name": "test-host",
+                "status": "active",
+                "projects": ["production", "shared"],
+            },
+        )
+
+        assert host.group == "production"
 
     def test_host_services(self, sample_registry_data):
         """Test host service queries."""
@@ -167,6 +178,7 @@ class TestRegistry:
         assert "d1b9e5d5-36b0-459d-a556-96622811fbd5" in registry
         assert "test-host-1" in registry
         assert "nonexistent" not in registry
+
 
 def test_load_dir(tmp_path):
     """Load per-host manifests from a directory."""

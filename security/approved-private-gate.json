@@ -1,0 +1,5 @@
+{
+  "contract_harness_sha256": "bba5d2fa465302cd99224f4f39ede835698da548f72fdfa3a8bc2e37335b0424",
+  "dependency_lock_sha256": "2ed331ff627426f164b40ade8652756c22fcdcaf82de5214ed3700e664839750",
+  "infra_management_commit": "367301e87616cd9a7317a530352936252f9b9102"
+}

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "infralink"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Infrastructure topology modeling with UUID-based nodes and typed edges"
 readme = "README.md"
 license = "MIT"
@@ -26,7 +26,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -39,7 +39,7 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     "jinja2>=3.0",
-    "pydantic>=2.0",
+    "pydantic>=2.11,<3",
 ]
 
 [project.optional-dependencies]
@@ -49,14 +49,21 @@ dev = [
     "mypy>=1.0",
     "ruff>=0.1.0",
     "types-PyYAML",
+    "build>=1.2",
+    "twine>=5.1",
+    "jsonschema>=4.23",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.0",
 ]
+bws = [
+    "bitwarden-sdk>=2.1,<3",
+]
 
 [project.scripts]
-infralink = "infralink.cli.main:cli"
+infralink = "infralink.cli.main:run"
 
 [project.entry-points."infralink.commands"]
 check = "infralink.cli.check:check"
@@ -66,13 +73,29 @@ validate = "infralink.cli.validate:validate"
 resolve = "infralink.cli.resolve:resolve"
 
 [project.urls]
-Homepage = "https://github.com/example/infralink"
-Documentation = "https://github.com/example/infralink#readme"
-Repository = "https://github.com/example/infralink"
-Issues = "https://github.com/example/infralink/issues"
+Homepage = "https://github.com/cyberstorm-dev/infralink"
+Issues = "https://github.com/cyberstorm-dev/infralink/issues"
+Source = "https://github.com/cyberstorm-dev/infralink"
 
-[tool.hatch.build]
-sources = ["src"]
+[tool.hatch.version]
+path = "src/infralink/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infralink"]
+exclude = ["src/infralink/schemas"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/infralink/schemas" = "infralink/schemas"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/infralink",
+    "README.md",
+    "PRD.md",
+    "BACKLOG.md",
+    "docs/compatibility",
+    "examples",
+]
 
 [tool.ruff]
 target-version = "py310"
@@ -101,4 +124,4 @@ warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --cov=infralink --cov-report=term-missing"
+addopts = "-v --cov=infralink --cov-branch --cov-report=term-missing --cov-fail-under=70"

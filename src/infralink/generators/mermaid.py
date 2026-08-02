@@ -88,7 +88,7 @@ def generate_mermaid(
     lines.append("")
     lines.append("    %% Connections")
 
-    seen_edges: set[tuple[str, str, str]] = set()
+    seen_edges: set[tuple[str, str, str, str]] = set()
     for edge in edges:
         if edge.is_wildcard_source():
             continue

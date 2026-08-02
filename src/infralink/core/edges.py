@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import yaml
 
+from infralink.core.errors import ResolutionError
 from infralink.core.schema import (
     Criticality,
     EdgeSchema,
@@ -61,8 +63,16 @@ class Edge:
         return self._schema.to.service
 
     @property
-    def target_port(self) -> int:
+    def declared_target_port(self) -> int | None:
+        """Return the optional port exactly as declared in topology."""
         return self._schema.to.port
+
+    @property
+    def target_port(self) -> int:
+        port = self.declared_target_port
+        if port is None:
+            raise ResolutionError("No target port declared")
+        return port
 
     @property
     def protocol(self) -> str | None:
@@ -83,12 +93,8 @@ class Edge:
     @property
     def healthcheck(self) -> HealthCheckConfig:
         if self._schema.healthcheck is None:
-            hc = HealthCheckConfig()
-            setattr(hc, "explicit", False)
-            return hc
-        hc = self._schema.healthcheck
-        setattr(hc, "explicit", True)
-        return hc
+            return HealthCheckConfig(explicit=False)
+        return self._schema.healthcheck.model_copy(update={"explicit": True})
 
     @property
     def auth_type(self) -> str:

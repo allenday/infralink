@@ -2,19 +2,35 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from typing import Any
 
 import click
 
+from infralink.cli.contracts import (
+    Diagnostic,
+    ValidateResult,
+    ValidationSummary,
+)
+from infralink.cli.pagination import page_items
+
 try:
-    from infralink.cli.main import Context, pass_context
+    from infralink.cli.main import (
+        Context,
+        _active_collection,
+        _attach_next_cursors,
+        _emit_query_result,
+        _page_offset,
+        _page_options,
+        _topology_fingerprint,
+        pass_context,
+    )
 except ModuleNotFoundError:
     Context = object  # type: ignore[misc,assignment]
 
-    def pass_context(func):  # type: ignore[misc]
+    def pass_context(func: Any) -> Any:
         return func
-
-from infralink.cli.output import error_envelope, ok_envelope
 
 
 def _edge_node_type_error(source_service: str | None) -> str | None:
@@ -36,8 +52,16 @@ def _edge_node_type_error(source_service: str | None) -> str | None:
     is_flag=True,
     help="Validate all edges can be resolved",
 )
+@_page_options
 @pass_context
-def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
+def validate(
+    ctx: Context,
+    strict: bool,
+    check_resolution: bool,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> int:
     """
     Validate registry and edge declarations.
 
@@ -53,144 +77,148 @@ def validate(ctx: Context, strict: bool, check_resolution: bool) -> None:
     """
     from infralink.core.resolver import EdgeResolver
 
-    errors: list[str] = []
-    warnings: list[str] = []
-    command = click.get_current_context().command_path.replace("cli", "infralink")
+    errors: list[Diagnostic] = []
+    warnings: list[Diagnostic] = []
 
-    # Load and validate registry
-    try:
-        registry = ctx.registry
-    except Exception as e:
-        errors.append(f"Registry validation failed: {e}")
+    def error(code: str, message: str, path: str | None = None) -> None:
+        errors.append(Diagnostic(code=code, path=path, message=message, severity="error"))
 
-    # Load and validate edges
-    try:
-        edges = ctx.edges
-    except Exception as e:
-        errors.append(f"Edge validation failed: {e}")
+    def warning(code: str, message: str, path: str | None = None) -> None:
+        warnings.append(Diagnostic(code=code, path=path, message=message, severity="warning"))
+
+    registry = ctx.registry
+    edges = ctx.edges
 
     # Check edge target references
-    if "registry" in dir() and "edges" in dir() and len(edges) > 0:
+    if len(edges) > 0:
         for edge in edges:
             node_type_error = _edge_node_type_error(edge.source_service)
             if node_type_error:
-                errors.append(f"Edge '{edge.id}': {node_type_error}")
+                error(
+                    "edge_source_service_invalid",
+                    node_type_error,
+                    f"edges.{edge.id}.from.service",
+                )
 
             # Check target host exists
             target = registry.get_by_uuid(edge.target_host)
             if not target:
-                errors.append(f"Edge '{edge.id}': target host not found: {edge.target_host}")
+                error(
+                    "target_host_not_found",
+                    "Target host not found",
+                    f"edges.{edge.id}.to.host",
+                )
             elif not target.is_active:
-                warnings.append(f"Edge '{edge.id}': target host is not active: {target.canonical_name}")
+                warning(
+                    "target_host_inactive",
+                    "Target host is not active",
+                    f"edges.{edge.id}.to.host",
+                )
 
             # Check source hosts exist
             for source_uuid in edge.source_hosts:
                 source = registry.get_by_uuid(source_uuid)
                 if not source:
-                    errors.append(f"Edge '{edge.id}': source host not found: {source_uuid}")
+                    error(
+                        "source_host_not_found",
+                        "Source host not found",
+                        f"edges.{edge.id}.from.hosts",
+                    )
 
     # Check edge resolution
-    if check_resolution and "registry" in dir() and "edges" in dir():
+    if check_resolution:
         resolver = EdgeResolver(registry, edges)
         resolution_errors, resolution_warnings = resolver.validate_all()
-        
-        if resolution_warnings:
-            click.echo("\nResolution Warnings:", err=True)
-            for warn in resolution_warnings:
-                click.secho(f"  - {warn}", fg="yellow", err=True)
-                
-        if resolution_errors:
-            for err in resolution_errors:
-                errors.append(err)
+        for _item in resolution_warnings:
+            warning("resolution_warning", "Resolution warning")
+        for _item in resolution_errors:
+            error("resolution_error", "Resolution failed")
 
     # Check for duplicate edge IDs
-    if "edges" in dir():
-        seen_ids: set[str] = set()
-        for edge in edges:
-            if edge.id in seen_ids:
-                errors.append(f"Duplicate edge ID: {edge.id}")
-            seen_ids.add(edge.id)
+    seen_ids: set[str] = set()
+    for edge in edges:
+        if edge.id in seen_ids:
+            error("duplicate_edge_id", "Duplicate edge ID", f"edges.{edge.id}.id")
+        seen_ids.add(edge.id)
 
     # Check that hosts use roles, not direct services
-    if "registry" in dir():
-        hosts_without_roles = []
-        for host in registry:
-            if not host.is_active:
-                continue
-            # Check if host has managed_services but no roles
-            if not host.roles and host.managed_services:
-                hosts_without_roles.append(host)
-                errors.append(
-                    f"Host '{host.canonical_name}' ({host.uuid_prefix}): "
-                    f"has managed_services but no roles. Declare roles instead."
-                )
-        # Report on unmanaged infrastructure
-        hosts_with_unmanaged = []
-        for host in registry:
-            if not host.is_active:
-                continue
-            if host.unmanaged_services or host.unmanaged_roles:
-                hosts_with_unmanaged.append(host)
-        if hosts_with_unmanaged:
-            for h in hosts_with_unmanaged:
-                unmanaged_items = list(h.unmanaged_services.keys()) + list(h.unmanaged_roles.keys())
-                warnings.append(
-                    f"Host '{h.canonical_name}' has unmanaged: {', '.join(unmanaged_items)}"
-                )
+    for host in registry:
+        if not host.is_active:
+            continue
+        if not host.roles and host.managed_services:
+            error(
+                "host_services_without_roles",
+                "Host has managed services but no roles",
+                f"hosts.{host.uuid}.roles",
+            )
+        if host.unmanaged_services or host.unmanaged_roles:
+            warning(
+                "host_has_unmanaged_resources",
+                "Host has unmanaged resources",
+                f"hosts.{host.uuid}",
+            )
 
-    summary = {"errors": len(errors), "warnings": len(warnings)}
-    result = {
-        "valid": len(errors) == 0 and (not strict or len(warnings) == 0),
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-    if errors:
-        payload = error_envelope(
-            command,
-            "Validation failed",
-            "VALIDATION_FAILED",
-            "Fix registry/edge errors and re-run infralink validate.",
-            [
-                {"command": "infralink validate", "description": "Re-run validation"},
-                {"command": "infralink analyze", "description": "Inspect topology coverage"},
-            ],
-        )
-        payload["summary"] = summary
-        payload["result"] = result
-        payload["errors"] = errors
-        payload["warnings"] = warnings
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
-
-    if warnings and strict:
-        payload = error_envelope(
-            command,
-            "Validation failed (strict mode)",
-            "VALIDATION_STRICT_FAILED",
-            "Resolve warnings or run without --strict.",
-            [
-                {"command": "infralink validate", "description": "Re-run validation"},
-                {"command": "infralink validate --strict", "description": "Re-run in strict mode"},
-            ],
-        )
-        payload["summary"] = summary
-        payload["result"] = result
-        payload["warnings"] = warnings
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
-
-    status = "warn" if warnings else "ok"
-    payload = ok_envelope(
-        command,
-        result,
-        [
-            {"command": "infralink check", "description": "Run edge health checks"},
-            {"command": "infralink analyze", "description": "Analyze topology coverage"},
-        ],
-        status=status,
+    valid = not errors and (not strict or not warnings)
+    collections = ("errors", "warnings")
+    selected = _active_collection(collection, cursor, collections)
+    diagnostics_hash = hashlib.sha256(
+        json.dumps(
+            [item.model_dump(mode="json") for item in [*errors, *warnings]],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    fingerprint = _topology_fingerprint(
+        ctx,
+        include_registry=True,
+        include_edges=True,
+        identifiers={
+            "strict": str(strict),
+            "check_resolution": str(check_resolution),
+            "diagnostics": diagnostics_hash,
+        },
     )
-    payload["summary"] = summary
-    payload["errors"] = errors
-    payload["warnings"] = warnings
-    click.echo(json.dumps(payload))
+    offset = _page_offset(
+        command="validate",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    result = ValidateResult(
+        valid=valid,
+        errors=page_items(
+            errors,
+            limit=limit,
+            offset=offset if selected == "errors" else 0,
+            next_cursor=None,
+        ),
+        warnings=page_items(
+            warnings,
+            limit=limit,
+            offset=offset if selected == "warnings" else 0,
+            next_cursor=None,
+        ),
+        summary=ValidationSummary(error_count=len(errors), warning_count=len(warnings)),
+    )
+    _attach_next_cursors(
+        result,
+        command="validate",
+        collections=collections,
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    command_argv = ["validate"]
+    if strict:
+        command_argv.append("--strict")
+    if check_resolution:
+        command_argv.append("--check-resolution")
+    _emit_query_result(
+        ctx=ctx,
+        path=["validate"],
+        command_argv=command_argv,
+        result=result,
+        limit=limit,
+    )
+    return 0 if valid else 1

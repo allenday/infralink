@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
-from typing import Any, Literal
+from pathlib import PurePosixPath
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+SAFE_SECRET_REF_PATTERN = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*\Z",
+    re.ASCII,
+)
 
 
 class StrictModel(BaseModel):
@@ -78,7 +85,7 @@ class ServiceSchema(NodeSchema):
     node_type: str = "service"
 
     @model_validator(mode="after")
-    def populate_canonical_name(self) -> "ServiceSchema":
+    def populate_canonical_name(self) -> ServiceSchema:
         if self.canonical_name is None:
             self.canonical_name = self.name
         return self
@@ -273,7 +280,7 @@ class HostSchema(NodeSchema):
 
     @field_validator("managed_services", mode="before")
     @classmethod
-    def normalize_managed_services(cls, v: Any) -> dict[str, ServiceConfig]:
+    def normalize_managed_services(cls, v: dict[str, Any] | list[str]) -> dict[str, Any]:
         """Convert legacy list format to dict format."""
         if isinstance(v, list):
             # Legacy format: ["nginx", "postgresql"]
@@ -283,7 +290,7 @@ class HostSchema(NodeSchema):
 
     @field_validator("services", mode="before")
     @classmethod
-    def normalize_services(cls, v: Any) -> dict[str, ServiceConfig]:
+    def normalize_services(cls, v: dict[str, Any] | list[str]) -> dict[str, Any]:
         """Convert legacy list format to dict format (backward compat)."""
         if isinstance(v, list):
             return {name: {} for name in v}
@@ -291,7 +298,7 @@ class HostSchema(NodeSchema):
 
     @field_validator("roles", mode="before")
     @classmethod
-    def normalize_roles(cls, v: Any) -> list[str]:
+    def normalize_roles(cls, v: dict[str, Any] | list[str]) -> list[str]:
         """Convert legacy dict format to list format."""
         if isinstance(v, dict):
             # Legacy format: {"airflow-worker": {"concurrency": 10}}
@@ -408,6 +415,47 @@ class AuthConfig(StrictModel):
     role: Literal["ro", "rw", "admin", "relay"] | None = None
     mount_path: str | None = None
 
+    @model_validator(mode="after")
+    def validate_auth_credentials(self) -> AuthConfig:
+        if (
+            self.secret_ref is not None
+            and SAFE_SECRET_REF_PATTERN.fullmatch(self.secret_ref) is None
+        ):
+            raise ValueError("auth requires a safe secret_ref")
+
+        if self.type == "none":
+            if self.secret_ref is not None:
+                raise ValueError("none auth forbids secret_ref")
+            return self
+
+        if self.type in {"password", "basic", "token"}:
+            if self.secret_ref is None:
+                raise ValueError(f"{self.type} auth requires secret_ref")
+            return self
+
+        if self.type == "certificate":
+            if self.mount_path is not None and not _is_safe_certificate_mount(self.mount_path):
+                raise ValueError("certificate auth requires a safe absolute mount_path")
+            if self.secret_ref is None and self.mount_path is None:
+                raise ValueError(
+                    "certificate auth requires secret_ref or a safe absolute mount_path"
+                )
+        return self
+
+
+def _is_safe_certificate_mount(mount_path: str | None) -> bool:
+    if (
+        mount_path is None
+        or len(mount_path) < 2
+        or not mount_path.startswith("/")
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in mount_path
+        )
+    ):
+        return False
+    return ".." not in PurePosixPath(mount_path).parts
+
 
 class HealthCheckConfig(StrictModel):
     """Health check configuration for an edge."""
@@ -421,6 +469,7 @@ class HealthCheckConfig(StrictModel):
     query: str | None = None  # For query checks
     conditions: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
+    explicit: bool = Field(default=False, exclude=True)
 
 
 class EdgeSourceSelector(StrictModel):
@@ -436,7 +485,7 @@ class EdgeTarget(StrictModel):
 
     host: str  # UUID
     service: str
-    port: int | None = None
+    port: Annotated[int, Field(strict=True, ge=1, le=65535)] | None = None
 
 
 class EdgeMetadata(StrictModel):

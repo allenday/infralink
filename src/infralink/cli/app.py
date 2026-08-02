@@ -1,99 +1,117 @@
-from __future__ import annotations
+"""Application topology query commands."""
 
-import json
-from typing import Any
+from __future__ import annotations
 
 import click
 
-from infralink.cli.main import Context, pass_context
-from infralink.cli.output import error_envelope, ok_envelope
+from infralink.cli.main import (
+    Context,
+    _active_collection,
+    _attach_next_cursors,
+    _emit_query_result,
+    _page_offset,
+    _page_options,
+    _topology_fingerprint,
+    pass_context,
+)
+from infralink.cli.queries import list_apps as query_list_apps
+from infralink.cli.queries import show_app as query_show_app
 
 
 @click.group()
 def app() -> None:
-    """Manage application groupings."""
-    pass
+    """Inspect application groupings."""
 
 
 @app.command(name="list")
+@_page_options
 @pass_context
-def list_apps(ctx: Context) -> None:
-    """List all application groupings."""
-    command = click.get_current_context().command_path.replace("cli", "infralink")
-    try:
-        registry = ctx.registry
-        apps = registry.applications
-    except Exception as exc:
-        payload = error_envelope(
-            command,
-            str(exc),
-            "APP_LIST_FAILED",
-            "Ensure registry and applications.yml are valid.",
-        )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
-
-    app_payload = []
-    for application in sorted(apps, key=lambda a: a.id):
-        app_payload.append(
-            {
-                "id": application.id,
-                "description": application.description,
-                "member_count": len(application.schema.members),
-            }
-        )
-
-    result = {"applications": app_payload, "count": len(app_payload)}
-    payload = ok_envelope(
-        command,
-        result,
-        [
-            {"command": "infralink app show <id>", "description": "Show app details"},
-        ],
+def list_apps(
+    ctx: Context,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    """List application groupings."""
+    selected = _active_collection(collection, cursor, ("items",))
+    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=True)
+    offset = _page_offset(
+        command="app list",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
     )
-    click.echo(json.dumps(payload))
+    result = query_list_apps(
+        ctx.registry,
+        ctx.edges,
+        limit=limit,
+        offset=offset,
+    )
+    _attach_next_cursors(
+        result,
+        command="app list",
+        collections=("items",),
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    _emit_query_result(
+        ctx=ctx,
+        path=["app", "list"],
+        command_argv=["app", "list"],
+        result=result,
+        limit=limit,
+    )
 
 
 @app.command(name="show")
 @click.argument("app_id")
+@_page_options
 @pass_context
-def show_app(ctx: Context, app_id: str) -> None:
-    """Show details for a specific application."""
-    command = click.get_current_context().command_path.replace("cli", "infralink")
-    try:
-        registry = ctx.registry
-        application = registry.applications.get_application(app_id)
-        if not application:
-            raise click.ClickException(f"Application not found: {app_id}")
-
-        edges = application.resolve_edges(registry, ctx.edges)
-    except Exception as exc:
-        payload = error_envelope(
-            command,
-            str(exc),
-            "APP_SHOW_FAILED",
-            f"Check if app {app_id} exists.",
-        )
-        click.echo(json.dumps(payload))
-        raise SystemExit(1)
-
-    result = application.to_dict()
-    result["resolved_edges"] = [
-        {
-            "id": e.id,
-            "type": e.type.value,
-            "from_service": e.source_service,
-            "to_service": e.target_service,
-            "to_host": e.target_host,
-        }
-        for e in edges
-    ]
-
-    payload = ok_envelope(
-        command,
-        result,
-        [
-            {"command": "infralink app list", "description": "List all apps"},
-        ],
+def show_app(
+    ctx: Context,
+    app_id: str,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    """Show one application grouping."""
+    collections = ("services", "edges")
+    selected = _active_collection(collection, cursor, collections)
+    fingerprint = _topology_fingerprint(
+        ctx,
+        include_registry=True,
+        include_edges=True,
+        identifiers={"app_id": app_id},
     )
-    click.echo(json.dumps(payload))
+    offset = _page_offset(
+        command="app show",
+        collection=selected,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    result = query_show_app(
+        ctx.registry,
+        ctx.edges,
+        app_id,
+        collection=selected,
+        limit=limit,
+        offset=offset,
+    )
+    _attach_next_cursors(
+        result,
+        command="app show",
+        collections=collections,
+        selected=selected,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    _emit_query_result(
+        ctx=ctx,
+        path=["app", "show"],
+        command_argv=["app", "show", app_id],
+        result=result,
+        limit=limit,
+    )

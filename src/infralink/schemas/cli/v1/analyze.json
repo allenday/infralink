@@ -1,0 +1,457 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "argv",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "AnalysisSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "$ref": "#/$defs/Page_Diagnostic_"
+        },
+        "edge_count": {
+          "title": "Edge Count",
+          "type": "integer"
+        },
+        "host_count": {
+          "title": "Host Count",
+          "type": "integer"
+        },
+        "service_count": {
+          "title": "Service Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host_count",
+        "service_count",
+        "edge_count",
+        "diagnostics"
+      ],
+      "title": "AnalysisSummary",
+      "type": "object"
+    },
+    "AnalyzeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "analysis": {
+          "$ref": "#/$defs/AnalysisSummary"
+        },
+        "artifacts": {
+          "$ref": "#/$defs/Page_Artifact_"
+        }
+      },
+      "required": [
+        "analysis",
+        "artifacts"
+      ],
+      "title": "AnalyzeResult",
+      "type": "object"
+    },
+    "Artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "sha256"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "CommandContext": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw": {
+          "title": "Raw",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw",
+        "parsed",
+        "resolved"
+      ],
+      "title": "CommandContext",
+      "type": "object"
+    },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "severity"
+      ],
+      "title": "Diagnostic",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "Meta",
+      "type": "object"
+    },
+    "PageInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
+        "returned": {
+          "minimum": 0,
+          "title": "Returned",
+          "type": "integer"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        }
+      },
+      "required": [
+        "limit",
+        "returned"
+      ],
+      "title": "PageInfo",
+      "type": "object"
+    },
+    "Page_Artifact_": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "page": {
+          "$ref": "#/$defs/PageInfo"
+        }
+      },
+      "required": [
+        "items",
+        "page"
+      ],
+      "title": "Page[Artifact]",
+      "type": "object"
+    },
+    "Page_Diagnostic_": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "page": {
+          "$ref": "#/$defs/PageInfo"
+        }
+      },
+      "required": [
+        "items",
+        "page"
+      ],
+      "title": "Page[Diagnostic]",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CommandContext"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalyzeResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "infralink.cli/v1",
+      "default": "infralink.cli/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "next_actions"
+  ],
+  "title": "Envelope[AnalyzeResult]",
+  "type": "object"
+}

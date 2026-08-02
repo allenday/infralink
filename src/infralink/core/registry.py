@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import yaml
 
-from infralink.core.schema import HostSchema, HostStatus, RegistrySchema, RoleConfig, SlotBinding
 from infralink.core.application import ApplicationSet
+from infralink.core.schema import HostSchema, HostStatus, RegistrySchema, RoleConfig, SlotBinding
 from infralink.core.template import ServiceTemplateSet
 
 
@@ -70,6 +71,11 @@ class Host:
         return self._schema.projects
 
     @property
+    def group(self) -> str | None:
+        """First project, retained for backward compatibility."""
+        return self.projects[0] if self.projects else None
+
+    @property
     def cloud(self) -> str | None:
         return self._schema.cloud
 
@@ -92,6 +98,21 @@ class Host:
     @property
     def public_ip(self) -> str | None:
         return self._schema.public_ip
+
+    @property
+    def bws_project(self) -> str | None:
+        """Primary secret project declared for this host."""
+        return self._schema.bws_project
+
+    @property
+    def bws_machine_account(self) -> str | None:
+        """Machine account declared for this host."""
+        return self._schema.bws_machine_account
+
+    @property
+    def bws_extra_projects(self) -> tuple[str, ...]:
+        """Additional secret projects declared for this host."""
+        return tuple(self._schema.bws_extra_projects)
 
     @property
     def managed_services(self) -> dict[str, Any]:
@@ -232,7 +253,9 @@ class Host:
         return result
 
     def __repr__(self) -> str:
-        return f"Host({self.canonical_name}, uuid={self.uuid_prefix}..., status={self.status.value})"
+        return (
+            f"Host({self.canonical_name}, uuid={self.uuid_prefix}..., status={self.status.value})"
+        )
 
 
 class Registry:
@@ -332,9 +355,7 @@ class Registry:
 
             for uuid, host_data in (data.get("hosts") or {}).items():
                 host_schema = HostSchema(**host_data)
-                hosts[uuid] = Host(
-                    uuid, host_schema.model_dump(), tailnet_domain, templates
-                )
+                hosts[uuid] = Host(uuid, host_schema.model_dump(), tailnet_domain, templates)
 
         # Load applications.yml if it exists in root
         apps = ApplicationSet.load(root_path / "applications.yml")
@@ -355,21 +376,14 @@ class Registry:
 
         # Load templates and applications if provided in dict
         templates_data = data.get("templates")
-        templates = (
-            ServiceTemplateSet.from_dict(templates_data) if templates_data else None
-        )
+        templates = ServiceTemplateSet.from_dict(templates_data) if templates_data else None
 
         apps_data = data.get("applications")
         apps = ApplicationSet.from_dict(apps_data) if apps_data else None
 
         # UUID is the key
-        hosts = {
-            uuid: Host(uuid, h, tailnet_domain, templates)
-            for uuid, h in hosts_data.items()
-        }
-        return cls(
-            hosts, data.get("ansible_defaults"), tailnet_domain, apps, templates
-        )
+        hosts = {uuid: Host(uuid, h, tailnet_domain, templates) for uuid, h in hosts_data.items()}
+        return cls(hosts, data.get("ansible_defaults"), tailnet_domain, apps, templates)
 
     def get_by_uuid(self, uuid: str) -> Host | None:
         """Get host by full UUID (primary lookup)."""
@@ -460,17 +474,17 @@ class Registry:
 
 
 def _service_names_for_host(host: HostSchema) -> set[str]:
-    return set(host.managed_services.keys()) | set(host.services.keys()) | set(
-        host.unmanaged_services.keys()
+    return (
+        set(host.managed_services.keys())
+        | set(host.services.keys())
+        | set(host.unmanaged_services.keys())
     )
 
 
-def validate_role_slots(
-    hosts: dict[str, HostSchema], roles: dict[str, RoleConfig]
-) -> list[str]:
+def validate_role_slots(hosts: dict[str, HostSchema], roles: dict[str, RoleConfig]) -> list[str]:
     """Validate that all required role slots are bound."""
     errors: list[str] = []
-    for host_id, host in hosts.items():
+    for _host_id, host in hosts.items():
         for role_name in host.roles:
             role = roles.get(role_name)
             if role is None:
@@ -517,7 +531,7 @@ def validate_template_slots(
 ) -> list[str]:
     """Validate that all required template slots are bound."""
     errors: list[str] = []
-    for host_id, host in hosts.items():
+    for _host_id, host in hosts.items():
         for template_id in host.templates:
             template = templates.get_template(template_id)
             if template is None:

@@ -1,0 +1,337 @@
+name: Promote release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full lowercase candidate source commit SHA
+        required: true
+        type: string
+      artifact_id:
+        description: Numeric Actions candidate artifact ID
+        required: true
+        type: string
+      candidate_run_id:
+        description: Numeric successful Release candidate workflow run ID
+        required: true
+        type: string
+      woodpecker_evidence_oci_digest:
+        description: Immutable sha256 digest of private compatibility evidence
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: infralink-v0.2.0-promotion
+  cancel-in-progress: false
+
+env:
+  GH_VERSION: "2.76.2"
+  GH_SHA256: "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e"
+  COSIGN_VERSION: "2.4.3"
+  COSIGN_SHA256: "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708"
+  ORAS_VERSION: "1.3.0"
+  ORAS_SHA256: "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64"
+  EVIDENCE_REPOSITORY: ghcr.io/cyberstorm-dev/infralink-gate-evidence
+  RELEASE_TAG: v0.2.0
+
+jobs:
+  promote:
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+      packages: read
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      ARTIFACT_ID: ${{ inputs.artifact_id }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      EVIDENCE_OCI_DIGEST: ${{ inputs.woodpecker_evidence_oci_digest }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate dispatch and immutable inputs
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$DISPATCH_REF" = "refs/heads/main"
+          [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EVIDENCE_OCI_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+      # actions/checkout v4.2.2: trusted policy and key material from protected main.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: trusted
+      - name: Verify trusted checkout and candidate ancestry
+        working-directory: trusted
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          git fetch --tags origin
+          test -z "$(git status --porcelain)"
+      # actions/checkout v4.2.2: candidate source is isolated from trusted policy.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          path: candidate-source
+          persist-credentials: false
+      - name: Verify candidate source checkout
+        working-directory: candidate-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Install checksum-pinned promotion tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          mkdir -p "$RUNNER_TEMP/tools"
+          gh_archive="gh_${GH_VERSION}_linux_amd64.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/$gh_archive" \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/$gh_archive"
+          echo "$GH_SHA256  $RUNNER_TEMP/$gh_archive" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/$gh_archive" -C "$RUNNER_TEMP"
+          install -m 0555 "$RUNNER_TEMP/gh_${GH_VERSION}_linux_amd64/bin/gh" \
+            "$RUNNER_TEMP/tools/gh"
+
+          cosign_asset=cosign-linux-amd64
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/$cosign_asset" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/$cosign_asset"
+          echo "$COSIGN_SHA256  $RUNNER_TEMP/$cosign_asset" | sha256sum --check -
+          install -m 0555 "$RUNNER_TEMP/$cosign_asset" "$RUNNER_TEMP/tools/cosign"
+
+          oras_archive="oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/$oras_archive" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/$oras_archive"
+          echo "$ORAS_SHA256  $RUNNER_TEMP/$oras_archive" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/$oras_archive" -C "$RUNNER_TEMP" oras
+          install -m 0555 "$RUNNER_TEMP/oras" "$RUNNER_TEMP/tools/oras"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+      - name: Query exact candidate artifact and run
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p metadata
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" \
+            > metadata/artifact.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" \
+            > metadata/run.json
+      # actions/download-artifact v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_run_id }}
+          path: candidate
+      - name: Verify GitHub provenance for every candidate file
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p attestations
+          expected=$'SHA256SUMS\ninfralink-0.2.0-py3-none-any.whl\ninfralink-0.2.0.tar.gz\nmanifest.json'
+          actual="$(find candidate -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)"
+          test "$actual" = "$expected"
+          test "$(find candidate -mindepth 1 -maxdepth 1 | wc -l)" -eq 4
+          for file in \
+            candidate/infralink-0.2.0-py3-none-any.whl \
+            candidate/infralink-0.2.0.tar.gz \
+            candidate/manifest.json \
+            candidate/SHA256SUMS
+          do
+            gh attestation verify "$file" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml" \
+              --signer-digest "$SOURCE_SHA" \
+              --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners \
+              --format json > "attestations/$(basename "$file").json"
+          done
+      - name: Pull immutable Woodpecker evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_ref="$EVIDENCE_REPOSITORY@$EVIDENCE_OCI_DIGEST"
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
+          mkdir -p evidence
+          oras manifest fetch "$evidence_ref" --format json > metadata/evidence-oci.json
+          oras pull "$evidence_ref" --output evidence
+      - name: Verify Woodpecker signature and exact promotion contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f trusted/security/woodpecker-evidence-cosign.pub
+          echo "$WOODPECKER_COSIGN_KEY_SHA256  trusted/security/woodpecker-evidence-cosign.pub" \
+            | sha256sum --check -
+          cosign verify-blob \
+            --key trusted/security/woodpecker-evidence-cosign.pub \
+            --bundle evidence/woodpecker-evidence.sigstore.json \
+            evidence/woodpecker-evidence.json
+          python trusted/scripts/verify_release_promotion.py \
+            --candidate-dir candidate \
+            --evidence evidence/woodpecker-evidence.json \
+            --evidence-bundle evidence/woodpecker-evidence.sigstore.json \
+            --evidence-oci-manifest metadata/evidence-oci.json \
+            --evidence-oci-digest "$EVIDENCE_OCI_DIGEST" \
+            --artifact-metadata metadata/artifact.json \
+            --run-metadata metadata/run.json \
+            --approved-private-gate trusted/security/approved-private-gate.json \
+            --attestation-dir attestations \
+            --source-sha "$SOURCE_SHA" \
+            --artifact-id "$ARTIFACT_ID" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --output metadata/promotion.json
+        env:
+          WOODPECKER_COSIGN_KEY_SHA256: ${{ vars.WOODPECKER_COSIGN_KEY_SHA256 }}
+      - name: Create or recover the exact annotated tag
+        working-directory: trusted
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v0.2.0
+          remote="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+          remote_base="$(printf '%s\n' "$remote" | awk -v ref="refs/tags/$tag" '$2 == ref {print $1}')"
+          remote_target="$(printf '%s\n' "$remote" | awk -v ref="refs/tags/$tag^{}" '$2 == ref {print $1}')"
+          if test -n "$remote_base"; then
+            test "$remote_target" = "$SOURCE_SHA"
+            if ! git show-ref --verify --quiet "refs/tags/$tag"; then
+              git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag"
+            fi
+          fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            test "$(git cat-file -t "refs/tags/$tag")" = tag
+            test "$(git rev-list -n 1 "refs/tags/$tag")" = "$SOURCE_SHA"
+          else
+            git tag -a v0.2.0 "$SOURCE_SHA" -m "Infralink v0.2.0"
+          fi
+          git push origin refs/tags/v0.2.0
+          verified="$(git ls-remote --tags origin "refs/tags/$tag^{}" | awk '{print $1}')"
+          test "$verified" = "$SOURCE_SHA"
+      - name: Stage the seven exact release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          install -m 0444 candidate/SHA256SUMS release-assets/SHA256SUMS
+          install -m 0444 candidate/infralink-0.2.0-py3-none-any.whl \
+            release-assets/infralink-0.2.0-py3-none-any.whl
+          install -m 0444 candidate/infralink-0.2.0.tar.gz \
+            release-assets/infralink-0.2.0.tar.gz
+          install -m 0444 candidate/manifest.json release-assets/manifest.json
+          install -m 0444 metadata/promotion.json release-assets/promotion.json
+          install -m 0444 evidence/woodpecker-evidence.json \
+            release-assets/woodpecker-evidence.json
+          install -m 0444 evidence/woodpecker-evidence.sigstore.json \
+            release-assets/woodpecker-evidence.sigstore.json
+      - name: Create or recover an exact draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view v0.2.0 --json databaseId,isDraft \
+            --repo "$GITHUB_REPOSITORY" > metadata/release-lookup.json 2>/dev/null
+          then
+            if ! gh release create v0.2.0 --draft --verify-tag \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title "Infralink v0.2.0" \
+              --notes-file trusted/docs/releases/v0.2.0.md \
+              release-assets/SHA256SUMS \
+              release-assets/infralink-0.2.0-py3-none-any.whl \
+              release-assets/infralink-0.2.0.tar.gz \
+              release-assets/manifest.json \
+              release-assets/promotion.json \
+              release-assets/woodpecker-evidence.json \
+              release-assets/woodpecker-evidence.sigstore.json
+            then
+              echo "Draft creation did not succeed; requiring an exact recoverable release." >&2
+            fi
+            gh release view v0.2.0 --json databaseId,isDraft \
+              --repo "$GITHUB_REPOSITORY" > metadata/release-lookup.json
+          fi
+          python trusted/scripts/verify_release_publication.py resolve \
+            --lookup metadata/release-lookup.json > metadata/release-id
+          release_id="$(cat metadata/release-id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > metadata/release.json
+          python trusted/scripts/verify_release_publication.py plan \
+            --release-metadata metadata/release.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --source-sha "$SOURCE_SHA" \
+            --output metadata/release-plan.json
+          mapfile -t missing < <(
+            python trusted/scripts/verify_release_publication.py missing \
+              --plan metadata/release-plan.json \
+              --asset-dir release-assets
+          )
+          if test "${#missing[@]}" -gt 0; then
+            if ! gh release upload v0.2.0 --repo "$GITHUB_REPOSITORY" "${missing[@]}"
+            then
+              echo "Upload raced or failed; requiring exact refetched release state." >&2
+            fi
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > metadata/release-after-upload.json
+          python trusted/scripts/verify_release_publication.py plan \
+            --release-metadata metadata/release-after-upload.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --source-sha "$SOURCE_SHA" \
+            --output metadata/release-after-upload-plan.json
+      - name: Download and verify every draft release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir published-assets
+          python trusted/scripts/verify_release_publication.py downloads \
+            --release-metadata metadata/release-after-upload.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --source-sha "$SOURCE_SHA" > metadata/release-downloads.tsv
+          while IFS=$'\t' read -r asset_id asset_name; do
+            [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              -H "Accept: application/octet-stream" > "published-assets/$asset_name"
+          done < metadata/release-downloads.tsv
+          python trusted/scripts/verify_release_publication.py verify \
+            --release-metadata metadata/release-after-upload.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --downloaded-dir published-assets \
+            --source-sha "$SOURCE_SHA"
+      - name: Publish only the byte-verified draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit v0.2.0 --draft=false --repo "$GITHUB_REPOSITORY"
+          release_id="$(cat metadata/release-id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            > metadata/release-published.json
+          python trusted/scripts/verify_release_publication.py verify \
+            --release-metadata metadata/release-published.json \
+            --notes trusted/docs/releases/v0.2.0.md \
+            --asset-dir release-assets \
+            --downloaded-dir published-assets \
+            --source-sha "$SOURCE_SHA" \
+            --require-published

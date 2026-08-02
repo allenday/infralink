@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 class ValidationError(ValueError):
@@ -30,5 +30,5 @@ class ValidationResult:
         cls,
         errors: Iterable[str] | None = None,
         warnings: Iterable[str] | None = None,
-    ) -> "ValidationResult":
+    ) -> ValidationResult:
         return cls(tuple(errors or ()), tuple(warnings or ()))

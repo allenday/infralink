@@ -1,4 +1,4 @@
-from infralink.cli.main import cli
+from infralink.cli.main import run
 
 if __name__ == "__main__":
-    cli()
+    run()

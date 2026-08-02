@@ -1,195 +1,169 @@
 # Infralink
 
-Infrastructure topology modeling with UUID-based nodes and typed edges.
-
-## Overview
-
-Infralink provides tools for:
-- Declaring infrastructure nodes with UUID primary keys
-- Defining typed edges between nodes (database, queue, cluster, etc.)
-- Resolving edge targets for template rendering
-- Health checking edge connectivity
-- Generating infrastructure diagrams (Mermaid, D2, Graphviz)
-- Generating documentation from topology declarations
+Infralink is a Python library and JSON-only CLI for modeling infrastructure
+topology with UUID-based hosts, typed edges, bounded queries, health checks,
+safe connection templates, diagrams, and generated documentation.
 
 ## Installation
 
-```bash
-# From source
-pip install -e .
+Infralink supports Python 3.10 through 3.12. Artifact-generating commands require POSIX
+filesystem semantics and currently support Linux for secure transactional writes.
 
-# With development dependencies
-pip install -e ".[dev]"
+```bash
+python -m pip install infralink
+python -m pip install "infralink[bws]"  # optional hosted Bitwarden Secrets Manager audit
 ```
 
-## Quick Start
-
-### Define Your Registry
+## Public Example
 
 ```yaml
 # registry.yml
-# - UUID is the primary key (dictionary key)
-# - Services are first-class objects with port, protocol, exposure
 hosts:
   d1b9e5d5-36b0-459d-a556-96622811fbd5:
-    canonical_name: my-database
+    canonical_name: database.example.com
     status: active
     group: production
-    cloud: aws
-    tailscale_ip: 100.78.109.111
+    cloud: example-cloud
+    tailscale_ip: 192.0.2.10
     services:
       postgresql:
         port: 5432
         protocol: postgresql
         exposure: internal
-      redis:
-        port: 6379
-        protocol: redis
-        exposure: internal
-      node-exporter:
-        port: 9100
-        protocol: http
-        exposure: internal
 ```
-
-### Define Your Edges
 
 ```yaml
 # edges.yml
 schema_version: "1.0"
 edges:
-  - id: app-to-postgres
+  - id: 058e29ff-57b9-47c8-b6fa-0914ac03e25c
     type: database
     from:
-      hosts:
-        - a1b2c3d4-e5f6-7890-abcd-ef1234567890
-      service: web-app
+      hosts: [fa2b9872-d94c-4b20-a73a-57a205560769]
+      service: api
     to:
       host: d1b9e5d5-36b0-459d-a556-96622811fbd5
       service: postgresql
       port: 5432
-    protocol: postgresql+psycopg2
-    metadata:
-      criticality: critical
-      purpose: Application database
+    protocol: postgresql
+    auth:
+      type: password
+      secret_ref: example/database-password
 ```
 
-### Use the CLI
+## CLI Contract
+
+Every invocation writes exactly one `infralink.cli/v1` JSON envelope to stdout.
+The envelope includes `ok`, a shallow parsed command view, a typed `result` or
+redacted `error`, and bounded `next_actions`. Lists use explicit limits and
+opaque cursors. Use `infralink help [command ...]` for machine-readable
+discovery.
 
 ```bash
-# Validate configuration
-infralink validate
-
-# Check health of all edges
-infralink check
-
-# Check only critical edges
-infralink check --critical-only
-
-# Resolve an edge to endpoint
-infralink resolve app-to-postgres
-# Output: 100.78.109.111:5432
-
-# Generate connection URL
-infralink resolve app-to-postgres --format url -u myuser -p mypass -d mydb
-# Output: postgresql+psycopg2://myuser:mypass@100.78.109.111:5432/mydb
-
-# Generate diagrams
-infralink diagram --format mermaid --output docs/
-
-# Generate documentation
-infralink docs --output docs/hosts/
+infralink --registry registry.yml --edges edges.yml validate
+infralink --registry registry.yml --edges edges.yml host show \
+  d1b9e5d5-36b0-459d-a556-96622811fbd5
+infralink --registry registry.yml --edges edges.yml resolve \
+  058e29ff-57b9-47c8-b6fa-0914ac03e25c --user app --database app
+infralink --registry registry.yml --edges edges.yml secrets inspect
 ```
 
-### Use the Python API
+Resolution returns endpoint metadata, declared secret references, and a safe
+template such as:
+
+```text
+postgresql://app:${secret:example/database-password}@192.0.2.10:5432/app
+```
+
+The CLI never returns resolved secret values and accepts no arbitrary secret
+identifier lookup.
+
+Exit codes are stable:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Positive domain result |
+| `1` | Completed negative domain result |
+| `2` | Usage error |
+| `3` | Input, schema, or entity error |
+| `4` | Provider or authentication failure |
+| `69` | Unsupported platform |
+| `70` | Unexpected internal failure |
+| `74` | Artifact I/O failure or retained recovery state |
+
+Exit `74` uses `artifact_io_failed` for storage failures and
+`artifact_recovery_required` when recovery state is retained. `internal_error`
+is reserved for exit `70`.
+
+## Python API
 
 ```python
-from infralink import Registry, EdgeSet, EdgeResolver
+from infralink import EdgeResolver, EdgeSet, Registry
 
-# Load topology
 registry = Registry.load("registry.yml")
 edges = EdgeSet.load("edges.yml")
-
-# Query hosts
-host = registry.get("my-database")
-print(f"Database IP: {host.tailscale_ip}")
-
-# Query edges
-db_edges = edges.database_edges()
-critical = edges.critical_edges()
-
-# Resolve edges
 resolver = EdgeResolver(registry, edges)
-endpoint = resolver.get_target_endpoint("app-to-postgres")
-url = resolver.get_postgres_url(
-    "app-to-postgres",
-    user="myuser",
-    password="mypass",
-    database="mydb"
-)
 
-# Health checks
-from infralink.health import check_edge_health
-result = check_edge_health(edges.get("app-to-postgres"), resolver)
-print(f"Healthy: {result.healthy}, Latency: {result.latency_ms}ms")
+endpoint = resolver.get_target_endpoint("058e29ff-57b9-47c8-b6fa-0914ac03e25c")
+template = resolver.get_connection_template(
+    "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
+    user="app",
+    database="app",
+)
 ```
 
-## CLI Commands
+Legacy Python URL helpers remain available for compatibility but are
+deprecated. New integrations should use secret references and connection
+templates.
 
-| Command | Description |
-|---------|-------------|
-| `infralink info` | Show registry and edge summary |
-| `infralink hosts` | List all hosts |
-| `infralink edges-list` | List all edges |
-| `infralink validate` | Validate registry and edges |
-| `infralink check` | Run health checks on edges |
-| `infralink resolve <edge>` | Resolve edge to endpoint |
-| `infralink diagram` | Generate infrastructure diagrams |
-| `infralink docs` | Generate documentation |
+## Hosted BWS
 
-## Edge Types
-
-| Type | Description | Health Check |
-|------|-------------|--------------|
-| `database` | SQL/NoSQL connections | TCP or Query |
-| `queue` | Message broker connections | PING or TCP |
-| `cluster` | Multi-node coordination | API |
-| `telemetry` | Metrics/logs push | HTTP |
-| `monitoring` | Prometheus scrape | HTTP |
-| `api` | HTTP API calls | HTTP |
-| `storage` | Mount/object storage | TCP |
-
-## Configuration
-
-Default paths (can be overridden with CLI options):
-- Registry: `examples/registry.yml`
-- Edges: `examples/edges.yml`
+`infralink secrets inspect` is offline. Provider audit requires the optional
+extra and hosted Bitwarden Secrets Manager credentials:
 
 ```bash
-# Custom paths
-infralink -r my-registry.yml -e my-edges.yml validate
+export BWS_ACCESS_TOKEN="<machine-account-token>"
+export BWS_ORGANIZATION_ID="<organization-uuid>"
+infralink --registry registry.yml --edges edges.yml secrets audit --provider bws
 ```
+
+Production `v0.2.0` accepts Bitwarden's hosted endpoints only. Endpoint override
+environment variables are rejected; custom endpoints remain deferred. Audit is
+read-only, is restricted to references declared by topology, and does not fetch
+secret values.
+
+## Candidate Adoption And Rollback
+
+The manual GitHub `Release candidate` workflow requires a full source commit
+SHA and the same selected workflow ref. It runs all gates, builds one wheel and
+one sdist once, creates canonical `manifest.json` and `SHA256SUMS`, attests the
+four files, and uploads them as an Actions artifact. It does not publish,
+release, tag, or deploy.
+
+Secret scanning deliberately uses the pinned Gitleaks CLI archive with its
+published checksum rather than `gitleaks/gitleaks-action`; this keeps the public
+candidate workflow free of a long-lived organization license secret.
+
+Consumers adopt the exact artifact ID after checking the GitHub attestation,
+source commit, manifest, and checksums. Pin that artifact's wheel digest in the
+private consumer gate. Rollback means restoring the previously verified
+artifact ID, source commit, and wheel digest; no rebuild is involved.
+
+Repository administrators must enable GitHub artifact attestations and retain
+candidate artifacts long enough for the private verification gate.
 
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Type checking
-mypy src/
-
-# Linting
-ruff check src/
+python -m pip install -e ".[dev]"
+ruff format --check src tests scripts
+ruff check src tests scripts
+mypy src scripts
+python -m pytest
 ```
 
-## Documentation
-
-- [PRD](PRD.md) - Product Requirements Document
-- [BACKLOG](BACKLOG.md) - Product Backlog
+See [the v0.2 compatibility guide](docs/compatibility/v0.2.md), [PRD](PRD.md),
+and [backlog](BACKLOG.md).
 
 ## License
 

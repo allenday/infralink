@@ -3,7 +3,9 @@
 import pytest
 
 from infralink.core.edges import Edge, EdgeSet
-from infralink.core.schema import EdgeType, Criticality
+from infralink.core.errors import ResolutionError as CoreResolutionError
+from infralink.core.resolver import ResolutionError
+from infralink.core.schema import Criticality, EdgeType
 
 
 @pytest.fixture
@@ -111,6 +113,36 @@ class TestEdge:
 
         assert edge.matches_source("fa2b9872-d94c-4b20-a73a-57a205560769")
         assert not edge.matches_source("nonexistent-uuid")
+
+    def test_implicit_healthcheck_marker_is_excluded_from_serialization(self, sample_edge_data):
+        edge = Edge(sample_edge_data)
+
+        assert edge.healthcheck.explicit is False
+        assert "explicit" not in edge.healthcheck.model_dump()
+        assert edge._schema.model_dump()["healthcheck"] is None
+
+    def test_explicit_healthcheck_marker_does_not_mutate_stored_schema(self, sample_edge_data):
+        sample_edge_data["healthcheck"] = {"type": "tcp", "timeout": "10s"}
+        edge = Edge(sample_edge_data)
+        stored_healthcheck = edge._schema.healthcheck
+
+        healthcheck = edge.healthcheck
+
+        assert healthcheck.explicit is True
+        assert healthcheck.timeout == "10s"
+        assert healthcheck is not stored_healthcheck
+        assert stored_healthcheck is not None
+        assert "explicit" not in stored_healthcheck.model_dump()
+        assert "explicit" not in edge._schema.model_dump()["healthcheck"]
+
+    def test_missing_target_port_raises_stable_resolution_error(self, sample_edge_data):
+        del sample_edge_data["to"]["port"]
+        edge = Edge(sample_edge_data)
+
+        with pytest.raises(ResolutionError, match="No target port declared"):
+            _ = edge.target_port
+
+        assert ResolutionError is CoreResolutionError
 
 
 class TestEdgeSet:
