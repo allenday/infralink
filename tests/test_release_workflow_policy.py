@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -11,6 +13,8 @@ RELEASE = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
 RELEASE_NOTES = PROJECT_ROOT / "docs" / "releases" / "v0.2.0.md"
 CI = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 SHA_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+APPROVED_PRIVATE_GATE = PROJECT_ROOT / "security" / "approved-private-gate.json"
+WOODPECKER_EVIDENCE_KEY = PROJECT_ROOT / "security" / "woodpecker-evidence-cosign.pub"
 
 
 def load_workflow(path: Path) -> dict[str, object]:
@@ -31,6 +35,33 @@ def all_steps(workflow: dict[str, object]) -> list[dict[str, object]]:
 
 def all_run_text(workflow: dict[str, object]) -> str:
     return "\n".join(str(step.get("run", "")) for step in all_steps(workflow))
+
+
+def test_woodpecker_evidence_public_key_is_parseable_and_has_approved_fingerprint() -> None:
+    key = WOODPECKER_EVIDENCE_KEY.read_bytes()
+    parsed = subprocess.run(
+        ["openssl", "pkey", "-pubin", "-in", str(WOODPECKER_EVIDENCE_KEY), "-noout"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert parsed.returncode == 0, parsed.stderr
+    assert hashlib.sha256(key).hexdigest() == (
+        "8a1588a25d8b6de09cee793719109dbf6dbf6e2100337ae7215c5b0e0a03237b"
+    )
+
+
+def test_private_gate_approval_matches_approved_infra_management_sources() -> None:
+    assert json.loads(APPROVED_PRIVATE_GATE.read_text(encoding="utf-8")) == {
+        "contract_harness_sha256": (
+            "20d74986c30447236c7da09d715752c581955473e9a437fc22fb45b49a556751"
+        ),
+        "dependency_lock_sha256": (
+            "2ed331ff627426f164b40ade8652756c22fcdcaf82de5214ed3700e664839750"
+        ),
+        "infra_management_commit": "f420ed121516b28005acf62f7b911262c54f23be",
+    }
 
 
 def run_candidate_provenance(
