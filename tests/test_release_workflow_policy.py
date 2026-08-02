@@ -55,12 +55,12 @@ def test_woodpecker_evidence_public_key_is_parseable_and_has_approved_fingerprin
 def test_private_gate_approval_matches_approved_infra_management_sources() -> None:
     assert json.loads(APPROVED_PRIVATE_GATE.read_text(encoding="utf-8")) == {
         "contract_harness_sha256": (
-            "20d74986c30447236c7da09d715752c581955473e9a437fc22fb45b49a556751"
+            "325fdf588ab5dad089c62e48d2b680b1397c242c37882369ce06a90b44d4785e"
         ),
         "dependency_lock_sha256": (
             "2ed331ff627426f164b40ade8652756c22fcdcaf82de5214ed3700e664839750"
         ),
-        "infra_management_commit": "583d80fe52371796a4cae1f210fd9c4a77c0a7d2",
+        "infra_management_commit": "bcf0428935a29605642107343373de94f0af7161",
     }
 
 
