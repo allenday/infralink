@@ -560,6 +560,32 @@ class TestEdgeResolver:
         assert parsed.username == "app"
         assert unquote(parsed.password or "") == "p@ss word"
 
+    def test_connection_template_preserves_jinja_safe_secret_reference(self, registry):
+        secret_ref = "_9157ddeb_postgresql_rw_password_woodpecker"
+        edges = EdgeSet.from_dict(
+            {
+                "edges": [
+                    {
+                        "id": SECRET_EDGE_ID,
+                        "type": "database",
+                        "from": {"hosts": [], "service": "app"},
+                        "to": {
+                            "host": "d1b9e5d5-36b0-459d-a556-96622811fbd5",
+                            "service": "database",
+                            "port": 5432,
+                        },
+                        "protocol": "postgresql",
+                        "auth": {"type": "password", "secret_ref": secret_ref},
+                    }
+                ]
+            }
+        )
+
+        template = EdgeResolver(registry, edges).get_connection_template(SECRET_EDGE_ID)
+
+        assert template is not None
+        assert f"${{secret:{secret_ref}}}" in template
+
     def test_basic_auth_connection_template_uses_secret_placeholder(self, registry):
         edges = EdgeSet.from_dict(
             {
