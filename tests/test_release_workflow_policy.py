@@ -15,7 +15,7 @@ def test_github_actions_workflows_are_absent() -> None:
     assert not WORKFLOWS.exists() or list(WORKFLOWS.iterdir()) == []
 
 
-def test_woodpecker_quality_matrix_is_authoritative() -> None:
+def test_woodpecker_three_version_quality_gate_is_authoritative() -> None:
     workflow = load_woodpecker()
 
     assert workflow["when"] == [
@@ -23,18 +23,21 @@ def test_woodpecker_quality_matrix_is_authoritative() -> None:
         {"event": "pull_request"},
         {"event": "manual"},
     ]
-    assert workflow["matrix"] == {"PYTHON_VERSION": ["3.10", "3.11", "3.12"]}
-    quality = workflow["steps"]["quality"]
-    assert quality["image"] == "python:${PYTHON_VERSION}-slim-bookworm"
-    commands = "\n".join(quality["commands"])
-    for required in (
-        'python -m pip install --disable-pip-version-check -e ".[dev]"',
-        "python -m ruff format --check src tests scripts",
-        "python -m ruff check src tests scripts",
-        "python -m mypy src scripts",
-        "python -m pytest",
-        "python scripts/generate_cli_schemas.py",
-        "git diff --exit-code",
-        "python -m build",
-    ):
-        assert required in commands
+    assert "matrix" not in workflow
+    for version in ("3.10", "3.11", "3.12"):
+        quality = workflow["steps"][f"quality-{version}"]
+        assert quality["image"] == f"python:{version}-slim-bookworm"
+        assert quality["depends_on"] == []
+        commands = "\n".join(quality["commands"])
+        for required in (
+            "cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality",
+            'python -m pip install --disable-pip-version-check -e ".[dev]"',
+            "python -m ruff format --check src tests scripts",
+            "python -m ruff check src tests scripts",
+            "python -m mypy src scripts",
+            "python -m pytest",
+            "python scripts/generate_cli_schemas.py",
+            "git diff --exit-code",
+            "python -m build",
+        ):
+            assert required in commands

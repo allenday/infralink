@@ -91,10 +91,10 @@ hosted Bitwarden endpoints only. Custom endpoints are deferred beyond `v0.2.0`.
 ## Release Boundary
 
 Woodpecker is the only CI and release executor. Its manual release step runs
-for `main` on Python 3.12 only after the three-version quality matrix succeeds.
-It requires the requested version and package version to equal `0.2.0`, and
-requires the pipeline commit to equal the current `main` commit. It publishes
-exactly:
+for `main` on Python 3.12 only after all three Python-version quality gates
+succeed. It requires the requested version and package version to equal
+`0.2.0`, and requires the pipeline commit to equal the current `main` commit.
+It publishes exactly:
 
 ```text
 infralink-0.2.0-py3-none-any.whl

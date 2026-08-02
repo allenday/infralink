@@ -135,9 +135,9 @@ secret values.
 ## Release Adoption And Rollback
 
 The manual Woodpecker release step runs only for `main` on Python 3.12 after
-the full three-version quality matrix. It requires release version `0.2.0` and
-the pipeline commit to equal the current `main` commit, then rebuilds and
-publishes exactly the wheel, sdist, `SHA256SUMS`, and
+all three parallel Python-version quality gates. It requires release version
+`0.2.0` and the pipeline commit to equal the current `main` commit, then
+rebuilds and publishes exactly the wheel, sdist, `SHA256SUMS`, and
 `SHA256SUMS.sigstore.json` to GitHub Release `v0.2.0`. Existing tags or releases
 stop the process for operator inspection.
 

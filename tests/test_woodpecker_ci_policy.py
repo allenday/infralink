@@ -1,4 +1,4 @@
-"""Policy tests for the secret-free Woodpecker quality step."""
+"""Policy tests for the secret-free Woodpecker quality steps."""
 
 import re
 from collections.abc import Iterator
@@ -10,6 +10,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".woodpecker.yml"
 EXPECTED_COMMANDS = [
+    "cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality",
     "apt-get update",
     "apt-get install --yes --no-install-recommends git",
     'python -m pip install --disable-pip-version-check -e ".[dev]"',
@@ -39,29 +40,35 @@ def _walk(value: Any) -> Iterator[tuple[str | None, Any]]:
 def test_quality_pipeline_contract() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
-    # One matrix-interpolated image field cannot select distinct patch or digest
-    # pins without replacing this single-step contract with conditional steps.
     assert workflow["when"] == [
         {"event": "push"},
         {"event": "pull_request"},
         {"event": "manual"},
     ]
-    assert workflow["matrix"] == {"PYTHON_VERSION": ["3.10", "3.11", "3.12"]}
-    assert workflow["steps"]["quality"] == {
-        "image": "python:${PYTHON_VERSION}-slim-bookworm",
-        "commands": EXPECTED_COMMANDS,
-    }
+    assert "matrix" not in workflow
+    for version in ("3.10", "3.11", "3.12"):
+        assert workflow["steps"][f"quality-{version}"] == {
+            "image": f"python:{version}-slim-bookworm",
+            "depends_on": [],
+            "commands": EXPECTED_COMMANDS,
+        }
 
 
 def test_quality_pipeline_has_no_operational_capabilities() -> None:
-    quality = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["steps"]["quality"]
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["steps"]
 
-    forbidden_keys = {"secrets", "privileged", "volumes", "services", "depends_on"}
-    present_keys = {key for key, _value in _walk(quality) if key is not None}
-    assert forbidden_keys.isdisjoint(present_keys)
+    forbidden_keys = {"secrets", "privileged", "volumes", "services"}
+    quality_steps = [steps[f"quality-{version}"] for version in ("3.10", "3.11", "3.12")]
+    assert all(
+        forbidden_keys.isdisjoint({key for key, _value in _walk(quality) if key is not None})
+        for quality in quality_steps
+    )
 
     commands = [
-        value.lower() for key, value in _walk(quality) if key is None and isinstance(value, str)
+        value.lower()
+        for quality in quality_steps
+        for key, value in _walk(quality)
+        if key is None and isinstance(value, str)
     ]
     forbidden_patterns = (
         r"\b(tag|push|upload|publish|deploy|release)\b",
