@@ -11,7 +11,7 @@ GH_SHA256 = {
 }
 COSIGN_SHA256 = {
     "amd64": "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708",
-    "arm64": "bd0f9763bca54de88699c3656ade1f39c9a1c7a2916ff35601caf23a79be0629",
+    "arm64": "bd0f9763bca54de88699c3656ade2f39c9a1c7a2916ff35601caf23a79be0629",
 }
 
 

@@ -24,7 +24,7 @@ RELEASE_TOOLCHAINS = {
     "linux/arm64": (
         "arm64",
         "a77f6d709c5100cda8e9bbb8d8b7143120121233d9102ba2f2bc254134db18dc",
-        "bd0f9763bca54de88699c3656ade1f39c9a1c7a2916ff35601caf23a79be0629",
+        "bd0f9763bca54de88699c3656ade2f39c9a1c7a2916ff35601caf23a79be0629",
     ),
 }
 
