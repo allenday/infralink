@@ -3,16 +3,12 @@ when:
   - event: pull_request
   - event: manual
 
-matrix:
-  PYTHON_VERSION:
-    - "3.10"
-    - "3.11"
-    - "3.12"
-
 steps:
-  quality:
-    image: python:${PYTHON_VERSION}-slim-bookworm
+  quality-3.10:
+    image: python:3.10-slim-bookworm
+    depends_on: []
     commands:
+      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
       - apt-get update
       - apt-get install --yes --no-install-recommends git
       - python -m pip install --disable-pip-version-check -e ".[dev]"
@@ -25,3 +21,113 @@ steps:
       - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
       - python -m build
       - python -m twine check dist/*
+
+  quality-3.11:
+    image: python:3.11-slim-bookworm
+    depends_on: []
+    commands:
+      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
+      - apt-get update
+      - apt-get install --yes --no-install-recommends git
+      - python -m pip install --disable-pip-version-check -e ".[dev]"
+      - python -m ruff format --check src tests scripts
+      - python -m ruff check src tests scripts
+      - python -m mypy src scripts
+      - python -m pytest
+      - python scripts/generate_cli_schemas.py
+      - git diff --exit-code
+      - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
+      - python -m build
+      - python -m twine check dist/*
+
+  quality-3.12:
+    image: python:3.12-slim-bookworm
+    depends_on: []
+    commands:
+      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
+      - apt-get update
+      - apt-get install --yes --no-install-recommends git
+      - python -m pip install --disable-pip-version-check -e ".[dev]"
+      - python -m ruff format --check src tests scripts
+      - python -m ruff check src tests scripts
+      - python -m mypy src scripts
+      - python -m pytest
+      - python scripts/generate_cli_schemas.py
+      - git diff --exit-code
+      - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
+      - python -m build
+      - python -m twine check dist/*
+
+  release:
+    image: python:3.12-slim-bookworm
+    depends_on:
+      - quality-3.10
+      - quality-3.11
+      - quality-3.12
+    when:
+      - event: manual
+        branch: main
+    environment:
+      GH_TOKEN:
+        from_secret: infralink_release_github_token
+      COSIGN_PRIVATE_KEY:
+        from_secret: infralink_gate_cosign_private_key
+    commands:
+      - apt-get update
+      - apt-get install --yes --no-install-recommends ca-certificates curl git
+      - python -m pip install --disable-pip-version-check -e ".[dev]"
+      - git fetch --no-tags origin main
+      - MAIN_SHA=$$(git rev-parse FETCH_HEAD)
+      - PACKAGE_VERSION=$$(python -c 'from infralink.__about__ import __version__; print(__version__)')
+      - >-
+        python scripts/release_v0_2.py validate
+        --requested-version "$${RELEASE_VERSION:?}"
+        --package-version "$${PACKAGE_VERSION}"
+        --pipeline-sha "$${CI_COMMIT_SHA}"
+        --main-sha "$${MAIN_SHA}"
+      - |-
+        set +e
+        git ls-remote --exit-code --tags origin refs/tags/v0.2.0 >/tmp/infralink-tag
+        tag_status=$$?
+        set -e
+        if [ "$${tag_status}" -eq 0 ]; then
+          echo "tag v0.2.0 already exists" >&2
+          exit 1
+        fi
+        test "$${tag_status}" -eq 2
+      - python scripts/release_v0_2.py platform --platform "$${CI_SYSTEM_PLATFORM}" --output /tmp/infralink-toolchain
+      - . /tmp/infralink-toolchain
+      - GH_VERSION=2.76.2
+      - curl --fail --location --silent --show-error --output /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v$${GH_VERSION}/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}.tar.gz"
+      - echo "$${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum --check -
+      - tar -xzf /tmp/gh.tar.gz -C /tmp
+      - install "/tmp/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}/bin/gh" /usr/local/bin/gh
+      - |-
+        set +e
+        release_response=$$(gh api --include "repos/$${CI_REPO}/releases/tags/v0.2.0" 2>&1)
+        release_status=$$?
+        set -e
+        if [ "$${release_status}" -eq 0 ]; then
+          echo "release v0.2.0 already exists" >&2
+          exit 1
+        fi
+        printf '%s\n' "$${release_response}" | grep -Eq '^HTTP/[^ ]+ 404 '
+      - COSIGN_VERSION=2.4.3
+      - curl --fail --location --silent --show-error --output /tmp/cosign "https://github.com/sigstore/cosign/releases/download/v$${COSIGN_VERSION}/cosign-linux-$${TOOL_ARCH}"
+      - echo "$${COSIGN_SHA256}  /tmp/cosign" | sha256sum --check -
+      - install /tmp/cosign /usr/local/bin/cosign
+      - rm -rf dist
+      - python -m build
+      - python -m twine check dist/*
+      - python scripts/release_v0_2.py checksums --dist dist
+      - COSIGN_PASSWORD= cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+      - python scripts/release_v0_2.py assets --dist dist
+      - >-
+        gh release create v0.2.0
+        --target "$${CI_COMMIT_SHA}"
+        --title "Infralink v0.2.0"
+        --notes-file docs/releases/v0.2.0.md
+        dist/infralink-0.2.0-py3-none-any.whl
+        dist/infralink-0.2.0.tar.gz
+        dist/SHA256SUMS
+        dist/SHA256SUMS.sigstore.json

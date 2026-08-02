@@ -98,6 +98,7 @@ SAFE_DOTTED_TOKENS = {
     "registry.yml",
     "resolver.get",
     "roles.yml",
+    "sha256sums.sigstore.json",
     "v0.2.md",
 }
 SAFE_LINE_REFERENCE_FILES = {
