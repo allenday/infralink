@@ -15,6 +15,18 @@ PACKAGE_ASSETS = (
     "infralink-0.2.0.tar.gz",
 )
 RELEASE_ASSETS = (*PACKAGE_ASSETS, "SHA256SUMS", "SHA256SUMS.sigstore.json")
+RELEASE_TOOLCHAINS = {
+    "linux/amd64": (
+        "amd64",
+        "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e",
+        "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708",
+    ),
+    "linux/arm64": (
+        "arm64",
+        "a77f6d709c5100cda8e9bbb8d8b7143120121233d9102ba2f2bc254134db18dc",
+        "bd0f9763bca54de88699c3656ade1f39c9a1c7a2916ff35601caf23a79be0629",
+    ),
+}
 
 
 class ReleaseError(ValueError):
@@ -32,6 +44,22 @@ def validate_release_inputs(
         or pipeline_sha != main_sha
     ):
         raise ReleaseError("pipeline commit is not the exact protected main commit")
+
+
+def release_toolchain(platform: str) -> tuple[str, str, str]:
+    try:
+        return RELEASE_TOOLCHAINS[platform]
+    except KeyError:
+        raise ReleaseError(f"unsupported release platform: {platform}") from None
+
+
+def write_toolchain_environment(platform: str, output: Path) -> None:
+    arch, gh_sha256, cosign_sha256 = release_toolchain(platform)
+    content = f"TOOL_ARCH={arch}\nGH_SHA256={gh_sha256}\nCOSIGN_SHA256={cosign_sha256}\n"
+    try:
+        output.write_text(content, encoding="ascii", newline="\n")
+    except OSError:
+        raise ReleaseError("cannot write release toolchain environment") from None
 
 
 def sha256(path: Path) -> str:
@@ -80,6 +108,9 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--package-version", required=True)
     validate.add_argument("--pipeline-sha", required=True)
     validate.add_argument("--main-sha", required=True)
+    platform = commands.add_parser("platform")
+    platform.add_argument("--platform", required=True)
+    platform.add_argument("--output", required=True, type=Path)
     checksums = commands.add_parser("checksums")
     checksums.add_argument("--dist", required=True, type=Path)
     assets = commands.add_parser("assets")
@@ -97,6 +128,8 @@ def main() -> int:
                 pipeline_sha=args.pipeline_sha,
                 main_sha=args.main_sha,
             )
+        elif args.command == "platform":
+            write_toolchain_environment(args.platform, args.output)
         elif args.command == "checksums":
             write_checksums(args.dist)
         else:

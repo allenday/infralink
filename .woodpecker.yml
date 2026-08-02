@@ -95,12 +95,13 @@ steps:
           exit 1
         fi
         test "$${tag_status}" -eq 2
+      - python scripts/release_v0_2.py platform --platform "$${CI_SYSTEM_PLATFORM}" --output /tmp/infralink-toolchain
+      - . /tmp/infralink-toolchain
       - GH_VERSION=2.76.2
-      - GH_SHA256=62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e
-      - curl --fail --location --silent --show-error --output /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v$${GH_VERSION}/gh_$${GH_VERSION}_linux_amd64.tar.gz"
+      - curl --fail --location --silent --show-error --output /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v$${GH_VERSION}/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}.tar.gz"
       - echo "$${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum --check -
       - tar -xzf /tmp/gh.tar.gz -C /tmp
-      - install "/tmp/gh_$${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+      - install "/tmp/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}/bin/gh" /usr/local/bin/gh
       - |-
         set +e
         release_response=$$(gh api --include "repos/$${CI_REPO}/releases/tags/v0.2.0" 2>&1)
@@ -112,8 +113,7 @@ steps:
         fi
         printf '%s\n' "$${release_response}" | grep -Eq '^HTTP/[^ ]+ 404 '
       - COSIGN_VERSION=2.4.3
-      - COSIGN_SHA256=caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708
-      - curl --fail --location --silent --show-error --output /tmp/cosign "https://github.com/sigstore/cosign/releases/download/v$${COSIGN_VERSION}/cosign-linux-amd64"
+      - curl --fail --location --silent --show-error --output /tmp/cosign "https://github.com/sigstore/cosign/releases/download/v$${COSIGN_VERSION}/cosign-linux-$${TOOL_ARCH}"
       - echo "$${COSIGN_SHA256}  /tmp/cosign" | sha256sum --check -
       - install /tmp/cosign /usr/local/bin/cosign
       - rm -rf dist

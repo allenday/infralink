@@ -5,8 +5,14 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WOODPECKER = PROJECT_ROOT / ".woodpecker.yml"
-GH_SHA256 = "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e"
-COSIGN_SHA256 = "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708"
+GH_SHA256 = {
+    "amd64": "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e",
+    "arm64": "a77f6d709c5100cda8e9bbb8d8b7143120121233d9102ba2f2bc254134db18dc",
+}
+COSIGN_SHA256 = {
+    "amd64": "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708",
+    "arm64": "bd0f9763bca54de88699c3656ade1f39c9a1c7a2916ff35601caf23a79be0629",
+}
 
 
 def load_woodpecker() -> dict[str, object]:
@@ -77,11 +83,19 @@ def test_release_validates_identity_and_absent_remote_state_before_building() ->
 
 def test_release_uses_checksum_pinned_tools_and_exact_assets() -> None:
     commands = "\n".join(load_woodpecker()["steps"]["release"]["commands"])
+    release_surface = commands + (PROJECT_ROOT / "scripts" / "release_v0_2.py").read_text()
 
+    assert "scripts/release_v0_2.py platform" in commands
+    assert '--platform "$${CI_SYSTEM_PLATFORM}"' in commands
+    assert ". /tmp/infralink-toolchain" in commands
     assert "GH_VERSION=2.76.2" in commands
-    assert GH_SHA256 in commands
+    assert all(digest in release_surface for digest in GH_SHA256.values())
     assert "COSIGN_VERSION=2.4.3" in commands
-    assert COSIGN_SHA256 in commands
+    assert all(digest in release_surface for digest in COSIGN_SHA256.values())
+    assert "gh_$${GH_VERSION}_linux_$${TOOL_ARCH}.tar.gz" in commands
+    assert 'cosign-linux-$${TOOL_ARCH}"' in commands
+    assert "linux_amd64.tar.gz" not in commands
+    assert "cosign-linux-amd64" not in commands
     assert commands.count("sha256sum --check -") >= 2
     assert "python -m twine check" in commands
     assert "scripts/release_v0_2.py checksums" in commands

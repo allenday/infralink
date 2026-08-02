@@ -6,6 +6,10 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = PROJECT_ROOT / "scripts" / "release_v0_2.py"
 SOURCE_SHA = "a" * 40
+GH_AMD64 = "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e"
+GH_ARM64 = "a77f6d709c5100cda8e9bbb8d8b7143120121233d9102ba2f2bc254134db18dc"
+COSIGN_AMD64 = "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708"
+COSIGN_ARM64 = "bd0f9763bca54de88699c3656ade1f39c9a1c7a2916ff35601caf23a79be0629"
 
 
 def load_module():
@@ -50,6 +54,29 @@ def test_validate_release_inputs_rejects_nonexact_identity(overrides: dict[str, 
 
     with pytest.raises(module.ReleaseError):
         module.validate_release_inputs(**inputs)
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("linux/amd64", ("amd64", GH_AMD64, COSIGN_AMD64)),
+        ("linux/arm64", ("arm64", GH_ARM64, COSIGN_ARM64)),
+    ],
+)
+def test_release_toolchain_selects_pinned_platform_assets(
+    platform: str, expected: tuple[str, str, str]
+) -> None:
+    module = load_module()
+
+    assert module.release_toolchain(platform) == expected
+
+
+@pytest.mark.parametrize("platform", ["", "linux/arm", "darwin/arm64", "windows/amd64"])
+def test_release_toolchain_rejects_unsupported_platform(platform: str) -> None:
+    module = load_module()
+
+    with pytest.raises(module.ReleaseError, match="unsupported release platform"):
+        module.release_toolchain(platform)
 
 
 def test_write_checksums_is_canonical_and_asset_discovery_is_exact(tmp_path: Path) -> None:
