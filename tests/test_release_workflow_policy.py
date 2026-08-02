@@ -1,6 +1,8 @@
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +31,50 @@ def all_steps(workflow: dict[str, object]) -> list[dict[str, object]]:
 
 def all_run_text(workflow: dict[str, object]) -> str:
     return "\n".join(str(step.get("run", "")) for step in all_steps(workflow))
+
+
+def run_candidate_provenance(
+    tmp_path: Path, artifact_digest: str
+) -> subprocess.CompletedProcess[str]:
+    candidate = load_workflow(CANDIDATE)
+    step = next(
+        item for item in all_steps(candidate) if item.get("name") == "Record candidate provenance"
+    )
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "SHA256SUMS").write_text("checksum  artifact\n")
+    return subprocess.run(
+        ["bash", "-c", str(step["run"]).replace("${{ github.run_id }}", "123")],
+        cwd=tmp_path,
+        env={
+            "ARTIFACT_ID": "456",
+            "ARTIFACT_DIGEST": artifact_digest,
+            "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+            "VERIFIED_SHA": "a" * 40,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("artifact_digest", ("f" * 64, "sha256:" + "f" * 64))
+def test_candidate_normalizes_supported_artifact_digest_forms(
+    tmp_path: Path, artifact_digest: str
+) -> None:
+    result = run_candidate_provenance(tmp_path, artifact_digest)
+
+    assert result.returncode == 0, result.stderr
+    assert "Artifact digest: `sha256:" + "f" * 64 + "`" in (tmp_path / "summary").read_text()
+
+
+@pytest.mark.parametrize(
+    "artifact_digest",
+    ("sha512:" + "f" * 64, "sha256:" + "F" * 64, "f" * 63, " f" * 64),
+)
+def test_candidate_rejects_malformed_artifact_digest(tmp_path: Path, artifact_digest: str) -> None:
+    result = run_candidate_provenance(tmp_path, artifact_digest)
+
+    assert result.returncode != 0
 
 
 def test_candidate_is_manual_sha_bound_and_least_privilege() -> None:
