@@ -24,7 +24,7 @@ boundary; optional adapters may integrate with external providers.
 - Offline declared-secret inventory and optional read-only hosted BWS audit.
 - Deterministic diagram and documentation artifacts with transactional writes.
 - Reproducible wheel/sdist metadata, repository secret scanning, public-data
-  boundary checks, and a manually dispatched attested candidate workflow.
+  boundary checks, and a protected manual Woodpecker release.
 
 The stable exit-code contract is:
 
@@ -88,24 +88,25 @@ references, but cannot accept an arbitrary secret ID and never retrieves a
 value. Production requires `BWS_ACCESS_TOKEN` and `BWS_ORGANIZATION_ID` and uses
 hosted Bitwarden endpoints only. Custom endpoints are deferred beyond `v0.2.0`.
 
-## Release Candidate Boundary
+## Release Boundary
 
-The candidate workflow is manual and SHA-bound. It checks a clean exact source
-commit, runs lint, types, tests, schema determinism, public-data checks, and
-checksum-verified Gitleaks before building. The wheel and sdist are built once.
-The workflow creates and attests exactly:
+Woodpecker is the only CI and release executor. Its manual release step runs
+for `main` on Python 3.12 only after the three-version quality matrix succeeds.
+It requires the requested version and package version to equal `0.2.0`, and
+requires the pipeline commit to equal the current `main` commit. It publishes
+exactly:
 
 ```text
 infralink-0.2.0-py3-none-any.whl
 infralink-0.2.0.tar.gz
-manifest.json
 SHA256SUMS
+SHA256SUMS.sigstore.json
 ```
 
-It uploads a retained GitHub Actions artifact but never tags, publishes, or
-deploys. Private consumers verify the artifact ID, provenance, source commit,
-and digests before adoption. Rollback restores the previous verified artifact
-and digest rather than rebuilding.
+GitHub is only the public source and release destination. The step fails if the
+tag or release already exists, builds the packages, checks them with Twine,
+writes canonical checksums, and signs the checksum file with Cosign. Private
+compatibility checks are optional diagnostics and do not control publication.
 
 ## Non-Goals
 
@@ -119,7 +120,7 @@ and digest rather than rebuilding.
 
 - Every public CLI response validates against its checked-in schema.
 - No secret value crosses a serialization boundary.
-- Candidate artifacts correspond to one exact, clean source commit.
+- Release assets correspond to the exact protected `main` source commit.
 - Public docs and examples contain only deliberate example topology.
 - Compatibility changes have an explicit migration path.
 

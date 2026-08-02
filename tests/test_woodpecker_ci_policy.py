@@ -1,4 +1,4 @@
-"""Policy tests for the secret-free Woodpecker quality pipeline."""
+"""Policy tests for the secret-free Woodpecker quality step."""
 
 import re
 from collections.abc import Iterator
@@ -41,31 +41,27 @@ def test_quality_pipeline_contract() -> None:
 
     # One matrix-interpolated image field cannot select distinct patch or digest
     # pins without replacing this single-step contract with conditional steps.
-    assert workflow == {
-        "when": [
-            {"event": "push"},
-            {"event": "pull_request"},
-            {"event": "manual"},
-        ],
-        "matrix": {"PYTHON_VERSION": ["3.10", "3.11", "3.12"]},
-        "steps": {
-            "quality": {
-                "image": "python:${PYTHON_VERSION}-slim-bookworm",
-                "commands": EXPECTED_COMMANDS,
-            }
-        },
+    assert workflow["when"] == [
+        {"event": "push"},
+        {"event": "pull_request"},
+        {"event": "manual"},
+    ]
+    assert workflow["matrix"] == {"PYTHON_VERSION": ["3.10", "3.11", "3.12"]}
+    assert workflow["steps"]["quality"] == {
+        "image": "python:${PYTHON_VERSION}-slim-bookworm",
+        "commands": EXPECTED_COMMANDS,
     }
 
 
 def test_quality_pipeline_has_no_operational_capabilities() -> None:
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    quality = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["steps"]["quality"]
 
     forbidden_keys = {"secrets", "privileged", "volumes", "services", "depends_on"}
-    present_keys = {key for key, _value in _walk(workflow) if key is not None}
+    present_keys = {key for key, _value in _walk(quality) if key is not None}
     assert forbidden_keys.isdisjoint(present_keys)
 
     commands = [
-        value.lower() for key, value in _walk(workflow) if key is None and isinstance(value, str)
+        value.lower() for key, value in _walk(quality) if key is None and isinstance(value, str)
     ]
     forbidden_patterns = (
         r"\b(tag|push|upload|publish|deploy|release)\b",

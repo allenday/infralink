@@ -132,25 +132,19 @@ environment variables are rejected; custom endpoints remain deferred. Audit is
 read-only, is restricted to references declared by topology, and does not fetch
 secret values.
 
-## Candidate Adoption And Rollback
+## Release Adoption And Rollback
 
-The manual GitHub `Release candidate` workflow requires a full source commit
-SHA and the same selected workflow ref. It runs all gates, builds one wheel and
-one sdist once, creates canonical `manifest.json` and `SHA256SUMS`, attests the
-four files, and uploads them as an Actions artifact. It does not publish,
-release, tag, or deploy.
+The manual Woodpecker release step runs only for `main` on Python 3.12 after
+the full three-version quality matrix. It requires release version `0.2.0` and
+the pipeline commit to equal the current `main` commit, then rebuilds and
+publishes exactly the wheel, sdist, `SHA256SUMS`, and
+`SHA256SUMS.sigstore.json` to GitHub Release `v0.2.0`. Existing tags or releases
+stop the process for operator inspection.
 
-Secret scanning deliberately uses the pinned Gitleaks CLI archive with its
-published checksum rather than `gitleaks/gitleaks-action`; this keeps the public
-candidate workflow free of a long-lived organization license secret.
-
-Consumers adopt the exact artifact ID after checking the GitHub attestation,
-source commit, manifest, and checksums. Pin that artifact's wheel digest in the
-private consumer gate. Rollback means restoring the previously verified
-artifact ID, source commit, and wheel digest; no rebuild is involved.
-
-Repository administrators must enable GitHub artifact attestations and retain
-candidate artifacts long enough for the private verification gate.
+Consumers verify the Cosign bundle and `SHA256SUMS` before installing the
+wheel, and record the source commit and wheel digest in consumer configuration.
+Rollback restores the previously verified release revision and digest; it does
+not rebuild old source or mutate the existing public release.
 
 ## Development
 

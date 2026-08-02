@@ -11,14 +11,14 @@
 - [x] Opaque secret values and declared-reference inventory
 - [x] Optional read-only hosted BWS adapter and metadata audit
 - [x] Strict typing, Ruff, branch coverage, schema, and package gates
-- [x] Deterministic candidate manifest and public-data boundary policy
-- [x] Manual SHA-bound, build-once candidate workflow
+- [x] Deterministic public-data boundary and package policy
+- [x] Manual main-bound Woodpecker release contract
 
 ## Next
 
-- [ ] Verify attested candidates in the private consumer CI
+- [ ] Add optional private compatibility diagnostics in Woodpecker
 - [ ] Run canary validation against sanitized topology fixtures
-- [ ] Tag `v0.2.0` only after private verification and explicit approval
+- [ ] Trigger the protected `v0.2.0` release after explicit approval
 - [ ] Migrate consumers from legacy URL helpers to connection templates
 - [ ] Migrate consumers to `infralink.cli/v1` envelopes and cursors
 - [ ] Add PostgreSQL and MySQL query checks
@@ -33,7 +33,7 @@
 - Dynamic service discovery
 - Deployment orchestration
 - Secret writes or arbitrary secret lookup
-- Automatic publication or deployment from candidate CI
+- Automatic or non-main publication and production deployment
 - Non-POSIX support for transactional artifact commands
 
-*Last updated: 2026-07-25*
+*Last updated: 2026-08-02*
