@@ -186,6 +186,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          if [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            ARTIFACT_DIGEST="sha256:$ARTIFACT_DIGEST"
+          fi
           [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           {
             echo "## Infralink v0.2.0 candidate"
