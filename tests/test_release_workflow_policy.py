@@ -60,7 +60,7 @@ def test_private_gate_approval_matches_approved_infra_management_sources() -> No
         "dependency_lock_sha256": (
             "2ed331ff627426f164b40ade8652756c22fcdcaf82de5214ed3700e664839750"
         ),
-        "infra_management_commit": "5c041602c4532b5c25a8daebde3c2f124163255f",
+        "infra_management_commit": "160fc077ab63241eab8a6f33b923156e1dd609f2",
     }
 
 
