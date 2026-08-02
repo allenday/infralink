@@ -69,12 +69,35 @@ def test_credential_auth_accepts_hierarchical_secret_reference(auth_type):
 @pytest.mark.parametrize(
     "secret_ref",
     [
+        "postgresql_rw_password_woodpecker",
+        "9157ddeb_postgresql_rw_password_woodpecker",
+        "_9157ddeb_postgresql_rw_password_woodpecker",
+        "production/_9157ddeb_postgresql_rw_password_woodpecker",
+    ],
+)
+def test_credential_auth_accepts_jinja_safe_secret_reference(secret_ref):
+    auth = AuthConfig(type="password", secret_ref=secret_ref)
+
+    assert auth.secret_ref == secret_ref
+
+
+@pytest.mark.parametrize(
+    "secret_ref",
+    [
         "/production/db-password",
         "production/db-password/",
         "production//db-password",
         "production/./db-password",
         "production/../db-password",
         "production/.../db-password",
+        "_",
+        "_.",
+        "_..",
+        "production/_",
+        "production/_./db-password",
+        "production/_../db-password",
+        "_9157 bad",
+        "_9157}bad",
     ],
 )
 def test_secret_reference_rejects_empty_dot_and_traversal_segments(secret_ref):

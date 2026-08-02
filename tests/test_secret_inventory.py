@@ -155,6 +155,24 @@ def test_collect_secret_references_does_not_share_mutable_locations() -> None:
     assert first[0].locations == (f"edges.{EDGE_A}.auth.secret_ref",)
 
 
+def test_collect_secret_references_accepts_jinja_safe_reference() -> None:
+    from infralink.secrets.inventory import collect_secret_references
+
+    secret_ref = "_9157ddeb_postgresql_rw_password_woodpecker"
+    registry = Registry.from_dict(
+        {"hosts": {"host-a": {"canonical_name": "database", "bws_project": "core"}}}
+    )
+    edges = EdgeSet.from_dict({"edges": [_edge(EDGE_A, "host-a", secret_ref)]})
+
+    assert collect_secret_references(registry, edges) == [
+        SecretReference(
+            ref=secret_ref,
+            project="core",
+            locations=(f"edges.{EDGE_A}.auth.secret_ref",),
+        )
+    ]
+
+
 def test_inventory_reports_token_and_certificate_references() -> None:
     from infralink.secrets.inventory import collect_secret_references
 
