@@ -412,6 +412,24 @@ def test_representative_profiles_use_only_closed_vendor_neutral_contracts() -> N
             ],
         ),
         ServiceProfile(
+            id="redis",
+            endpoints=[Endpoint(id="redis", protocol=EndpointProtocol.REDIS, port=6379)],
+            health=[
+                HealthCapability(
+                    id="ready",
+                    endpoint_id="redis",
+                    evaluator=HealthEvaluator.REDIS_READY,
+                )
+            ],
+            secret_slots=[
+                SecretSlot(
+                    id="password",
+                    delivery_forms=[SecretDeliveryForm.ENVIRONMENT],
+                    purpose="Redis authentication",
+                )
+            ],
+        ),
+        ServiceProfile(
             id="ci",
             endpoints=[Endpoint(id="agent", protocol=EndpointProtocol.TCP, port=3000)],
             metrics=[
@@ -430,6 +448,7 @@ def test_representative_profiles_use_only_closed_vendor_neutral_contracts() -> N
         "postfix",
         "inspircd",
         "postgresql",
+        "redis",
         "ci",
     ]
 

@@ -81,6 +81,7 @@ def test_project_observation_and_capabilities_are_offline_yaml(tmp_path: Path) -
     advertised = yaml.safe_load(capabilities.output)["result"]
     assert "infralink.observation/v1" in advertised["document_schema_versions"]
     assert "observation" in advertised["projections"]
+    assert "redis-ready" in advertised["evaluator_types"]["health"]
 
 
 def test_observation_errors_are_typed_and_exact_exit_codes(tmp_path: Path) -> None:
@@ -141,6 +142,17 @@ def test_generated_observation_schemas_validate_public_examples() -> None:
         wrong = dict(document, schema_version="infralink.observation/v99")
         with pytest.raises(JsonSchemaValidationError):
             Draft202012Validator(schema).validate(wrong)
+
+
+def test_generated_schemas_publish_redis_protocol_and_readiness() -> None:
+    root = Path(__file__).parents[1] / "src/infralink/schemas"
+    profile_schema = (root / "observation/v1/profile.json").read_text()
+    dependency_schema = (root / "observation/v1/dependency.json").read_text()
+    projection_schema = (root / "cli/v1/project-observation.json").read_text()
+
+    for schema in (profile_schema, dependency_schema, projection_schema):
+        assert '"redis"' in schema
+    assert '"redis-ready"' in profile_schema
 
 
 def test_end_to_end_example_directory_validates_and_projects() -> None:

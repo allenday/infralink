@@ -298,6 +298,8 @@ def _project_failure(
 @click.pass_obj
 def capabilities(ctx: Any) -> int:
     """Describe the offline observation contract surface."""
+    from infralink.observation.models import HealthEvaluator, LogEvaluator, MetricsEvaluator
+
     result = CapabilitiesResult(
         document_schema_versions=["infralink.observation/v1"],
         plan_schema_versions=["infralink.plan.v1"],
@@ -314,15 +316,9 @@ def capabilities(ctx: Any) -> int:
             )
         },
         evaluator_types={
-            "health": [
-                "http-status",
-                "irc-handshake",
-                "postgres-ready",
-                "smtp-banner",
-                "tcp-connect",
-            ],
-            "metrics": ["prometheus-scrape"],
-            "logs": ["contains", "regex"],
+            "health": sorted(evaluator.value for evaluator in HealthEvaluator),
+            "metrics": sorted(evaluator.value for evaluator in MetricsEvaluator),
+            "logs": sorted(evaluator.value for evaluator in LogEvaluator),
         },
         projections=["observation", "secrets", "view", "readiness"],
     )
