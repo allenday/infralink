@@ -6,8 +6,10 @@ import re
 from datetime import date, datetime
 from enum import Enum
 from typing import Annotated, Any
+from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -17,10 +19,24 @@ from pydantic import (
     model_validator,
 )
 
+
+def _validate_uuid(value: str) -> str:
+    try:
+        UUID(value)
+    except (ValueError, AttributeError) as error:
+        raise ValueError("host id must be a UUID") from error
+    return value
+
+
 CanonicalId = Annotated[
     str,
     StringConstraints(pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"),
 ]
+QualifiedRef = Annotated[
+    str,
+    StringConstraints(pattern=r"^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$"),
+]
+HostId = Annotated[str, AfterValidator(_validate_uuid)]
 Port = Annotated[StrictInt, Field(ge=1, le=65535)]
 PositiveSeconds = Annotated[StrictInt, Field(gt=0)]
 
@@ -76,6 +92,11 @@ class SecretDeliveryForm(str, Enum):
     ENVIRONMENT = "environment"
     FILE = "file"
     STDIN = "stdin"
+
+
+class EndpointExposure(str, Enum):
+    PRIVATE = "private"
+    PUBLIC = "public"
 
 
 class SignalRequirement(str, Enum):
@@ -243,11 +264,24 @@ class ServiceProfile(StrictModel):
         return self
 
 
+class EndpointOverride(StrictModel):
+    endpoint_id: CanonicalId
+    address: str | None = None
+    exposure: EndpointExposure | None = None
+    route: str | None = None
+
+
 class ServiceInstance(StrictModel):
     id: CanonicalId
+    host_id: HostId | None = None
     profile_id: CanonicalId
     endpoint_ids: list[CanonicalId] = Field(default_factory=list)
+    endpoint_overrides: list[EndpointOverride] = Field(default_factory=list)
     secret_binding_ids: list[CanonicalId] = Field(default_factory=list)
+
+
+class Host(StrictModel):
+    id: HostId
 
 
 _SENSITIVE_KEY = re.compile(r"(?:^|[^a-z])(value|secret|password|token)(?:$|[^a-z])")
@@ -270,6 +304,8 @@ class SecretBinding(StrictModel):
     id: CanonicalId
     slot_id: CanonicalId
     alias: CanonicalId
+    delivery: SecretDeliveryForm | None = None
+    renderer_binding_id: CanonicalId | None = None
 
 
 class ProviderAlias(StrictModel):
@@ -289,23 +325,30 @@ class ProviderAlias(StrictModel):
 
 class DependencyContract(StrictModel):
     id: CanonicalId
-    source_service_id: CanonicalId
-    target_service_id: CanonicalId
+    source_service_id: str
+    target_endpoint_id: str | None = None
+    target_service_id: CanonicalId | None = None
+    protocol: EndpointProtocol | None = None
+    port: Port | None = None
     required: bool = True
+    health_signal_ids: list[CanonicalId] = Field(default_factory=list)
+    health_signal_ref: QualifiedRef | None = None
     health_signal_refs: list[CanonicalId] = Field(default_factory=list)
+    execution_adapter: str | None = None
 
 
 class Application(StrictModel):
     id: CanonicalId
-    service_instance_ids: Annotated[list[CanonicalId], Field(min_length=1)]
+    service_instance_ids: Annotated[list[QualifiedRef], Field(min_length=1)]
     required_dependency_edge_ids: list[CanonicalId] = Field(default_factory=list)
-    health_signal_refs: list[CanonicalId] = Field(default_factory=list)
+    health_signal_refs: list[QualifiedRef] = Field(default_factory=list)
 
 
 class RendererBindingIdentity(StrictModel):
     id: CanonicalId
     renderer: Annotated[str, Field(min_length=1)]
     binding_ref: Annotated[str, Field(min_length=1)]
+    delivery_forms: list[SecretDeliveryForm] = Field(default_factory=list)
 
 
 class ObservationBackend(StrictModel):
@@ -325,7 +368,7 @@ class WaiverScope(StrictModel):
     """Stable identity of the exact contract member waived."""
 
     kind: WaiverScopeKind
-    ref: CanonicalId
+    ref: QualifiedRef
     suite_ref: CanonicalId | None = None
 
     @model_validator(mode="after")
