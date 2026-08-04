@@ -34,6 +34,8 @@ from infralink.observation.models import (
     SuiteMember,
     SuitePolicy,
     Waiver,
+    WaiverScope,
+    WaiverScopeKind,
 )
 
 __all__ = [
@@ -70,4 +72,6 @@ __all__ = [
     "SuiteMember",
     "SuitePolicy",
     "Waiver",
+    "WaiverScope",
+    "WaiverScopeKind",
 ]

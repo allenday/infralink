@@ -28,7 +28,7 @@ PositiveSeconds = Annotated[StrictInt, Field(gt=0)]
 class StrictModel(BaseModel):
     """Base for public source contracts, which never ignore input fields."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class EndpointProtocol(str, Enum):
@@ -98,6 +98,12 @@ class BackendKind(str, Enum):
     HEALTH = "health"
     METRICS = "metrics"
     LOGS = "logs"
+
+
+class WaiverScopeKind(str, Enum):
+    SIGNAL = "signal"
+    CAPABILITY = "capability"
+    SUITE_MEMBER = "suite-member"
 
 
 class Endpoint(StrictModel):
@@ -230,8 +236,15 @@ class SecretBinding(StrictModel):
     id: CanonicalId
     slot_id: CanonicalId
     provider: CanonicalId
-    provider_ref: Annotated[str, Field(min_length=1)]
+    provider_ref: CanonicalId
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider_ref")
+    @classmethod
+    def reject_secret_like_provider_ref(cls, value: str) -> str:
+        if any(part in {"value", "secret", "password", "token"} for part in value.split("-")):
+            raise ValueError("provider_ref must not contain secret-like terms")
+        return value
 
     @field_validator("metadata")
     @classmethod
@@ -280,9 +293,25 @@ class DatasourceBinding(StrictModel):
     observed_at: datetime | None = None
 
 
+class WaiverScope(StrictModel):
+    """Stable identity of the exact contract member waived."""
+
+    kind: WaiverScopeKind
+    ref: CanonicalId
+    suite_ref: CanonicalId | None = None
+
+    @model_validator(mode="after")
+    def validate_suite_qualification(self) -> WaiverScope:
+        if self.kind == WaiverScopeKind.SUITE_MEMBER and self.suite_ref is None:
+            raise ValueError("suite-member scope requires suite_ref")
+        if self.kind != WaiverScopeKind.SUITE_MEMBER and self.suite_ref is not None:
+            raise ValueError("suite_ref is only valid for suite-member scope")
+        return self
+
+
 class Waiver(StrictModel):
     id: CanonicalId
-    scope: Annotated[str, Field(min_length=1)]
+    scope: WaiverScope
     owner: Annotated[str, Field(min_length=1)]
     reason: Annotated[str, Field(min_length=1)]
     created_on: date
