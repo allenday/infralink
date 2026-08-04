@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+from click.testing import CliRunner
+from jsonschema import Draft202012Validator
+
+from infralink.cli.main import cli
+
+SOURCE = """\
+schema_version: infralink.observation/v1
+service_profiles:
+  - id: web
+    endpoints:
+      - {id: http, protocol: http, port: 8080}
+    health:
+      - {id: ready, endpoint_id: http, evaluator: http-status}
+    signals:
+      - {id: up, capability_id: ready, evaluator: capability-state}
+hosts:
+  - {id: 11111111-1111-4111-8111-111111111111}
+service_instances:
+  - id: frontend
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: web
+"""
+
+
+def _source(tmp_path: Path, text: str = SOURCE) -> Path:
+    path = tmp_path / "observation.yml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_observation_validate_defaults_to_yaml_and_json_is_equivalent(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    args = ["validate", "--source", str(source), "--as-of", "2026-08-04T00:00:00Z"]
+
+    yaml_result = CliRunner().invoke(cli, args)
+    json_result = CliRunner().invoke(cli, ["--output", "json", *args])
+
+    assert yaml_result.exit_code == json_result.exit_code == 0
+    assert yaml_result.stderr == json_result.stderr == ""
+    yaml_payload = yaml.safe_load(yaml_result.output)
+    json_payload = json.loads(json_result.output)
+    for payload in (yaml_payload, json_payload):
+        assert payload["schema_version"] == "agent-cli.response.v1"
+        assert payload["ok"] is True
+        assert payload["result"]["valid"] is True
+        assert payload["request_id"]
+        assert payload["generated_at"].endswith("Z")
+        assert "error" not in payload
+    assert yaml_payload["result"] == json_payload["result"]
+
+
+def test_project_observation_and_capabilities_are_offline_yaml(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    runner = CliRunner()
+    projected = runner.invoke(
+        cli,
+        [
+            "project",
+            "observation",
+            "--source",
+            str(source),
+            "--as-of",
+            "2026-08-04T00:00:00Z",
+        ],
+    )
+    capabilities = runner.invoke(cli, ["capabilities"])
+
+    assert projected.exit_code == capabilities.exit_code == 0
+    payload = yaml.safe_load(projected.output)
+    assert payload["result"]["plan"]["schema_version"] == "infralink.plan.v1"
+    assert any(action["rel"] == "validate" for action in payload["next_actions"])
+    advertised = yaml.safe_load(capabilities.output)["result"]
+    assert "infralink.observation/v1" in advertised["document_schema_versions"]
+    assert "observation" in advertised["projections"]
+
+
+def test_observation_errors_are_typed_and_exact_exit_codes(tmp_path: Path) -> None:
+    unsupported = _source(tmp_path, "schema_version: infralink.observation/v99\n")
+    invalid = CliRunner().invoke(
+        cli,
+        ["validate", "--source", str(unsupported), "--as-of", "2026-08-04T00:00:00Z"],
+    )
+    missing = CliRunner().invoke(cli, ["explain", "not-a-code"])
+
+    assert invalid.exit_code == 2
+    assert yaml.safe_load(invalid.output)["error"]["code"] == "schema-version-unsupported"
+    assert missing.exit_code == 1
+    assert yaml.safe_load(missing.output)["error"]["code"] == "diagnostic-code-not-found"
+    assert invalid.stderr == missing.stderr == ""
+
+
+def test_legacy_validate_remains_json_after_new_command_invocation(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["capabilities"])
+    result = runner.invoke(cli, ["--registry", "missing.yml", "validate"])
+
+    assert json.loads(result.output)["schema_version"] == "infralink.cli/v1"
+
+
+def test_generated_observation_schemas_validate_public_examples() -> None:
+    root = Path(__file__).parents[1]
+    pairs = {
+        "profiles.yml": "profile",
+        "instances.yml": "instance",
+        "edges.yml": "dependency",
+        "secrets.yml": "secrets",
+        "operations.yml": "operations-view",
+    }
+    for example, schema_name in pairs.items():
+        document = yaml.safe_load((root / "examples/observation" / example).read_text())
+        schema = json.loads(
+            (root / "src/infralink/schemas/observation/v1" / f"{schema_name}.json").read_text()
+        )
+        Draft202012Validator(schema).validate(document)
+
+
+def test_end_to_end_example_directory_validates_and_projects() -> None:
+    source = Path(__file__).parents[1] / "examples/observation"
+    args = ["--source", str(source), "--as-of", "2026-08-04T00:00:00Z"]
+    validated = CliRunner().invoke(cli, ["validate", *args])
+    projected = CliRunner().invoke(cli, ["project", "observation", *args])
+
+    assert validated.exit_code == projected.exit_code == 0
+    assert yaml.safe_load(projected.output)["result"]["plan"]["plan_digest"]
+
+
+def test_observation_invocation_and_internal_failures_keep_agent_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source(tmp_path)
+    invocation = CliRunner().invoke(cli, ["validate", "--source", str(source)])
+
+    monkeypatch.setattr("infralink.cli.observation._request_id", lambda: 1 / 0)
+    internal = CliRunner().invoke(cli, ["capabilities"])
+
+    assert invocation.exit_code == 2
+    assert yaml.safe_load(invocation.output)["schema_version"] == "agent-cli.response.v1"
+    assert yaml.safe_load(invocation.output)["error"]["code"] == "invocation-error"
+    assert internal.exit_code == 4
+    assert yaml.safe_load(internal.output)["schema_version"] == "agent-cli.response.v1"
+    assert yaml.safe_load(internal.output)["error"]["code"] == "internal-invariant"
+    assert invocation.stderr == internal.stderr == ""

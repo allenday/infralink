@@ -1,0 +1,117 @@
+{
+  "$defs": {
+    "DependencyContract": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_adapter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Adapter"
+        },
+        "health_signal_ref": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Health Signal Ref",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/EndpointProtocol"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source_service_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Source Service Id",
+          "type": "string"
+        },
+        "target_endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Target Endpoint Id",
+          "type": "string"
+        },
+        "target_service_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Target Service Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_service_id",
+        "target_service_id",
+        "target_endpoint_id",
+        "protocol",
+        "port",
+        "health_signal_ref"
+      ],
+      "title": "DependencyContract",
+      "type": "object"
+    },
+    "EndpointProtocol": {
+      "enum": [
+        "tcp",
+        "http",
+        "https",
+        "smtp",
+        "irc",
+        "postgresql"
+      ],
+      "title": "EndpointProtocol",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "dependency_contracts": {
+      "items": {
+        "$ref": "#/$defs/DependencyContract"
+      },
+      "title": "Dependency Contracts",
+      "type": "array"
+    },
+    "registry_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registry Revision"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v1",
+      "default": "infralink.observation/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "dependency_contracts"
+  ],
+  "title": "DependencyDocument",
+  "type": "object"
+}

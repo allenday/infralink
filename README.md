@@ -1,6 +1,6 @@
 # Infralink
 
-Infralink is a Python library and JSON-only CLI for modeling infrastructure
+Infralink is a Python library and agent-oriented CLI for modeling infrastructure
 topology with UUID-based hosts, typed edges, bounded queries, health checks,
 safe connection templates, diagrams, and generated documentation.
 
@@ -58,6 +58,29 @@ The envelope includes `ok`, a shallow parsed command view, a typed `result` or
 redacted `error`, and bounded `next_actions`. Lists use explicit limits and
 opaque cursors. Use `infralink help [command ...]` for machine-readable
 discovery.
+
+Legacy topology commands retain their `infralink.cli/v1` JSON contract. Offline
+observation commands use `agent-cli.response.v1`, default to YAML, and accept
+explicit `--output json` or `--output yaml`:
+
+```bash
+infralink capabilities
+infralink validate --source examples/observation --as-of "$AS_OF"
+infralink project observation --source examples/observation --as-of "$AS_OF"
+infralink project secrets --source examples/observation --as-of "$AS_OF"
+infralink project view service-overview --source examples/observation --as-of "$AS_OF"
+infralink project readiness ci-release --source examples/observation --as-of "$AS_OF"
+infralink explain schema-version-unsupported
+```
+
+Observation documents declare `schema_version: infralink.observation/v1` and
+may be validated against the packaged schemas under
+`infralink/schemas/observation/v1`. The examples declare service, dependency,
+and view signals in the `service/...`, `dependency/...`, and `view/...`
+namespaces. Planning is deliberately offline: provider, renderer, datasource,
+observation backend, and secret backend identifiers remain opaque. Public
+outputs contain aliases and binding metadata, never secret values or private
+provider data.
 
 ```bash
 infralink --registry registry.yml --edges edges.yml validate

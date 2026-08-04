@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "Application": {
+      "additionalProperties": false,
+      "properties": {
+        "health_signal_refs": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Health Signal Refs",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "required_dependency_edge_ids": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Required Dependency Edge Ids",
+          "type": "array"
+        },
+        "service_instance_ids": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Service Instance Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "service_instance_ids"
+      ],
+      "title": "Application",
+      "type": "object"
+    },
+    "EndpointExposure": {
+      "enum": [
+        "private",
+        "public"
+      ],
+      "title": "EndpointExposure",
+      "type": "string"
+    },
+    "EndpointOverride": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "exposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointExposure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "route": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route"
+        }
+      },
+      "required": [
+        "endpoint_id"
+      ],
+      "title": "EndpointOverride",
+      "type": "object"
+    },
+    "Host": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Host",
+      "type": "object"
+    },
+    "ServiceInstance": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_ids": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Endpoint Ids",
+          "type": "array"
+        },
+        "endpoint_overrides": {
+          "items": {
+            "$ref": "#/$defs/EndpointOverride"
+          },
+          "title": "Endpoint Overrides",
+          "type": "array"
+        },
+        "host_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host Id"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "profile_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "secret_binding_ids": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Secret Binding Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "profile_id"
+      ],
+      "title": "ServiceInstance",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applications": {
+      "items": {
+        "$ref": "#/$defs/Application"
+      },
+      "title": "Applications",
+      "type": "array"
+    },
+    "hosts": {
+      "items": {
+        "$ref": "#/$defs/Host"
+      },
+      "title": "Hosts",
+      "type": "array"
+    },
+    "registry_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registry Revision"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v1",
+      "default": "infralink.observation/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_instances": {
+      "items": {
+        "$ref": "#/$defs/ServiceInstance"
+      },
+      "title": "Service Instances",
+      "type": "array"
+    }
+  },
+  "required": [
+    "service_instances"
+  ],
+  "title": "InstanceDocument",
+  "type": "object"
+}

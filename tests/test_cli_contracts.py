@@ -75,6 +75,13 @@ SCHEMA_NAMES = (
     "docs",
     "secrets-inspect",
     "secrets-audit",
+    "capabilities",
+    "observation-validate",
+    "explain",
+    "project-observation",
+    "project-secrets",
+    "project-view",
+    "project-readiness",
 )
 
 

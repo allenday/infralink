@@ -1,0 +1,455 @@
+{
+  "$defs": {
+    "ComparisonOperator": {
+      "enum": [
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "eq",
+        "ne"
+      ],
+      "title": "ComparisonOperator",
+      "type": "string"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "A generic named network endpoint exposed by a service.",
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/EndpointProtocol"
+        }
+      },
+      "required": [
+        "id",
+        "protocol",
+        "port"
+      ],
+      "title": "Endpoint",
+      "type": "object"
+    },
+    "EndpointProtocol": {
+      "enum": [
+        "tcp",
+        "http",
+        "https",
+        "smtp",
+        "irc",
+        "postgresql"
+      ],
+      "title": "EndpointProtocol",
+      "type": "string"
+    },
+    "HealthCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/HealthEvaluator"
+        },
+        "expected_statuses": {
+          "items": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "title": "Expected Statuses",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "id",
+        "endpoint_id",
+        "evaluator"
+      ],
+      "title": "HealthCapability",
+      "type": "object"
+    },
+    "HealthEvaluator": {
+      "enum": [
+        "tcp-connect",
+        "http-status",
+        "smtp-banner",
+        "irc-handshake",
+        "postgres-ready"
+      ],
+      "title": "HealthEvaluator",
+      "type": "string"
+    },
+    "LogCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Id"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/LogEvaluator"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "stream": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stream"
+        }
+      },
+      "required": [
+        "id",
+        "evaluator"
+      ],
+      "title": "LogCapability",
+      "type": "object"
+    },
+    "LogEvaluator": {
+      "enum": [
+        "contains",
+        "regex"
+      ],
+      "title": "LogEvaluator",
+      "type": "string"
+    },
+    "LogicalSignal": {
+      "additionalProperties": false,
+      "description": "A vendor-neutral assertion derived from one declared capability.",
+      "properties": {
+        "capability_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evaluator": {
+          "$ref": "#/$defs/SignalEvaluator"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pattern"
+        }
+      },
+      "required": [
+        "id",
+        "capability_id",
+        "evaluator"
+      ],
+      "title": "LogicalSignal",
+      "type": "object"
+    },
+    "MetricCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/ComparisonOperator"
+        },
+        "threshold": {
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "operator",
+        "threshold"
+      ],
+      "title": "MetricCondition",
+      "type": "object"
+    },
+    "MetricsCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/MetricsEvaluator"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "id",
+        "endpoint_id",
+        "evaluator"
+      ],
+      "title": "MetricsCapability",
+      "type": "object"
+    },
+    "MetricsEvaluator": {
+      "enum": [
+        "prometheus-scrape"
+      ],
+      "title": "MetricsEvaluator",
+      "type": "string"
+    },
+    "SecretDeliveryForm": {
+      "enum": [
+        "environment",
+        "file",
+        "stdin"
+      ],
+      "title": "SecretDeliveryForm",
+      "type": "string"
+    },
+    "SecretSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_forms": {
+          "items": {
+            "$ref": "#/$defs/SecretDeliveryForm"
+          },
+          "minItems": 1,
+          "title": "Delivery Forms",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "delivery_forms",
+        "purpose"
+      ],
+      "title": "SecretSlot",
+      "type": "object"
+    },
+    "ServiceProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          },
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "health": {
+          "items": {
+            "$ref": "#/$defs/HealthCapability"
+          },
+          "title": "Health",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "logs": {
+          "items": {
+            "$ref": "#/$defs/LogCapability"
+          },
+          "title": "Logs",
+          "type": "array"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricsCapability"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "secret_slots": {
+          "items": {
+            "$ref": "#/$defs/SecretSlot"
+          },
+          "title": "Secret Slots",
+          "type": "array"
+        },
+        "signals": {
+          "items": {
+            "$ref": "#/$defs/LogicalSignal"
+          },
+          "title": "Signals",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ServiceProfile",
+      "type": "object"
+    },
+    "SignalEvaluator": {
+      "enum": [
+        "capability-state",
+        "metric-threshold",
+        "log-match"
+      ],
+      "title": "SignalEvaluator",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "registry_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registry Revision"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v1",
+      "default": "infralink.observation/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_profiles": {
+      "items": {
+        "$ref": "#/$defs/ServiceProfile"
+      },
+      "title": "Service Profiles",
+      "type": "array"
+    }
+  },
+  "required": [
+    "service_profiles"
+  ],
+  "title": "ProfileDocument",
+  "type": "object"
+}

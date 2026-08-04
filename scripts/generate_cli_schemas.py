@@ -26,6 +26,16 @@ from infralink.cli.contracts import (
     ValidateResult,
     VersionResult,
 )
+from infralink.cli.observation_contracts import (
+    CapabilitiesResult,
+    ExplainResult,
+    ObservationEnvelope,
+    ObservationValidateResult,
+    ProjectObservationResult,
+    ProjectReadinessResult,
+    ProjectSecretsResult,
+    ProjectViewResult,
+)
 
 ROOT = Path(__file__).parents[1]
 OUTPUT = ROOT / "src/infralink/schemas/cli/v1"
@@ -50,6 +60,13 @@ MODELS: dict[str, Any] = {
     "docs": Envelope[ArtifactResult],
     "secrets-inspect": Envelope[SecretsInspectResult],
     "secrets-audit": Envelope[SecretsAuditResult],
+    "capabilities": ObservationEnvelope[CapabilitiesResult],
+    "observation-validate": ObservationEnvelope[ObservationValidateResult],
+    "explain": ObservationEnvelope[ExplainResult],
+    "project-observation": ObservationEnvelope[ProjectObservationResult],
+    "project-secrets": ObservationEnvelope[ProjectSecretsResult],
+    "project-view": ObservationEnvelope[ProjectViewResult],
+    "project-readiness": ObservationEnvelope[ProjectReadinessResult],
 }
 
 OUTCOME_INVARIANT = [
