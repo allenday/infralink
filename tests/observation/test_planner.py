@@ -385,3 +385,27 @@ def test_noncanonical_uuid_spelling_cannot_alias_existing_host_identity() -> Non
         item for item in caught.value.report.diagnostics if item.code == "invalid-document-record"
     )
     assert finding.location.pointer == "/hosts/1/id"
+
+
+def test_non_json_record_returns_diagnostic_instead_of_serialization_error() -> None:
+    data = base_data()
+    data["provider_aliases"][0]["metadata"] = {"labels": {"one", "two"}}  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item for item in caught.value.report.diagnostics if item.code == "invalid-document-record"
+    )
+    assert finding.location.pointer == "/provider_aliases/0"
+
+
+def test_circular_record_returns_diagnostic_instead_of_recursion_error() -> None:
+    data = base_data()
+    metadata: dict[str, object] = {}
+    metadata["cycle"] = metadata
+    data["provider_aliases"][0]["metadata"] = metadata  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item for item in caught.value.report.diagnostics if item.code == "invalid-document-record"
+    )
+    assert finding.location.pointer == "/provider_aliases/0"

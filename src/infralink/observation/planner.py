@@ -312,6 +312,17 @@ def resolve_observation_documents(
                             "Correct the record to match the closed section schema.",
                         )
                     continue
+                except (TypeError, ValueError, RecursionError):
+                    identity = value.get("id") if isinstance(value, dict) else section
+                    _add(
+                        findings,
+                        "invalid-document-record",
+                        doc,
+                        pointer,
+                        str(identity),
+                        "Replace non-JSON or circular values with supported contract values.",
+                    )
+                    continue
                 parsed[section].append((item, _ref(doc, pointer)))
 
     if docs and usable_documents == 0:
