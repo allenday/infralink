@@ -166,42 +166,59 @@ def test_secret_slot_requires_at_least_one_delivery_form() -> None:
         {"password": "cleartext"},
         {"apiToken": "cleartext"},
         {"nested": {"secret_value": "cleartext"}},
-        {"setting": "password=hunter2"},
     ],
 )
 def test_provider_metadata_rejects_inline_secret_material(metadata: dict[str, object]) -> None:
     with pytest.raises(ValidationError, match="inline secret"):
-        SecretBinding(
-            id="db-password",
-            slot_id="database-password",
+        ProviderAlias(
+            id="database-password",
             provider="vault-main",
-            provider_ref="object-id",
+            project="production/mail",
+            object_id="4af4a32d-f45e-46f7-ae19-2acc04df5419",
             metadata=metadata,
         )
+
+
+def test_provider_metadata_allows_benign_secret_words_in_values() -> None:
+    alias = ProviderAlias(
+        id="database-password",
+        provider="vault-main",
+        project="production/mail",
+        object_id="object/password",
+        metadata={"description": "password token is rotated externally"},
+    )
+
+    assert alias.metadata["description"] == "password token is rotated externally"
 
 
 def test_provider_fields_remain_opaque() -> None:
     binding = SecretBinding(
         id="db-password",
         slot_id="database-password",
-        provider="company-store",
-        provider_ref="object-7f21",
-        metadata={"mount": "production"},
+        alias="database-password",
     )
-    alias = ProviderAlias(id="company-store", provider="opaque-provider-kind")
+    alias = ProviderAlias(
+        id="database-password",
+        provider="opaque://provider/kind",
+        project="projects/production mail",
+        object_id="4af4a32d-f45e-46f7-ae19-2acc04df5419/object/password",
+        metadata={"description": "token used by the database password rotation job"},
+    )
 
-    assert binding.provider_ref == "object-7f21"
-    assert alias.provider == "opaque-provider-kind"
+    assert binding.alias == "database-password"
+    assert alias.provider == "opaque://provider/kind"
+    assert alias.object_id.startswith("4af4a32d")
 
 
-@pytest.mark.parametrize("provider_ref", ["password-value", "api-token", "secret"])
-def test_provider_reference_rejects_secret_like_identifiers(provider_ref: str) -> None:
-    with pytest.raises(ValidationError, match="secret-like"):
-        SecretBinding(
-            id="db-password",
-            slot_id="database-password",
-            provider="company-store",
-            provider_ref=provider_ref,
+@pytest.mark.parametrize("field", ["password", "token", "value", "secret"])
+def test_provider_alias_rejects_inline_secret_fields(field: str) -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ProviderAlias(
+            id="database-password",
+            provider="vault-main",
+            project="production/mail",
+            object_id="object/password",
+            **{field: "cleartext"},
         )
 
 

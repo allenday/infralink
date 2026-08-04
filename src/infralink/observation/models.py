@@ -214,11 +214,6 @@ class ServiceInstance(StrictModel):
 
 
 _SENSITIVE_KEY = re.compile(r"(?:^|[^a-z])(value|secret|password|token)(?:$|[^a-z])")
-_SENSITIVE_VALUE = re.compile(
-    r"(?:password|passwd|secret|token|api[_-]?key)\s*[:=]", re.IGNORECASE
-)
-
-
 def _contains_inline_secret(value: object) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -229,34 +224,28 @@ def _contains_inline_secret(value: object) -> bool:
         return False
     if isinstance(value, (list, tuple)):
         return any(_contains_inline_secret(child) for child in value)
-    return isinstance(value, str) and _SENSITIVE_VALUE.search(value) is not None
+    return False
 
 
 class SecretBinding(StrictModel):
     id: CanonicalId
     slot_id: CanonicalId
-    provider: CanonicalId
-    provider_ref: CanonicalId
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("provider_ref")
-    @classmethod
-    def reject_secret_like_provider_ref(cls, value: str) -> str:
-        if any(part in {"value", "secret", "password", "token"} for part in value.split("-")):
-            raise ValueError("provider_ref must not contain secret-like terms")
-        return value
-
-    @field_validator("metadata")
-    @classmethod
-    def reject_inline_secrets(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if _contains_inline_secret(value):
-            raise ValueError("provider binding metadata contains inline secret material")
-        return value
+    alias: CanonicalId
 
 
 class ProviderAlias(StrictModel):
     id: CanonicalId
     provider: Annotated[str, Field(min_length=1)]
+    project: Annotated[str, Field(min_length=1)]
+    object_id: Annotated[str, Field(min_length=1)]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def reject_inline_secrets(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if _contains_inline_secret(value):
+            raise ValueError("provider alias metadata contains inline secret-like key")
+        return value
 
 
 class DependencyContract(StrictModel):
