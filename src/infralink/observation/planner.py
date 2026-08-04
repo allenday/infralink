@@ -15,6 +15,7 @@ from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceL
 from infralink.observation.loader import DEFAULT_DIAGNOSTIC_LIMIT, ObservationDocument
 from infralink.observation.models import (
     Application,
+    BackendKind,
     DatasourceBinding,
     DependencyContract,
     Endpoint,
@@ -857,6 +858,20 @@ def resolve_observation_documents(
 
     planned_views: list[PlannedOperationsView] = []
     view_member_requirement: dict[str, SignalRequirement] = {}
+    source_signal_map = dict(signal_map)
+    derived_view_signal_ids = {
+        f"view/{view.id}/query/{section.id}/{member.signal_id}"
+        for view, _ in operation_views.values()
+        if isinstance(view, OperationsView)
+        for section in view.sections
+        for member in section.members
+    }
+    evaluator_backend_kind = {
+        "capability-state": BackendKind.HEALTH,
+        "dependency-health": BackendKind.HEALTH,
+        "metric-threshold": BackendKind.METRICS,
+        "log-match": BackendKind.LOGS,
+    }
     for view, ref in operation_views.values():
         assert isinstance(view, OperationsView)
         sections: list[PlannedViewSection] = []
@@ -877,7 +892,7 @@ def resolve_observation_documents(
             for member_index, member in enumerate(view_section.members):
                 member_ref = _child(section_ref, "members", str(member_index))
                 query_key = member.signal_id
-                source_signal = signal_map.get(member.signal_ref)
+                source_signal = source_signal_map.get(member.signal_ref)
                 derived_id = f"view/{view.id}/query/{view_section.id}/{query_key}"
                 if derived_id in seen_query_ids:
                     _finding(
@@ -898,6 +913,15 @@ def resolve_observation_documents(
                         derived_id,
                         "Reference a declared datasource binding.",
                     )
+                if member.signal_ref in derived_view_signal_ids:
+                    _finding(
+                        findings,
+                        "view-signal-ref-kind",
+                        _child(member_ref, "signal_ref"),
+                        derived_id,
+                        "Reference only a service or dependency signal.",
+                    )
+                    continue
                 if source_signal is None:
                     _finding(
                         findings,
@@ -908,6 +932,23 @@ def resolve_observation_documents(
                     )
                     continue
                 if not datasource_valid:
+                    continue
+                datasource = datasources[member.datasource_binding_id][0]
+                assert isinstance(datasource, DatasourceBinding)
+                backend_entry = backends.get(datasource.observation_backend_id)
+                if backend_entry is None:
+                    continue
+                backend = backend_entry[0]
+                assert isinstance(backend, ObservationBackend)
+                expected_backend_kind = evaluator_backend_kind.get(source_signal.evaluator or "")
+                if expected_backend_kind is None or backend.kind != expected_backend_kind:
+                    _finding(
+                        findings,
+                        "view-datasource-kind-incompatible",
+                        _child(member_ref, "datasource_binding_id"),
+                        derived_id,
+                        "Bind the signal to an observation backend of its evaluator kind.",
+                    )
                     continue
                 resolved = PlannedViewMember(
                     id=derived_id,
@@ -1258,8 +1299,11 @@ def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
         identity
         for identity in plan.opaque_identities
         if (
-            identity.id in renderer_ids
-            or identity.id in datasource_ids
+            (
+                identity.kind in {"renderer_binding_identities", "renderer_bindings"}
+                and identity.id in renderer_ids
+            )
+            or (identity.kind == "datasource_bindings" and identity.id in datasource_ids)
             or (identity.kind == "observation_backends" and identity.id in backend_ids)
         )
     ]

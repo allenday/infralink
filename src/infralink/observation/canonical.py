@@ -10,6 +10,7 @@ from datetime import date, datetime
 from enum import Enum
 
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 
 _UNORDERED_LIST_KEYS = frozenset(
     {
@@ -45,50 +46,96 @@ _UNORDERED_LIST_KEYS = frozenset(
 )
 
 
-def _list_sort_key(item: object) -> tuple[str, str]:
+def _canonical_text(item: object) -> str:
+    return json.dumps(
+        item, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
+    )
+
+
+def _scalar_tag(item: object) -> str:
+    if item is None:
+        return "null"
+    if isinstance(item, bool):
+        return "bool"
+    if isinstance(item, int):
+        return "int"
+    if isinstance(item, float):
+        return "float"
+    if isinstance(item, str):
+        return "str"
+    return type(item).__name__
+
+
+def _list_sort_key(item: object) -> tuple[str, str, str]:
+    secondary = f"{_scalar_tag(item)}:{_canonical_text(item)}"
     if isinstance(item, Mapping):
         for key in ("id", "endpoint_id"):
             identity = item.get(key)
             if isinstance(identity, str):
-                return key, identity
+                return key, identity, secondary
     if isinstance(item, (str, int, float, bool)):
-        return "value", str(item)
-    return (
-        "canonical",
-        json.dumps(
-            item, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
-        ),
-    )
+        return "value", _scalar_tag(item), secondary
+    return "canonical", secondary, secondary
 
 
 def _sort_normalized_list(values: list[object]) -> list[object]:
     return sorted(values, key=_list_sort_key)
 
 
-def _normalize(value: object) -> object:
+def _normalize(value: object, active: set[int]) -> object:
     if isinstance(value, BaseModel):
-        value = value.model_dump(
-            mode="json",
-            exclude={"source_refs"},
-            exclude_none=True,
-            exclude_defaults=True,
-        )
+        identity = id(value)
+        if identity in active:
+            raise TypeError("canonical value contains an active-container cycle")
+        active.add(identity)
+        try:
+            result: dict[str, object] = {}
+            for key, field in type(value).model_fields.items():
+                if key == "source_refs":
+                    continue
+                child = getattr(value, key)
+                if child is None:
+                    continue
+                default = field.default
+                if default is not PydanticUndefined and child == default:
+                    continue
+                field_default = field.get_default(call_default_factory=True, validated_data={})
+                if field.default_factory is not None and child == field_default:
+                    continue
+                result[key] = _normalize(child, active)
+            return result
+        finally:
+            active.remove(identity)
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("canonical mappings require string keys")
-        result: dict[str, object] = {}
-        for key, child in value.items():
-            if child is None or key == "source_refs":
-                continue
-            normalized = _normalize(child)
-            if key in _UNORDERED_LIST_KEYS and isinstance(normalized, list):
-                normalized = _sort_normalized_list(normalized)
-            result[key] = normalized
-        return result
+        identity = id(value)
+        if identity in active:
+            raise TypeError("canonical value contains an active-container cycle")
+        active.add(identity)
+        try:
+            result = {}
+            for key, child in value.items():
+                if child is None or key == "source_refs":
+                    continue
+                normalized = _normalize(child, active)
+                if key in _UNORDERED_LIST_KEYS and isinstance(normalized, list):
+                    normalized = _sort_normalized_list(normalized)
+                result[key] = normalized
+            return result
+        finally:
+            active.remove(identity)
     if isinstance(value, (list, tuple)):
-        return [_normalize(child) for child in value]
+        identity = id(value)
+        if identity in active:
+            raise TypeError("canonical value contains an active-container cycle")
+        active.add(identity)
+        try:
+            return [_normalize(child, active) for child in value]
+        finally:
+            active.remove(identity)
     if isinstance(value, Enum):
-        return _normalize(value.value)
+        return _normalize(value.value, active)
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, float) and not math.isfinite(value):
@@ -102,7 +149,7 @@ def canonical_json(value: object) -> bytes:
     """Return compact UTF-8 JSON with sorted object keys and omitted null members."""
 
     return json.dumps(
-        _normalize(value),
+        _normalize(value, set()),
         ensure_ascii=False,
         allow_nan=False,
         separators=(",", ":"),

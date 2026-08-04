@@ -20,12 +20,12 @@ def document(data: dict[str, object], digest: str = "semantic") -> ObservationDo
 def operational_data() -> dict[str, object]:
     data = base_data()
     data["observation_backends"] = [
-        {"id": "prometheus", "kind": "metrics", "backend_ref": "metrics-prod"}
+        {"id": "health-primary", "kind": "health", "backend_ref": "health-prod"}
     ]
     data["datasource_bindings"] = [
         {
             "id": "primary-metrics",
-            "observation_backend_id": "prometheus",
+            "observation_backend_id": "health-primary",
             "datasource_ref": "main",
         }
     ]
@@ -116,6 +116,39 @@ def test_view_requires_explicit_existing_datasource_binding() -> None:
     assert "unknown-view-datasource-binding" in {
         item.code for item in caught.value.report.diagnostics
     }
+
+
+def test_view_on_view_is_rejected_independent_of_view_order() -> None:
+    for reverse in (False, True):
+        data = operational_data()
+        second = deepcopy(data["operations_views"][0])  # type: ignore[index]
+        second["id"] = "derived"
+        second["sections"][0]["members"][0]["signal_id"] = "nested"  # type: ignore[index]
+        second["sections"][0]["members"][0][  # type: ignore[index]
+            "signal_ref"
+        ] = "view/overview/query/core/api-up"
+        data["operations_views"].append(second)  # type: ignore[union-attr]
+        if reverse:
+            data["operations_views"].reverse()  # type: ignore[union-attr]
+        with pytest.raises(PlanValidationError) as caught:
+            resolve_observation_documents([document(data)], as_of=AS_OF)
+        finding = next(
+            item for item in caught.value.report.diagnostics if item.code == "view-signal-ref-kind"
+        )
+        assert finding.location.pointer.endswith("/sections/0/members/0/signal_ref")
+
+
+def test_view_datasource_backend_must_match_source_evaluator_kind() -> None:
+    data = operational_data()
+    data["observation_backends"][0]["kind"] = "logs"  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item
+        for item in caught.value.report.diagnostics
+        if item.code == "view-datasource-kind-incompatible"
+    )
+    assert finding.location.pointer.endswith("/datasource_binding_id")
 
 
 @pytest.mark.parametrize(
@@ -232,6 +265,26 @@ def test_unrelated_datasource_and_backend_do_not_change_scoped_digest() -> None:
         first.readiness_suites[0].scoped_plan_digest
         == second.readiness_suites[0].scoped_plan_digest
     )
+
+
+def test_scoped_opaque_identity_matches_are_qualified_by_collection_kind() -> None:
+    data = operational_data()
+    data["renderer_binding_identities"] = [
+        {
+            "id": "primary-metrics",
+            "renderer": "dashboard",
+            "binding_ref": "unrelated/original",
+        },
+        {
+            "id": "health-primary",
+            "renderer": "dashboard",
+            "binding_ref": "also-unrelated/original",
+        },
+    ]
+    changed = deepcopy(data)
+    changed["renderer_binding_identities"][0]["binding_ref"] = "unrelated/changed"  # type: ignore[index]
+    changed["renderer_binding_identities"][1]["binding_ref"] = "also-unrelated/changed"  # type: ignore[index]
+    assert _scoped(data) == _scoped(changed)
 
 
 def _scoped(data: dict[str, object]) -> str:
