@@ -156,7 +156,8 @@
         "https",
         "smtp",
         "irc",
-        "postgresql"
+        "postgresql",
+        "redis"
       ],
       "title": "EndpointProtocol",
       "type": "string"
@@ -213,7 +214,8 @@
         "http-status",
         "smtp-banner",
         "irc-handshake",
-        "postgres-ready"
+        "postgres-ready",
+        "redis-ready"
       ],
       "title": "HealthEvaluator",
       "type": "string"

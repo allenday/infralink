@@ -74,7 +74,8 @@
         "https",
         "smtp",
         "irc",
-        "postgresql"
+        "postgresql",
+        "redis"
       ],
       "title": "EndpointProtocol",
       "type": "string"

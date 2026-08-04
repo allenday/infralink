@@ -56,6 +56,7 @@ class EndpointProtocol(str, Enum):
     SMTP = "smtp"
     IRC = "irc"
     POSTGRESQL = "postgresql"
+    REDIS = "redis"
 
 
 class HealthEvaluator(str, Enum):
@@ -64,6 +65,7 @@ class HealthEvaluator(str, Enum):
     SMTP_BANNER = "smtp-banner"
     IRC_HANDSHAKE = "irc-handshake"
     POSTGRES_READY = "postgres-ready"
+    REDIS_READY = "redis-ready"
 
 
 class MetricsEvaluator(str, Enum):
