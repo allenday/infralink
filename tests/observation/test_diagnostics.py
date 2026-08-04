@@ -95,3 +95,32 @@ def test_diagnostic_set_retains_pre_truncation_severity_counts() -> None:
     assert result.error_count == 1
     assert result.warning_count == 1
     assert result.total_count == 2
+
+
+def test_source_location_validates_and_renders_document_index() -> None:
+    location = SourceLocation("contracts.yml", "/applications/0/id", document_index=2)
+
+    assert location.render() == "contracts.yml#document=2/applications/0/id"
+    with pytest.raises(ValueError, match="document_index"):
+        SourceLocation("contracts.yml", document_index=-1)
+
+
+def test_diagnostic_sort_includes_document_index() -> None:
+    findings = [
+        Diagnostic("same", "error", "same", SourceLocation("a.yml", "/", 2)),
+        Diagnostic("same", "error", "same", SourceLocation("a.yml", "/", 0)),
+        Diagnostic("same", "error", "same", SourceLocation("a.yml", "/", 1)),
+    ]
+
+    result = DiagnosticSet.from_diagnostics(findings, limit=10)
+
+    assert [item.location.document_index for item in result] == [0, 1, 2]
+
+
+def test_diagnostic_set_checks_severity_counts_against_retained_findings() -> None:
+    warning = _diagnostic("warning", severity="warning")
+    with pytest.raises(ValueError, match="severity counts"):
+        DiagnosticSet((warning,), 1, 1, False, error_count=1, warning_count=0)
+
+    with pytest.raises(ValueError, match="severity counts"):
+        DiagnosticSet((warning,), 1, 2, True, error_count=2, warning_count=0)

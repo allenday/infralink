@@ -16,6 +16,10 @@ from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceL
 
 SCHEMA_VERSION = "infralink.observation/v1"
 DEFAULT_DIAGNOSTIC_LIMIT = 100
+MAX_SOURCE_BYTES = 4 * 1024 * 1024
+MAX_YAML_EVENTS = 100_000
+MAX_YAML_DOCUMENTS = 100
+MAX_YAML_NESTING_DEPTH = 100
 
 # Identity-bearing top-level collections represented by the v1 source models.
 _IDENTITY_COLLECTIONS = frozenset(
@@ -45,6 +49,7 @@ class ObservationDocument:
     data: Mapping[str, Any]
     raw_sha256: str
     semantic_sha256: str
+    document_index: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return an independent mutable copy for downstream validation."""
@@ -159,6 +164,19 @@ def _common_path(paths: list[str]) -> str:
 def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument], list[Diagnostic]]:
     raw = path.read_bytes()
     raw_sha256 = hashlib.sha256(raw).hexdigest()
+    if len(raw) > MAX_SOURCE_BYTES:
+        return [], [
+            Diagnostic(
+                code="yaml-source-too-large",
+                severity="error",
+                message=f"The YAML source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
+                location=SourceLocation(source_path),
+                next_actions=("Split the contract into smaller YAML source files.",),
+            )
+        ]
+    inspection_finding = _inspect_yaml(raw, source_path)
+    if inspection_finding is not None:
+        return [], [inspection_finding]
     try:
         parsed_documents = list(yaml.safe_load_all(raw))
     except (UnicodeDecodeError, yaml.YAMLError) as error:
@@ -178,14 +196,14 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
 
     loaded: list[ObservationDocument] = []
     findings: list[Diagnostic] = []
-    for data in parsed_documents:
+    for document_index, data in enumerate(parsed_documents):
         if not isinstance(data, Mapping):
             findings.append(
                 Diagnostic(
                     code="document-root-not-mapping",
                     severity="error",
                     message="An observation document root must be a mapping.",
-                    location=SourceLocation(source_path),
+                    location=SourceLocation(source_path, document_index=document_index),
                     next_actions=("Replace the document root with a YAML mapping.",),
                 )
             )
@@ -197,7 +215,7 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
                     code="schema-version-missing",
                     severity="error",
                     message=f"The document must declare schema_version {SCHEMA_VERSION!r}.",
-                    location=SourceLocation(source_path, "/schema_version"),
+                    location=SourceLocation(source_path, "/schema_version", document_index),
                     next_actions=(f"Add schema_version: {SCHEMA_VERSION}.",),
                 )
             )
@@ -208,13 +226,25 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
                     code="schema-version-unsupported",
                     severity="error",
                     message=f"Unsupported observation schema version: {version!r}.",
-                    location=SourceLocation(source_path, "/schema_version"),
+                    location=SourceLocation(source_path, "/schema_version", document_index),
                     identity=str(version),
                     next_actions=(f"Use schema_version: {SCHEMA_VERSION}.",),
                 )
             )
             continue
         parsed = dict(data)
+        invalid_key_pointer = _find_non_string_key(parsed)
+        if invalid_key_pointer is not None:
+            findings.append(
+                Diagnostic(
+                    code="mapping-key-not-string",
+                    severity="error",
+                    message="YAML contract mapping keys must be strings.",
+                    location=SourceLocation(source_path, invalid_key_pointer, document_index),
+                    next_actions=("Replace the non-string mapping key with a string key.",),
+                )
+            )
+            continue
         semantic_sha256 = hashlib.sha256(canonical_parsed_content(parsed)).hexdigest()
         loaded.append(
             ObservationDocument(
@@ -222,6 +252,7 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
                 data=_freeze_mapping(parsed),
                 raw_sha256=raw_sha256,
                 semantic_sha256=semantic_sha256,
+                document_index=document_index,
             )
         )
     return loaded, findings
@@ -237,7 +268,11 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
             for index, item in enumerate(objects):
                 if isinstance(item, Mapping) and isinstance(item.get("id"), str):
                     locations[(collection, item["id"])].append(
-                        SourceLocation(document.source_path, f"/{collection}/{index}/id")
+                        SourceLocation(
+                            document.source_path,
+                            f"/{collection}/{index}/id",
+                            document.document_index,
+                        )
                     )
 
     findings: list[Diagnostic] = []
@@ -257,6 +292,95 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
                 )
             )
     return findings
+
+
+def _inspect_yaml(raw: bytes, source_path: str) -> Diagnostic | None:
+    document_index = 0
+    document_count = 0
+    nesting_depth = 0
+    try:
+        for event_count, event in enumerate(yaml.parse(raw), start=1):
+            if event_count > MAX_YAML_EVENTS:
+                return Diagnostic(
+                    code="yaml-source-too-complex",
+                    severity="error",
+                    message=f"The YAML source exceeds the {MAX_YAML_EVENTS}-event limit.",
+                    location=SourceLocation(source_path, document_index=document_index),
+                    next_actions=("Split the contract into simpler YAML source files.",),
+                )
+            if isinstance(event, yaml.events.DocumentStartEvent):
+                document_index = document_count
+                document_count += 1
+                if document_count > MAX_YAML_DOCUMENTS:
+                    return Diagnostic(
+                        code="yaml-too-many-documents",
+                        severity="error",
+                        message=f"The YAML source exceeds the {MAX_YAML_DOCUMENTS}-document limit.",
+                        location=SourceLocation(source_path, document_index=document_index),
+                        next_actions=("Split the documents across multiple YAML source files.",),
+                    )
+            if isinstance(event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)):
+                nesting_depth += 1
+                if nesting_depth > MAX_YAML_NESTING_DEPTH:
+                    return Diagnostic(
+                        code="yaml-nesting-too-deep",
+                        severity="error",
+                        message=(
+                            "The YAML source exceeds the "
+                            f"{MAX_YAML_NESTING_DEPTH}-level nesting limit."
+                        ),
+                        location=SourceLocation(source_path, document_index=document_index),
+                        next_actions=("Flatten deeply nested contract content.",),
+                    )
+            elif isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
+                nesting_depth -= 1
+            if isinstance(event, yaml.events.AliasEvent) or getattr(event, "anchor", None):
+                return Diagnostic(
+                    code="yaml-alias-forbidden",
+                    severity="error",
+                    message="YAML anchors and aliases are not allowed in observation contracts.",
+                    location=SourceLocation(source_path, document_index=document_index),
+                    next_actions=("Expand the aliased value directly and remove anchors.",),
+                )
+    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        problem = getattr(error, "problem", None)
+        message = "The YAML source is malformed."
+        if isinstance(problem, str) and problem:
+            message = f"The YAML source is malformed: {problem}."
+        return Diagnostic(
+            code="yaml-malformed",
+            severity="error",
+            message=message,
+            location=SourceLocation(source_path, document_index=document_index),
+            next_actions=("Repair the YAML syntax and load the source again.",),
+        )
+    return None
+
+
+def _find_non_string_key(value: Any, pointer: str = "/") -> str | None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if not isinstance(key, str):
+                return pointer
+            child_pointer = (
+                f"/{_escape_pointer_token(key)}"
+                if pointer == "/"
+                else f"{pointer}/{_escape_pointer_token(key)}"
+            )
+            invalid = _find_non_string_key(child, child_pointer)
+            if invalid is not None:
+                return invalid
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            child_pointer = f"/{index}" if pointer == "/" else f"{pointer}/{index}"
+            invalid = _find_non_string_key(child, child_pointer)
+            if invalid is not None:
+                return invalid
+    return None
+
+
+def _escape_pointer_token(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
 
 
 def _freeze_mapping(data: Mapping[str, Any]) -> Mapping[str, Any]:

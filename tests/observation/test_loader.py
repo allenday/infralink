@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from infralink.observation.diagnostics import SourceLocation
 from infralink.observation.loader import load_observation_documents
 
 
@@ -80,6 +81,67 @@ def test_explicit_non_yaml_file_returns_typed_diagnostic(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
+    "source",
+    [
+        "schema_version: infralink.observation/v1\nvalue: &shared [one]\ncopy: *shared\n",
+        "schema_version: infralink.observation/v1\nvalue: &cycle [*cycle]\n",
+    ],
+)
+def test_yaml_aliases_and_anchors_are_rejected_before_construction(
+    tmp_path: Path, source: str
+) -> None:
+    _write(tmp_path / "contract.yml", source)
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["yaml-alias-forbidden"]
+    assert report.diagnostics[0].location == SourceLocation("contract.yml", "/", 0)
+
+
+def test_oversized_source_is_rejected_with_typed_diagnostic(tmp_path: Path) -> None:
+    from infralink.observation.loader import MAX_SOURCE_BYTES
+
+    _write(tmp_path / "large.yml", "x" * (MAX_SOURCE_BYTES + 1))
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["yaml-source-too-large"]
+
+
+def test_deeply_nested_yaml_is_rejected_before_construction(tmp_path: Path) -> None:
+    from infralink.observation.loader import MAX_YAML_NESTING_DEPTH
+
+    nested = "[" * (MAX_YAML_NESTING_DEPTH + 1) + "value" + "]" * (MAX_YAML_NESTING_DEPTH + 1)
+    _write(
+        tmp_path / "deep.yml",
+        f"schema_version: infralink.observation/v1\nnested: {nested}\n",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["yaml-nesting-too-deep"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "schema_version: infralink.observation/v1\n1: invalid\n",
+        "schema_version: infralink.observation/v1\nnested:\n  - 2: invalid\n",
+    ],
+)
+def test_non_string_mapping_keys_are_rejected_before_hashing(tmp_path: Path, source: str) -> None:
+    _write(tmp_path / "contract.yml", source)
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["mapping-key-not-string"]
+
+
+@pytest.mark.parametrize(
     ("source", "code", "pointer"),
     [
         ("applications: []\n", "schema-version-missing", "/schema_version"),
@@ -134,6 +196,28 @@ def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) ->
         ("a.yml", "/applications/0/id", "applications/mail"),
         ("nested/b.yaml", "/applications/0/id", "applications/mail"),
     ]
+
+
+def test_duplicate_ids_in_same_multi_document_file_have_distinct_locations(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "contracts.yml",
+        """schema_version: infralink.observation/v1
+applications:
+  - id: mail
+---
+schema_version: infralink.observation/v1
+applications:
+  - id: mail
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    duplicates = [item for item in report.diagnostics if item.code == "duplicate-object-id"]
+    assert [item.location.document_index for item in duplicates] == [0, 1]
+    assert len({item.location.render() for item in duplicates}) == 2
 
 
 def test_loading_does_not_read_environment_or_initialize_providers(

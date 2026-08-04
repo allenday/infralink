@@ -15,12 +15,20 @@ class SourceLocation:
 
     path: str
     pointer: str = "/"
+    document_index: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.path, str) or not self.path:
             raise ValueError("source location path must not be empty")
         if not isinstance(self.pointer, str) or not self.pointer.startswith("/"):
             raise ValueError("source location pointer must start with '/'")
+        if type(self.document_index) is not int or self.document_index < 0:
+            raise ValueError("source location document_index must be a non-negative integer")
+
+    def render(self) -> str:
+        """Render the complete location without losing document identity."""
+
+        return f"{self.path}#document={self.document_index}{self.pointer}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +87,18 @@ class DiagnosticSet:
             raise ValueError("retained diagnostics must equal min(limit, total_count)")
         if self.truncated != (self.total_count > self.limit):
             raise ValueError("truncated must reflect whether total_count exceeds limit")
+        retained_errors = sum(item.severity == "error" for item in self.diagnostics)
+        retained_warnings = len(self.diagnostics) - retained_errors
+        if self.truncated:
+            counts_match = (
+                self.error_count >= retained_errors and self.warning_count >= retained_warnings
+            )
+        else:
+            counts_match = (
+                self.error_count == retained_errors and self.warning_count == retained_warnings
+            )
+        if not counts_match:
+            raise ValueError("severity counts are inconsistent with retained diagnostics")
 
     @classmethod
     def from_diagnostics(cls, diagnostics: Iterable[Diagnostic], *, limit: int) -> DiagnosticSet:
@@ -110,12 +130,13 @@ class DiagnosticSet:
 
 def _diagnostic_sort_key(
     diagnostic: Diagnostic,
-) -> tuple[int, str, str, str, str, str, tuple[str, ...]]:
+) -> tuple[int, str, str, int, str, str, str, tuple[str, ...]]:
     severity_rank = {"error": 0, "warning": 1}
     return (
         severity_rank[diagnostic.severity],
         diagnostic.code,
         diagnostic.location.path,
+        diagnostic.location.document_index,
         diagnostic.location.pointer,
         diagnostic.identity or "",
         diagnostic.message,
