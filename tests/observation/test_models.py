@@ -329,14 +329,17 @@ def test_service_instance_and_dependency_contract_are_strict_contracts() -> None
     )
     dependency = DependencyContract(
         id="web-to-database",
-        source_service_id="nginx-1",
-        target_service_id="postgres-1",
+        source_service_id="00000000-0000-4000-8000-000000000001/nginx-1",
+        target_service_id="00000000-0000-4000-8000-000000000002/postgres-1",
+        target_endpoint_id="00000000-0000-4000-8000-000000000002/postgres-1/database",
+        protocol=EndpointProtocol.POSTGRESQL,
+        port=5432,
         required=True,
-        health_signal_refs=["database-ready"],
+        health_signal_ref="dependency/web-to-database/health/database-ready",
     )
 
     assert instance.profile_id == "postgresql"
-    assert dependency.target_service_id == "postgres-1"
+    assert dependency.target_service_id.endswith("/postgres-1")
 
     with pytest.raises(ValidationError):
         ServiceInstance(id="postgres-1", profile_id="PostgreSQL")
@@ -345,6 +348,10 @@ def test_service_instance_and_dependency_contract_are_strict_contracts() -> None
             id="web-to-database",
             source_service_id="nginx-1",
             target_service_id="postgres-1",
+            target_endpoint_id="postgres-1/database",
+            protocol=EndpointProtocol.POSTGRESQL,
+            port=5432,
+            health_signal_ref="dependency/web-to-database/health/database-ready",
             required="yes",
         )
 

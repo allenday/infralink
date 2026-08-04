@@ -74,10 +74,11 @@ def base_data() -> dict[str, object]:
             {
                 "id": "api-to-frontend",
                 "source_service_id": "11111111-1111-4111-8111-111111111111/api",
+                "target_service_id": "22222222-2222-4222-8222-222222222222/frontend",
                 "target_endpoint_id": "22222222-2222-4222-8222-222222222222/frontend/http",
                 "protocol": "http",
                 "port": 8080,
-                "health_signal_ids": ["reachable"],
+                "health_signal_ref": "dependency/api-to-frontend/health/reachable",
             }
         ],
         "applications": [
@@ -136,9 +137,6 @@ def test_instance_applies_only_address_exposure_and_route_overrides() -> None:
 
 def test_dependency_accepts_explicit_namespaced_health_signal_ref() -> None:
     data = base_data()
-    edge = data["dependency_contracts"][0]  # type: ignore[index]
-    edge.pop("health_signal_ids")
-    edge["health_signal_ref"] = "dependency/api-to-frontend/health/reachable"
     plan = resolve_observation_documents([document(data)], as_of=AS_OF)
     assert plan.dependencies[0].health_signal_refs == (
         "dependency/api-to-frontend/health/reachable",
@@ -208,3 +206,73 @@ def test_expired_waiver_and_unknown_target_are_reported() -> None:
         "waiver-expired",
         "unknown-waiver-target",
     }
+
+
+@pytest.mark.parametrize(
+    "documents",
+    [
+        [],
+        [document({"schema_version": "infralink.observation/v2"})],
+        [document({"schema_version": "infralink.observation/v1", "hosts": []})],
+    ],
+)
+def test_requires_a_usable_exact_version_document(
+    documents: list[ObservationDocument],
+) -> None:
+    with pytest.raises(PlanValidationError):
+        resolve_observation_documents(documents, as_of=AS_OF)
+
+
+def test_same_instance_key_on_different_hosts_is_allowed_but_same_canonical_id_is_not() -> None:
+    data = base_data()
+    data["service_instances"][0]["id"] = "api"  # type: ignore[index]
+    edge = data["dependency_contracts"][0]  # type: ignore[index]
+    edge["target_service_id"] = "22222222-2222-4222-8222-222222222222/api"
+    edge["target_endpoint_id"] = "22222222-2222-4222-8222-222222222222/api/http"
+    resolve_observation_documents([document(data)], as_of=AS_OF)
+    data["service_instances"].append(dict(data["service_instances"][1]))  # type: ignore[union-attr,index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert "duplicate-service-id" in {item.code for item in caught.value.report.diagnostics}
+
+
+def test_plan_contains_profiles_and_empty_task4_collections() -> None:
+    plan = resolve_observation_documents([document(base_data())], as_of=AS_OF)
+    assert [profile.id for profile in plan.service_profiles] == ["web"]
+    assert plan.operations_views == ()
+    assert plan.readiness_suites == ()
+
+
+def test_duplicate_backend_identity_is_rejected() -> None:
+    data = base_data()
+    backend = {"id": "metrics", "kind": "metrics", "backend_ref": "opaque"}
+    data["observation_backends"] = [backend, dict(backend)]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert "duplicate-observation-backend-id" in {
+        item.code for item in caught.value.report.diagnostics
+    }
+
+
+def test_cross_reference_diagnostic_points_to_exact_field() -> None:
+    data = base_data()
+    data["dependency_contracts"][0]["target_endpoint_id"] = "missing/x"  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item for item in caught.value.report.diagnostics if item.code == "unknown-endpoint"
+    )
+    assert finding.location.pointer == "/dependency_contracts/0/target_endpoint_id"
+
+
+@pytest.mark.parametrize("legacy_field", ["health_signal_ids", "health_signal_refs"])
+def test_dependency_rejects_legacy_health_fields(legacy_field: str) -> None:
+    data = base_data()
+    edge = data["dependency_contracts"][0]  # type: ignore[index]
+    edge[legacy_field] = ["reachable"]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item for item in caught.value.report.diagnostics if item.code == "invalid-document-record"
+    )
+    assert finding.location.pointer == f"/dependency_contracts/0/{legacy_field}"

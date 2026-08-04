@@ -325,15 +325,13 @@ class ProviderAlias(StrictModel):
 
 class DependencyContract(StrictModel):
     id: CanonicalId
-    source_service_id: str
-    target_endpoint_id: str | None = None
-    target_service_id: CanonicalId | None = None
-    protocol: EndpointProtocol | None = None
-    port: Port | None = None
+    source_service_id: QualifiedRef
+    target_service_id: QualifiedRef
+    target_endpoint_id: QualifiedRef
+    protocol: EndpointProtocol
+    port: Port
     required: bool = True
-    health_signal_ids: list[CanonicalId] = Field(default_factory=list)
-    health_signal_ref: QualifiedRef | None = None
-    health_signal_refs: list[CanonicalId] = Field(default_factory=list)
+    health_signal_ref: QualifiedRef
     execution_adapter: str | None = None
 
 

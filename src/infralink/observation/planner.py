@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any, Literal
@@ -14,14 +15,20 @@ from infralink.observation.models import (
     Application,
     DatasourceBinding,
     DependencyContract,
+    Endpoint,
     EndpointExposure,
     EndpointProtocol,
+    HealthCapability,
     Host,
+    LogCapability,
+    LogicalSignal,
+    MetricsCapability,
     ObservationBackend,
     ProviderAlias,
     RendererBindingIdentity,
     SecretBinding,
     SecretDeliveryForm,
+    SecretSlot,
     ServiceInstance,
     ServiceProfile,
     Waiver,
@@ -52,6 +59,17 @@ class PlannedService(PlanModel):
     source_refs: tuple[SourceRef, ...]
 
 
+class PlannedServiceProfile(PlanModel):
+    id: str
+    endpoints: tuple[Endpoint, ...]
+    health: tuple[HealthCapability, ...]
+    metrics: tuple[MetricsCapability, ...]
+    logs: tuple[LogCapability, ...]
+    signals: tuple[LogicalSignal, ...]
+    secret_slots: tuple[SecretSlot, ...]
+    source_refs: tuple[SourceRef, ...]
+
+
 class PlannedEndpoint(PlanModel):
     id: str
     service_id: str
@@ -73,6 +91,7 @@ class PlannedSignal(PlanModel):
 class PlannedDependency(PlanModel):
     id: str
     source_service_id: str
+    target_service_id: str
     target_endpoint_id: str
     protocol: EndpointProtocol
     port: int
@@ -132,6 +151,16 @@ class OpaqueIdentity(PlanModel):
     source_refs: tuple[SourceRef, ...]
 
 
+class PlannedOperationsView(PlanModel):
+    id: str
+    source_refs: tuple[SourceRef, ...]
+
+
+class PlannedReadinessSuite(PlanModel):
+    id: str
+    source_refs: tuple[SourceRef, ...]
+
+
 class PlanCompatibility(PlanModel):
     infralink_schema: Literal["v1"] = "v1"
     adapter_contract: Literal["v1"] = "v1"
@@ -142,6 +171,7 @@ class Plan(PlanModel):
     registry_revision: str | None
     document_digests: tuple[str, ...]
     compatibility: PlanCompatibility = Field(default_factory=PlanCompatibility)
+    service_profiles: tuple[PlannedServiceProfile, ...]
     hosts: tuple[PlannedHost, ...]
     services: tuple[PlannedService, ...]
     endpoints: tuple[PlannedEndpoint, ...]
@@ -153,6 +183,8 @@ class Plan(PlanModel):
     secret_bindings: tuple[PlannedSecretBinding, ...]
     provider_aliases: tuple[PlannedAlias, ...]
     opaque_identities: tuple[OpaqueIdentity, ...]
+    operations_views: tuple[PlannedOperationsView, ...] = ()
+    readiness_suites: tuple[PlannedReadinessSuite, ...] = ()
     plan_digest: None = None
 
 
@@ -198,10 +230,35 @@ def resolve_observation_documents(
         raise ValueError("as_of must be timezone-aware")
     docs = tuple(documents)
     findings: list[Diagnostic] = []
+    if not docs:
+        findings.append(
+            Diagnostic(
+                code="no-usable-observation-document",
+                severity="error",
+                message="At least one usable observation document is required.",
+                location=SourceLocation("<input>"),
+                identity="observation-documents",
+                next_actions=(
+                    "Supply an infralink.observation/v1 document with contract records.",
+                ),
+            )
+        )
     parsed: dict[str, list[tuple[BaseModel, SourceRef]]] = {key: [] for key in _SECTIONS}
     revisions: set[str] = set()
+    usable_documents = 0
     for doc in docs:
         data = doc.to_dict()
+        if data.get("schema_version") != "infralink.observation/v1":
+            _add(
+                findings,
+                "schema-version-unsupported",
+                doc,
+                "/schema_version",
+                "schema_version",
+                "Set schema_version to infralink.observation/v1.",
+            )
+        elif any(data.get(section) for section in _SECTIONS):
+            usable_documents += 1
         for key in sorted(set(data) - _TOP_LEVEL):
             _add(
                 findings,
@@ -255,6 +312,16 @@ def resolve_observation_documents(
                     continue
                 parsed[section].append((item, _ref(doc, pointer)))
 
+    if docs and usable_documents == 0:
+        _add(
+            findings,
+            "no-usable-observation-document",
+            docs[0],
+            "/",
+            "observation-documents",
+            "Supply a versioned document with at least one supported contract record.",
+        )
+
     if len(revisions) > 1:
         first = docs[0]
         _add(
@@ -268,12 +335,28 @@ def resolve_observation_documents(
 
     profiles = _unique(parsed["service_profiles"], "profile", findings)
     hosts = _unique(parsed["hosts"], "host", findings)
-    instances = _unique(parsed["service_instances"], "service-instance", findings)
+    instance_entries = parsed["service_instances"]
     aliases = _unique(parsed["provider_aliases"], "provider-alias", findings)
     bindings = _unique(parsed["secret_bindings"], "secret-binding", findings)
     dependencies = _unique(parsed["dependency_contracts"], "dependency", findings)
     applications = _unique(parsed["applications"], "application", findings)
     waivers = _unique(parsed["waivers"], "waiver", findings)
+    _unique(parsed["observation_backends"], "observation-backend", findings)
+    _unique(parsed["datasource_bindings"], "datasource-binding", findings)
+    planned_profiles = [
+        PlannedServiceProfile(
+            id=profile.id,
+            endpoints=tuple(profile.endpoints),
+            health=tuple(profile.health),
+            metrics=tuple(profile.metrics),
+            logs=tuple(profile.logs),
+            signals=tuple(profile.signals),
+            secret_slots=tuple(profile.secret_slots),
+            source_refs=(ref,),
+        )
+        for profile, ref in profiles.values()
+        if isinstance(profile, ServiceProfile)
+    ]
 
     planned_hosts: list[PlannedHost] = []
     for host, ref in hosts.values():
@@ -286,33 +369,49 @@ def resolve_observation_documents(
     requirements: list[PlannedSecretRequirement] = []
     service_profiles: dict[str, ServiceProfile] = {}
     service_refs: dict[str, SourceRef] = {}
+    instance_by_service: dict[str, ServiceInstance] = {}
+    seen_service_ids: set[str] = set()
 
-    for instance, ref in instances.values():
+    for instance, ref in instance_entries:
         assert isinstance(instance, ServiceInstance)
         if instance.host_id is None:
             _finding(
                 findings,
                 "missing-service-host",
-                ref,
+                _child(ref, "host_id"),
                 instance.id,
                 "Set host_id to an existing UUID host identity.",
             )
             continue
         host_id = str(instance.host_id)
         service_id = f"{host_id}/{instance.id}"
+        if service_id in seen_service_ids:
+            _finding(
+                findings,
+                "duplicate-service-id",
+                _child(ref, "id"),
+                service_id,
+                "Give each service instance key one identity per host.",
+            )
+            continue
+        seen_service_ids.add(service_id)
         profile_entry = profiles.get(instance.profile_id)
         if profile_entry is None:
             _finding(
                 findings,
                 "unknown-profile",
-                ref,
+                _child(ref, "profile_id"),
                 service_id,
                 "Set profile_id to a declared service profile.",
             )
             continue
         if host_id not in host_ids:
             _finding(
-                findings, "unknown-host", ref, service_id, "Set host_id to a declared host UUID."
+                findings,
+                "unknown-host",
+                _child(ref, "host_id"),
+                service_id,
+                "Set host_id to a declared host UUID.",
             )
             continue
         profile = profile_entry[0]
@@ -328,24 +427,29 @@ def resolve_observation_documents(
         )
         service_profiles[service_id] = profile
         service_refs[service_id] = ref
+        instance_by_service[service_id] = instance
         selected = (
             set(instance.endpoint_ids)
             if instance.endpoint_ids
             else {e.id for e in profile.endpoints}
         )
-        overrides = {override.endpoint_id: override for override in instance.endpoint_overrides}
+        overrides = {
+            override.endpoint_id: (override, _child(ref, "endpoint_overrides", str(index)))
+            for index, override in enumerate(instance.endpoint_overrides)
+        }
         for endpoint_id in overrides.keys() - {endpoint.id for endpoint in profile.endpoints}:
             _finding(
                 findings,
                 "unknown-endpoint-override",
-                ref,
+                _child(overrides[endpoint_id][1], "endpoint_id"),
                 f"{service_id}/{endpoint_id}",
                 "Override only an endpoint declared by the service profile.",
             )
-        for endpoint in profile.endpoints:
+        for endpoint_index, endpoint in enumerate(profile.endpoints):
             if endpoint.id not in selected:
                 continue
-            override = overrides.get(endpoint.id)
+            override_entry = overrides.get(endpoint.id)
+            override = override_entry[0] if override_entry is not None else None
             planned_endpoints.append(
                 PlannedEndpoint(
                     id=f"{service_id}/{endpoint.id}",
@@ -364,18 +468,22 @@ def resolve_observation_documents(
                         if override is not None and override.route is not None
                         else endpoint.path
                     ),
-                    source_refs=(ref, profile_entry[1]),
+                    source_refs=(
+                        ref,
+                        _child(profile_entry[1], "endpoints", str(endpoint_index)),
+                    )
+                    + ((override_entry[1],) if override_entry is not None else ()),
                 )
             )
-        for signal in profile.signals:
+        for signal_index, signal in enumerate(profile.signals):
             planned_signals.append(
                 PlannedSignal(
                     id=f"service/{service_id}/{signal.capability_id}/{signal.id}",
                     kind="service",
-                    source_refs=(ref, profile_entry[1]),
+                    source_refs=(_child(profile_entry[1], "signals", str(signal_index)), ref),
                 )
             )
-        for slot in profile.secret_slots:
+        for slot_index, slot in enumerate(profile.secret_slots):
             requirements.append(
                 PlannedSecretRequirement(
                     id=f"{service_id}/{slot.id}",
@@ -383,7 +491,7 @@ def resolve_observation_documents(
                     slot_id=slot.id,
                     required=slot.required,
                     delivery_forms=tuple(slot.delivery_forms),
-                    source_refs=(ref, profile_entry[1]),
+                    source_refs=(_child(profile_entry[1], "secret_slots", str(slot_index)), ref),
                 )
             )
 
@@ -393,29 +501,45 @@ def resolve_observation_documents(
     planned_dependencies: list[PlannedDependency] = []
     for edge, ref in dependencies.values():
         assert isinstance(edge, DependencyContract)
-        target = endpoint_map.get(edge.target_endpoint_id or "")
+        target = endpoint_map.get(edge.target_endpoint_id)
         if edge.source_service_id not in service_ids:
             _finding(
                 findings,
                 "unknown-dependency-source",
-                ref,
+                _child(ref, "source_service_id"),
                 edge.id,
                 "Set source_service_id to a canonical existing service ID.",
+            )
+        if edge.target_service_id not in service_ids:
+            _finding(
+                findings,
+                "unknown-dependency-target",
+                _child(ref, "target_service_id"),
+                edge.id,
+                "Set target_service_id to a canonical existing service ID.",
             )
         if target is None:
             _finding(
                 findings,
                 "unknown-endpoint",
-                ref,
+                _child(ref, "target_endpoint_id"),
                 edge.id,
                 "Set target_endpoint_id to a canonical existing endpoint ID.",
             )
             continue
+        if target.service_id != edge.target_service_id:
+            _finding(
+                findings,
+                "dependency-target-mismatch",
+                _child(ref, "target_endpoint_id"),
+                edge.id,
+                "Choose an endpoint owned by target_service_id.",
+            )
         if edge.protocol is None or edge.protocol != target.protocol:
             _finding(
                 findings,
                 "dependency-protocol-conflict",
-                ref,
+                _child(ref, "protocol"),
                 edge.id,
                 "Match protocol to the target endpoint protocol.",
             )
@@ -423,25 +547,28 @@ def resolve_observation_documents(
             _finding(
                 findings,
                 "dependency-port-conflict",
-                ref,
+                _child(ref, "port"),
                 edge.id,
                 "Match port to the target endpoint listener port.",
             )
-        health_refs = tuple(f"dependency/{edge.id}/health/{key}" for key in edge.health_signal_ids)
-        if edge.health_signal_ref is not None:
-            expected_prefix = f"dependency/{edge.id}/health/"
-            if not edge.health_signal_ref.startswith(expected_prefix):
-                _finding(
-                    findings,
-                    "invalid-dependency-health-signal-ref",
-                    ref,
-                    edge.id,
-                    "Use dependency/<edge-id>/health/<signal-key> for the health signal reference.",
-                )
-            else:
-                health_refs = (*health_refs, edge.health_signal_ref)
+        health_refs = (edge.health_signal_ref,)
+        expected_pattern = (
+            rf"dependency/{re.escape(edge.id)}/health/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+        )
+        if re.fullmatch(expected_pattern, edge.health_signal_ref) is None:
+            _finding(
+                findings,
+                "invalid-dependency-health-signal-ref",
+                _child(ref, "health_signal_ref"),
+                edge.id,
+                "Use dependency/<edge-id>/health/<signal-key> for the health signal reference.",
+            )
         for signal_id in health_refs:
-            planned_signal = PlannedSignal(id=signal_id, kind="dependency", source_refs=(ref,))
+            planned_signal = PlannedSignal(
+                id=signal_id,
+                kind="dependency",
+                source_refs=(_child(ref, "health_signal_ref"),),
+            )
             if signal_id in signal_map:
                 _finding(
                     findings,
@@ -453,20 +580,20 @@ def resolve_observation_documents(
             else:
                 signal_map[signal_id] = planned_signal
                 planned_signals.append(planned_signal)
-        if edge.protocol is not None and edge.port is not None:
-            planned_dependencies.append(
-                PlannedDependency(
-                    id=edge.id,
-                    source_service_id=edge.source_service_id,
-                    target_endpoint_id=target.id,
-                    protocol=edge.protocol,
-                    port=edge.port,
-                    required=edge.required,
-                    health_signal_refs=health_refs,
-                    execution_adapter=edge.execution_adapter,
-                    source_refs=(ref,),
-                )
+        planned_dependencies.append(
+            PlannedDependency(
+                id=edge.id,
+                source_service_id=edge.source_service_id,
+                target_service_id=edge.target_service_id,
+                target_endpoint_id=target.id,
+                protocol=edge.protocol,
+                port=edge.port,
+                required=edge.required,
+                health_signal_refs=health_refs,
+                execution_adapter=edge.execution_adapter,
+                source_refs=(ref,),
             )
+        )
 
     renderer_entries = _unique(
         [*parsed["renderer_binding_identities"], *parsed["renderer_bindings"]],
@@ -474,18 +601,18 @@ def resolve_observation_documents(
         findings,
     )
     planned_bindings: list[PlannedSecretBinding] = []
+    planned_binding_ids: set[str] = set()
     for service in planned_services:
-        instance = instances[service.instance_key][0]
-        assert isinstance(instance, ServiceInstance)
+        instance = instance_by_service[service.id]
         profile = service_profiles[service.id]
         slots = {slot.id: slot for slot in profile.secret_slots}
-        for binding_id in instance.secret_binding_ids:
+        for binding_index, binding_id in enumerate(instance.secret_binding_ids):
             entry = bindings.get(binding_id)
             if entry is None:
                 _finding(
                     findings,
                     "unknown-secret-binding",
-                    service_refs[service.id],
+                    _child(service_refs[service.id], "secret_binding_ids", str(binding_index)),
                     binding_id,
                     "Declare the referenced secret binding.",
                 )
@@ -497,7 +624,7 @@ def resolve_observation_documents(
                 _finding(
                     findings,
                     "unknown-secret-slot",
-                    ref,
+                    _child(ref, "slot_id"),
                     binding.id,
                     "Bind only a slot declared by the service profile.",
                 )
@@ -506,7 +633,7 @@ def resolve_observation_documents(
                 _finding(
                     findings,
                     "unknown-provider-alias",
-                    ref,
+                    _child(ref, "alias"),
                     binding.id,
                     "Declare the logical provider alias in the global catalog.",
                 )
@@ -514,7 +641,7 @@ def resolve_observation_documents(
                 _finding(
                     findings,
                     "secret-delivery-incompatible",
-                    ref,
+                    _child(ref, "delivery"),
                     binding.id,
                     "Choose a delivery form allowed by the profile secret slot.",
                 )
@@ -525,7 +652,7 @@ def resolve_observation_documents(
                     _finding(
                         findings,
                         "unknown-renderer-binding",
-                        ref,
+                        _child(ref, "renderer_binding_id"),
                         binding.id,
                         "Reference a declared renderer binding identity.",
                     )
@@ -536,13 +663,24 @@ def resolve_observation_documents(
                         _finding(
                             findings,
                             "renderer-delivery-incompatible",
-                            ref,
+                            _child(ref, "delivery"),
                             binding.id,
                             "Choose a delivery form supported by the renderer binding.",
                         )
+            planned_binding_id = f"{service.id}/{binding.slot_id}"
+            if planned_binding_id in planned_binding_ids:
+                _finding(
+                    findings,
+                    "duplicate-secret-binding-id",
+                    _child(ref, "slot_id"),
+                    planned_binding_id,
+                    "Bind each service secret slot at most once.",
+                )
+                continue
+            planned_binding_ids.add(planned_binding_id)
             planned_bindings.append(
                 PlannedSecretBinding(
-                    id=binding.id,
+                    id=planned_binding_id,
                     service_id=service.id,
                     slot_id=binding.slot_id,
                     alias=binding.alias,
@@ -552,12 +690,13 @@ def resolve_observation_documents(
                 )
             )
         bound_slots = {b.slot_id for b in planned_bindings if b.service_id == service.id}
-        for slot in profile.secret_slots:
+        profile_ref = profiles[profile.id][1]
+        for slot_index, slot in enumerate(profile.secret_slots):
             if slot.required and slot.id not in bound_slots:
                 _finding(
                     findings,
                     "required-secret-slot-unbound",
-                    service_refs[service.id],
+                    _child(profile_ref, "secret_slots", str(slot_index)),
                     f"{service.id}/{slot.id}",
                     "Bind the required slot to a declared provider alias.",
                 )
@@ -567,30 +706,30 @@ def resolve_observation_documents(
     planned_apps: list[PlannedApplication] = []
     for app, ref in applications.values():
         assert isinstance(app, Application)
-        for service_id in app.service_instance_ids:
+        for service_index, service_id in enumerate(app.service_instance_ids):
             if service_id not in service_ids:
                 _finding(
                     findings,
                     "unknown-application-service",
-                    ref,
+                    _child(ref, "service_instance_ids", str(service_index)),
                     app.id,
                     "Use the canonical host-UUID/service-instance-key identity.",
                 )
-        for edge_id in app.required_dependency_edge_ids:
+        for edge_index, edge_id in enumerate(app.required_dependency_edge_ids):
             if edge_id not in dependency_ids:
                 _finding(
                     findings,
                     "unknown-application-dependency",
-                    ref,
+                    _child(ref, "required_dependency_edge_ids", str(edge_index)),
                     app.id,
                     "Reference a declared dependency edge ID.",
                 )
-        for signal_id in app.health_signal_refs:
+        for signal_index, signal_id in enumerate(app.health_signal_refs):
             if signal_id not in all_signal_ids:
                 _finding(
                     findings,
                     "unknown-application-health-signal",
-                    ref,
+                    _child(ref, "health_signal_refs", str(signal_index)),
                     app.id,
                     "Reference a fully-qualified declared signal ID.",
                 )
@@ -616,7 +755,7 @@ def resolve_observation_documents(
             _finding(
                 findings,
                 "waiver-expired",
-                ref,
+                _child(ref, "expires_on"),
                 waiver.id,
                 "Remove the waiver or replace it with a newly reviewed waiver.",
             )
@@ -631,7 +770,7 @@ def resolve_observation_documents(
             _finding(
                 findings,
                 "unknown-waiver-target",
-                ref,
+                _child(ref, "scope", "ref"),
                 waiver.id,
                 "Reference an existing target of the declared waiver scope kind.",
             )
@@ -674,6 +813,7 @@ def resolve_observation_documents(
     return Plan(
         registry_revision=next(iter(revisions), None),
         document_digests=tuple(sorted(doc.semantic_sha256 for doc in docs)),
+        service_profiles=_sorted(planned_profiles),
         hosts=_sorted(planned_hosts),
         services=_sorted(planned_services),
         endpoints=_sorted(planned_endpoints),
@@ -754,6 +894,15 @@ def _finding(
             identity=str(identity),
             next_actions=(action,),
         )
+    )
+
+
+def _child(ref: SourceRef, *parts: str) -> SourceRef:
+    suffix = "".join(f"/{_escape(part)}" for part in parts)
+    return SourceRef(
+        path=ref.path,
+        document_index=ref.document_index,
+        pointer=ref.pointer.rstrip("/") + suffix,
     )
 
 
