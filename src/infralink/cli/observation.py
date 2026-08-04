@@ -17,17 +17,22 @@ from infralink.cli.actions import action
 from infralink.cli.contracts import Action, Binding
 from infralink.cli.observation_contracts import (
     CapabilitiesResult,
+    DiagnosticSetResult,
     ExplainResult,
     ObservationCommand,
     ObservationEnvelope,
     ObservationError,
     ObservationMeta,
+    ObservationPlan,
+    ObservationReadinessSuite,
     ObservationValidateResult,
     ProjectObservationResult,
     ProjectReadinessResult,
     ProjectSecretsResult,
     ProjectViewResult,
+    SourceProvenanceResult,
 )
+from infralink.cli.output import redact_argv
 
 
 def _now() -> datetime:
@@ -65,7 +70,7 @@ def _command(path: list[str], values: dict[str, Any]) -> ObservationCommand:
 def _emit(ctx: Any, envelope: ObservationEnvelope[Any]) -> None:
     from infralink.cli.main import _ENVELOPE_EMITTED
 
-    payload = envelope.model_dump(mode="json", exclude_none=True)
+    payload = envelope.model_dump(mode="json")
     _ENVELOPE_EMITTED.set(True)
     if _format(ctx) == "json":
         import json
@@ -86,7 +91,7 @@ def emit_boundary_failure(incoming: list[str], *, code: str, message: str) -> No
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "ok": False,
         "command": {
-            "raw_redacted": shlex.join(incoming),
+            "raw_redacted": shlex.join(redact_argv(incoming)),
             "parsed": {"path": [], "args": {}},
             "resolved": {},
         },
@@ -146,6 +151,38 @@ def _output_from_argv(argv: list[str]) -> str:
     return output if output in {"json", "yaml"} else "yaml"
 
 
+def is_observation_argv(argv: list[str]) -> bool:
+    """Classify a root invocation using the option spellings accepted by Click."""
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token in {"--registry", "--edges", "--output", "-r", "-e", "-o"}:
+            index += 2
+            continue
+        if token.startswith(("--registry=", "--edges=", "--output=")):
+            index += 1
+            continue
+        if token.startswith("-") and not token.startswith("--"):
+            cluster = token[1:]
+            value_option = next(
+                (offset for offset, char in enumerate(cluster) if char in "reo"), None
+            )
+            if value_option is not None and value_option == len(cluster) - 1:
+                index += 2
+            else:
+                index += 1
+            continue
+        break
+    if index >= len(argv):
+        return False
+    command = argv[index]
+    if command in {"capabilities", "project", "explain"}:
+        return True
+    return command == "validate" and any(
+        token == "--source" or token.startswith("--source=") for token in argv[index + 1 :]
+    )
+
+
 def _envelope(
     command: ObservationCommand,
     *,
@@ -200,7 +237,9 @@ def run_validate(ctx: Any, source: Path, as_of: str, registry_revision: str | No
     report = validate([source], as_of=_parse_as_of(as_of))
     diagnostics = asdict(report.diagnostics)
     result = ObservationValidateResult(
-        valid=report.valid, document_count=report.document_count, diagnostics=diagnostics
+        valid=report.valid,
+        document_count=report.document_count,
+        diagnostics=DiagnosticSetResult.model_validate(diagnostics),
     )
     if report.valid:
         _emit(ctx, _envelope(command, result=result, actions=_actions(source, as_of)))
@@ -332,7 +371,10 @@ def project_observation(ctx: Any, source: Path, as_of: str, registry_revision: s
         projected = _project(source, as_of, registry_revision)
     except ProjectValidationError as error:
         return _project_failure(ctx, command, error, source, as_of)
-    result = ProjectObservationResult(**projected.to_dict())
+    result = ProjectObservationResult(
+        plan=ObservationPlan.model_validate(projected.plan.model_dump(mode="python")),
+        sources=tuple(SourceProvenanceResult(**asdict(source)) for source in projected.sources),
+    )
     _emit(ctx, _envelope(command, result=result, actions=_actions(source, as_of)))
     return 0
 
@@ -360,10 +402,10 @@ def _projection_command(kind: str) -> Callable[..., int]:
         if kind == "secrets":
             result: Any = ProjectSecretsResult(
                 plan_digest=plan.plan_digest or "",
-                secret_requirements=[v.model_dump(mode="json") for v in plan.secret_requirements],
-                secret_bindings=[v.model_dump(mode="json") for v in plan.secret_bindings],
-                provider_aliases=[v.model_dump(mode="json") for v in plan.provider_aliases],
-                opaque_identities=[v.model_dump(mode="json") for v in plan.opaque_identities],
+                secret_requirements=plan.secret_requirements,
+                secret_bindings=plan.secret_bindings,
+                provider_aliases=plan.provider_aliases,
+                opaque_identities=plan.opaque_identities,
             )
         else:
             collection = plan.operations_views if kind == "view" else plan.readiness_suites
@@ -383,12 +425,14 @@ def _projection_command(kind: str) -> Callable[..., int]:
                     ),
                 )
                 return 1
-            dumped = selected.model_dump(mode="json")
             result = (
-                ProjectViewResult(plan_digest=plan.plan_digest or "", view=dumped)
+                ProjectViewResult(plan_digest=plan.plan_digest or "", view=selected)
                 if kind == "view"
                 else ProjectReadinessResult(
-                    plan_digest=plan.plan_digest or "", readiness_suite=dumped
+                    plan_digest=plan.plan_digest or "",
+                    readiness_suite=ObservationReadinessSuite.model_validate(
+                        selected.model_dump(mode="python")
+                    ),
                 )
             )
         _emit(ctx, _envelope(context, result=result, actions=_actions(source, as_of)))

@@ -78,6 +78,104 @@
       "title": "Binding",
       "type": "object"
     },
+    "DiagnosticResult": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identity"
+        },
+        "location": {
+          "$ref": "#/$defs/SourceLocationResult"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "next_actions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Actions",
+          "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "location"
+      ],
+      "title": "DiagnosticResult",
+      "type": "object"
+    },
+    "DiagnosticSetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DiagnosticResult"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "error_count": {
+          "minimum": 0,
+          "title": "Error Count",
+          "type": "integer"
+        },
+        "limit": {
+          "minimum": 0,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "total_count": {
+          "minimum": 0,
+          "title": "Total Count",
+          "type": "integer"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "warning_count": {
+          "minimum": 0,
+          "title": "Warning Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "diagnostics",
+        "limit",
+        "total_count",
+        "truncated",
+        "error_count",
+        "warning_count"
+      ],
+      "title": "DiagnosticSetResult",
+      "type": "object"
+    },
     "ObservationCommand": {
       "additionalProperties": false,
       "properties": {
@@ -144,9 +242,7 @@
       "additionalProperties": false,
       "properties": {
         "diagnostics": {
-          "additionalProperties": true,
-          "title": "Diagnostics",
-          "type": "object"
+          "$ref": "#/$defs/DiagnosticSetResult"
         },
         "document_count": {
           "title": "Document Count",
@@ -163,6 +259,30 @@
         "diagnostics"
       ],
       "title": "ObservationValidateResult",
+      "type": "object"
+    },
+    "SourceLocationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "document_index": {
+          "title": "Document Index",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "pointer": {
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "pointer",
+        "document_index"
+      ],
+      "title": "SourceLocationResult",
       "type": "object"
     }
   },

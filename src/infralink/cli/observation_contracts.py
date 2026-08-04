@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Annotated, Any, Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from infralink.cli.contracts import Action
+from infralink.observation.planner import (
+    OpaqueIdentity,
+    Plan,
+    PlannedAlias,
+    PlannedOperationsView,
+    PlannedReadinessSuite,
+    PlannedSecretBinding,
+    PlannedSecretRequirement,
+)
 
 T = TypeVar("T")
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class ObservationContract(BaseModel):
@@ -67,7 +77,31 @@ class CapabilitiesResult(ObservationContract):
 class ObservationValidateResult(ObservationContract):
     valid: bool
     document_count: int
-    diagnostics: dict[str, Any]
+    diagnostics: DiagnosticSetResult
+
+
+class SourceLocationResult(ObservationContract):
+    path: str
+    pointer: str
+    document_index: int
+
+
+class DiagnosticResult(ObservationContract):
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    location: SourceLocationResult
+    identity: str | None = None
+    next_actions: tuple[str, ...] = ()
+
+
+class DiagnosticSetResult(ObservationContract):
+    diagnostics: tuple[DiagnosticResult, ...]
+    limit: int = Field(ge=0)
+    total_count: int = Field(ge=0)
+    truncated: bool
+    error_count: int = Field(ge=0)
+    warning_count: int = Field(ge=0)
 
 
 class ExplainResult(ObservationContract):
@@ -79,23 +113,40 @@ class ExplainResult(ObservationContract):
 
 
 class ProjectObservationResult(ObservationContract):
-    plan: dict[str, Any]
-    sources: list[dict[str, Any]]
+    plan: ObservationPlan
+    sources: tuple[SourceProvenanceResult, ...]
+
+
+class SourceProvenanceResult(ObservationContract):
+    path: str
+    document_index: int = Field(ge=0)
+    raw_sha256: Sha256
+    semantic_sha256: Sha256
+
+
+class ObservationPlan(Plan):
+    document_digests: tuple[Sha256, ...]
+    plan_digest: Sha256
+
+
+class ObservationReadinessSuite(PlannedReadinessSuite):
+    suite_digest: Sha256
+    scoped_plan_digest: Sha256
 
 
 class ProjectSecretsResult(ObservationContract):
-    plan_digest: str
-    secret_requirements: list[dict[str, Any]]
-    secret_bindings: list[dict[str, Any]]
-    provider_aliases: list[dict[str, Any]]
-    opaque_identities: list[dict[str, Any]]
+    plan_digest: Sha256
+    secret_requirements: tuple[PlannedSecretRequirement, ...]
+    secret_bindings: tuple[PlannedSecretBinding, ...]
+    provider_aliases: tuple[PlannedAlias, ...]
+    opaque_identities: tuple[OpaqueIdentity, ...]
 
 
 class ProjectViewResult(ObservationContract):
-    plan_digest: str
-    view: dict[str, Any]
+    plan_digest: Sha256
+    view: PlannedOperationsView
 
 
 class ProjectReadinessResult(ObservationContract):
-    plan_digest: str
-    readiness_suite: dict[str, Any]
+    plan_digest: Sha256
+    readiness_suite: ObservationReadinessSuite

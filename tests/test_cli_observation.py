@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from infralink.cli.main import cli
 
@@ -221,3 +223,117 @@ def test_observation_internal_failure_honors_explicit_output(
     else:
         assert result.output.startswith("schema_version:")
         assert yaml.safe_load(result.output)["error"]["code"] == "internal-invariant"
+
+
+@pytest.mark.parametrize("output_args", [("--output=json",), ("-oyaml",)])
+@pytest.mark.parametrize(
+    "secret_args",
+    [
+        ("--token", "split-canary"),
+        ("--password=equals-canary",),
+        ("-pattached-canary",),
+    ],
+)
+@pytest.mark.parametrize("code", ["invocation-error", "internal-invariant"])
+def test_boundary_envelope_redacts_sensitive_argv_everywhere(
+    output_args: tuple[str, ...], secret_args: tuple[str, ...], code: str
+) -> None:
+    from infralink.cli.observation import emit_boundary_failure
+
+    runner = CliRunner()
+
+    @click.command()
+    def probe() -> None:
+        emit_boundary_failure(
+            [*output_args, "project", *secret_args], code=code, message="boundary failure"
+        )
+
+    result = runner.invoke(probe)
+    assert result.exit_code == 0
+    assert "canary" not in result.output
+    payload = (
+        json.loads(result.output)
+        if output_args == ("--output=json",)
+        else yaml.safe_load(result.output)
+    )
+    assert "[REDACTED]" in payload["command"]["raw_redacted"]
+    assert "canary" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("output_args", [("--output=json",), ("-oyaml",)])
+def test_source_equals_selects_observation_boundary_envelope(
+    tmp_path: Path, output_args: tuple[str, ...]
+) -> None:
+    source = _source(tmp_path)
+    result = CliRunner().invoke(cli, [*output_args, "validate", f"--source={source}"])
+
+    assert result.exit_code == 2
+    payload = (
+        json.loads(result.output)
+        if output_args == ("--output=json",)
+        else yaml.safe_load(result.output)
+    )
+    assert payload["schema_version"] == "agent-cli.response.v1"
+    assert payload["error"]["code"] == "invocation-error"
+
+
+@pytest.mark.parametrize("output_args", [("--output=json",), ("-oyaml",)])
+def test_source_equals_internal_failure_keeps_observation_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output_args: tuple[str, ...]
+) -> None:
+    source = _source(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.observation._parse_as_of",
+        lambda value: (_ for _ in ()).throw(RuntimeError("injected")),
+    )
+    result = CliRunner().invoke(
+        cli,
+        [*output_args, "validate", f"--source={source}", "--as-of", "2026-08-04T00:00:00Z"],
+    )
+
+    assert result.exit_code == 4
+    payload = (
+        json.loads(result.output)
+        if output_args == ("--output=json",)
+        else yaml.safe_load(result.output)
+    )
+    assert payload["schema_version"] == "agent-cli.response.v1"
+    assert payload["error"]["code"] == "internal-invariant"
+
+
+def test_response_schemas_reject_wrong_and_extra_nested_domain_fields() -> None:
+    root = Path(__file__).parents[1]
+    source = root / "examples/observation"
+    projected = CliRunner().invoke(
+        cli,
+        [
+            "--output=json",
+            "project",
+            "observation",
+            "--source",
+            str(source),
+            "--as-of",
+            "2026-08-04T00:00:00Z",
+        ],
+    )
+    validated = CliRunner().invoke(
+        cli,
+        ["--output=json", "validate", "--source", str(source), "--as-of", "2026-08-04T00:00:00Z"],
+    )
+    projection_payload = json.loads(projected.output)
+    validation_payload = json.loads(validated.output)
+    projection_schema = json.loads(
+        (root / "src/infralink/schemas/cli/v1/project-observation.json").read_text()
+    )
+    validation_schema = json.loads(
+        (root / "src/infralink/schemas/cli/v1/observation-validate.json").read_text()
+    )
+
+    Draft202012Validator(projection_schema).validate(projection_payload)
+    Draft202012Validator(validation_schema).validate(validation_payload)
+    projection_payload["result"]["plan"]["signals"][0]["unexpected"] = True
+    validation_payload["result"]["diagnostics"]["error_count"] = "zero"
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(projection_schema).validate(projection_payload)
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(validation_schema).validate(validation_payload)

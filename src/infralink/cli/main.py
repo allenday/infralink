@@ -683,10 +683,9 @@ class JsonGroup(click.Group):
                         exit_code = failure.exit_code
             except click.UsageError:
                 path, _, _ = _parse_invocation(redact_argv(incoming))
-                observation_command = bool(path) and (
-                    path[0] in {"capabilities", "project", "explain"}
-                    or (path[0] == "validate" and "--source" in incoming)
-                )
+                from infralink.cli.observation import is_observation_argv
+
+                observation_command = is_observation_argv(incoming)
                 if observation_command:
                     from infralink.cli.observation import emit_boundary_failure
 
@@ -742,11 +741,9 @@ class JsonGroup(click.Group):
                     _emit(error_envelope(_context_for(incoming), failure))
                     exit_code = failure.exit_code
             except Exception:
-                path, _, _ = _parse_invocation(redact_argv(incoming))
-                observation_command = bool(path) and (
-                    path[0] in {"capabilities", "project", "explain"}
-                    or (path[0] == "validate" and "--source" in incoming)
-                )
+                from infralink.cli.observation import is_observation_argv
+
+                observation_command = is_observation_argv(incoming)
                 if observation_command:
                     from infralink.cli.observation import emit_boundary_failure
 
