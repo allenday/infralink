@@ -477,7 +477,6 @@
     },
     "schema_version": {
       "const": "infralink.observation/v1",
-      "default": "infralink.observation/v1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -490,6 +489,7 @@
     }
   },
   "required": [
+    "schema_version",
     "operations_views"
   ],
   "title": "OperationsViewDocument",

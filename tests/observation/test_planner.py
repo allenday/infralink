@@ -143,6 +143,70 @@ def test_dependency_accepts_explicit_namespaced_health_signal_ref() -> None:
     )
 
 
+@pytest.mark.parametrize("capability_id", ["ready", "metrics"])
+def test_signal_capability_endpoint_must_be_selected(capability_id: str) -> None:
+    data = base_data()
+    profile = data["service_profiles"][0]  # type: ignore[index]
+    profile["endpoints"].append({"id": "unused", "protocol": "http", "port": 8081})
+    profile["metrics"] = [
+        {"id": "metrics", "endpoint_id": "http", "evaluator": "prometheus-scrape"}
+    ]
+    profile["signals"].append(
+        {
+            "id": "load",
+            "capability_id": "metrics",
+            "evaluator": "metric-threshold",
+            "metric": "queue_depth",
+            "condition": {"operator": "lt", "threshold": 10},
+        }
+    )
+    for instance in data["service_instances"]:  # type: ignore[assignment]
+        instance["endpoint_ids"] = ["unused"]
+
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    findings = [
+        item
+        for item in caught.value.report.diagnostics
+        if item.code == "capability-endpoint-not-selected"
+    ]
+    assert any(item.identity and capability_id in item.identity for item in findings)
+    assert all(
+        item.location.pointer.startswith("/service_profiles/0/signals/") for item in findings
+    )
+
+
+def test_planned_signals_serialize_adapter_inputs_and_digest_changes() -> None:
+    data = base_data()
+    profile = data["service_profiles"][0]  # type: ignore[index]
+    profile["metrics"] = [
+        {"id": "metrics", "endpoint_id": "http", "evaluator": "prometheus-scrape"}
+    ]
+    profile["signals"].append(
+        {
+            "id": "load",
+            "capability_id": "metrics",
+            "evaluator": "metric-threshold",
+            "metric": "queue_depth",
+            "condition": {"operator": "lt", "threshold": 10},
+        }
+    )
+    first = resolve_observation_documents([document(data)], as_of=AS_OF)
+    metric = next(signal for signal in first.signals if signal.id.endswith("/metrics/load"))
+    dependency = next(signal for signal in first.signals if signal.kind == "dependency")
+
+    assert metric.source_endpoint_id.endswith("/http")
+    assert (metric.metric, metric.comparator, metric.threshold) == ("queue_depth", "lt", 10)
+    assert metric.capability_evaluator == "prometheus-scrape"
+    assert dependency.source_endpoint_id.endswith("/frontend/http")
+    assert dependency.capability_evaluator == "dependency-health"
+
+    profile["signals"][-1]["condition"]["threshold"] = 11
+    second = resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert first.plan_digest != second.plan_digest
+
+
 @pytest.mark.parametrize(
     ("mutate", "code"),
     [

@@ -98,6 +98,17 @@ class PlannedSignal(PlanModel):
     service_id: str | None = None
     source_signal_ref: str | None = None
     datasource_binding_ids: tuple[str, ...] = ()
+    source_endpoint_id: str | None = None
+    capability_evaluator: str | None = None
+    expected_statuses: tuple[int, ...] = ()
+    metric: str | None = None
+    comparator: str | None = None
+    threshold: float | None = None
+    pattern: str | None = None
+    aggregation: str | None = None
+    freshness_seconds: int | None = None
+    no_data_policy: Literal["fail"] | None = None
+    error_policy: Literal["fail"] | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -586,6 +597,21 @@ def resolve_observation_documents(
             )
         for signal_index, signal in enumerate(profile.signals):
             signal_id = f"service/{service_id}/{signal.capability_id}/{signal.id}"
+            capabilities: dict[str, HealthCapability | MetricsCapability | LogCapability] = {}
+            capabilities.update({item.id: item for item in profile.health})
+            capabilities.update({item.id: item for item in profile.metrics})
+            capabilities.update({item.id: item for item in profile.logs})
+            capability = capabilities[signal.capability_id]
+            capability_endpoint_id = capability.endpoint_id
+            if capability_endpoint_id is not None and capability_endpoint_id not in selected:
+                _finding(
+                    findings,
+                    "capability-endpoint-not-selected",
+                    _child(profile_entry[1], "signals", str(signal_index)),
+                    signal_id,
+                    "Select the endpoint required by this signal capability.",
+                )
+                continue
             planned_signals.append(
                 PlannedSignal(
                     id=signal_id,
@@ -593,6 +619,21 @@ def resolve_observation_documents(
                     evaluator=signal.evaluator.value,
                     capability_ref=f"service/{service_id}/{signal.capability_id}",
                     service_id=service_id,
+                    source_endpoint_id=(
+                        f"{service_id}/{capability_endpoint_id}"
+                        if capability_endpoint_id is not None
+                        else None
+                    ),
+                    capability_evaluator=capability.evaluator.value,
+                    expected_statuses=(
+                        tuple(capability.expected_statuses)
+                        if isinstance(capability, HealthCapability)
+                        else ()
+                    ),
+                    metric=signal.metric,
+                    comparator=(signal.condition.operator.value if signal.condition else None),
+                    threshold=(signal.condition.threshold if signal.condition else None),
+                    pattern=signal.pattern,
                     source_refs=(_child(profile_entry[1], "signals", str(signal_index)), ref),
                 )
             )
@@ -682,6 +723,8 @@ def resolve_observation_documents(
                 id=signal_id,
                 kind="dependency",
                 evaluator="dependency-health",
+                source_endpoint_id=target.id,
+                capability_evaluator="dependency-health",
                 source_refs=(_child(ref, "health_signal_ref"),),
             )
             if signal_id in signal_map:
@@ -979,6 +1022,14 @@ def resolve_observation_documents(
                     service_id=source_signal.service_id,
                     source_signal_ref=member.signal_ref,
                     datasource_binding_ids=resolved.datasource_binding_ids,
+                    source_endpoint_id=source_signal.source_endpoint_id,
+                    capability_evaluator=source_signal.capability_evaluator,
+                    expected_statuses=source_signal.expected_statuses,
+                    metric=source_signal.metric,
+                    comparator=source_signal.comparator,
+                    threshold=source_signal.threshold,
+                    pattern=source_signal.pattern,
+                    aggregation=member.aggregation,
                     source_refs=resolved.source_refs,
                 )
                 if derived_id in signal_map:

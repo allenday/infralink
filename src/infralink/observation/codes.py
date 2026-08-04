@@ -45,6 +45,7 @@ PLANNER_DIAGNOSTIC_CODES = _DYNAMIC_DUPLICATE_CODES | frozenset(
         "dependency-port-conflict",
         "dependency-protocol-conflict",
         "dependency-target-mismatch",
+        "capability-endpoint-not-selected",
         "duplicate-endpoint-override",
         "duplicate-service-id",
         "duplicate-suite-member-id",

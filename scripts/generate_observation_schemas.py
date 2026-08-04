@@ -29,7 +29,7 @@ Version = Literal["infralink.observation/v1"]
 
 def _document(name: str, **sections: tuple[Any, Any]) -> type[BaseModel]:
     fields: dict[str, Any | tuple[Any, Any]] = {
-        "schema_version": (Version, Field(default="infralink.observation/v1")),
+        "schema_version": (Version, ...),
         "registry_revision": (str | None, None),
         **sections,
     }

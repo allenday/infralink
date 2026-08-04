@@ -60,7 +60,13 @@ class ProjectValidationError(ValueError):
         super().__init__(f"observation projection has {report.diagnostics.error_count} error(s)")
 
 
-def validate(paths: Sequence[Path], *, limit: int = 50, as_of: datetime) -> ValidationReport:
+def validate(
+    paths: Sequence[Path],
+    *,
+    limit: int = 50,
+    as_of: datetime,
+    registry_revision: str | None = None,
+) -> ValidationReport:
     """Validate explicit paths at a caller-supplied, timezone-aware instant."""
 
     loaded = load_observation_documents(paths, diagnostic_limit=limit)
@@ -69,8 +75,42 @@ def validate(paths: Sequence[Path], *, limit: int = 50, as_of: datetime) -> Vali
     if invalid_as_of is not None:
         phases.append(DiagnosticSet.from_diagnostics([invalid_as_of], limit=limit))
     else:
+        if registry_revision is not None and not registry_revision.strip():
+            phases.append(
+                DiagnosticSet.from_diagnostics(
+                    [
+                        _argument_diagnostic(
+                            "invalid-registry-revision",
+                            "/registry_revision",
+                            "registry_revision",
+                            "Supply a non-empty registry revision string or omit it.",
+                        )
+                    ],
+                    limit=limit,
+                )
+            )
         try:
-            resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=limit)
+            plan = resolve_observation_documents(
+                loaded.documents, as_of=as_of, diagnostic_limit=limit
+            )
+            if (
+                registry_revision is not None
+                and registry_revision.strip()
+                and plan.registry_revision not in (None, registry_revision)
+            ):
+                phases.append(
+                    DiagnosticSet.from_diagnostics(
+                        [
+                            _argument_diagnostic(
+                                "registry-revision-conflict",
+                                "/registry_revision",
+                                "registry_revision",
+                                "Use the source registry revision or update the source documents.",
+                            )
+                        ],
+                        limit=limit,
+                    )
+                )
         except PlanValidationError as error:
             phases.append(error.report.diagnostics)
     return ValidationReport(

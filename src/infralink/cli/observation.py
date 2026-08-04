@@ -230,11 +230,15 @@ def _actions(source: Path, as_of: str, *, code: str | None = None) -> list[Actio
 
 
 def run_validate(ctx: Any, source: Path, as_of: str, registry_revision: str | None) -> int:
-    del registry_revision
     from infralink.observation import validate
 
-    command = _command(["validate"], {"source": str(source), "as_of": as_of})
-    report = validate([source], as_of=_parse_as_of(as_of))
+    values = {
+        "source": str(source),
+        "as_of": as_of,
+        "registry_revision": registry_revision,
+    }
+    command = _command(["validate"], values)
+    report = validate([source], as_of=_parse_as_of(as_of), registry_revision=registry_revision)
     diagnostics = asdict(report.diagnostics)
     result = ObservationValidateResult(
         valid=report.valid,

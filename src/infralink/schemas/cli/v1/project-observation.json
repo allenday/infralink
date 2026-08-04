@@ -1215,6 +1215,30 @@
     "PlannedSignal": {
       "additionalProperties": false,
       "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aggregation"
+        },
+        "capability_evaluator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Evaluator"
+        },
         "capability_ref": {
           "anyOf": [
             {
@@ -1227,6 +1251,18 @@
           "default": null,
           "title": "Capability Ref"
         },
+        "comparator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparator"
+        },
         "datasource_binding_ids": {
           "default": [],
           "items": {
@@ -1234,6 +1270,19 @@
           },
           "title": "Datasource Binding Ids",
           "type": "array"
+        },
+        "error_policy": {
+          "anyOf": [
+            {
+              "const": "fail",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Policy"
         },
         "evaluator": {
           "anyOf": [
@@ -1246,6 +1295,26 @@
           ],
           "default": null,
           "title": "Evaluator"
+        },
+        "expected_statuses": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Expected Statuses",
+          "type": "array"
+        },
+        "freshness_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Freshness Seconds"
         },
         "id": {
           "title": "Id",
@@ -1260,6 +1329,43 @@
           "title": "Kind",
           "type": "string"
         },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "no_data_policy": {
+          "anyOf": [
+            {
+              "const": "fail",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "No Data Policy"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pattern"
+        },
         "service_id": {
           "anyOf": [
             {
@@ -1271,6 +1377,18 @@
           ],
           "default": null,
           "title": "Service Id"
+        },
+        "source_endpoint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Endpoint Id"
         },
         "source_refs": {
           "items": {
@@ -1290,6 +1408,18 @@
           ],
           "default": null,
           "title": "Source Signal Ref"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
         }
       },
       "required": [

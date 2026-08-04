@@ -108,19 +108,39 @@ def test_legacy_validate_remains_json_after_new_command_invocation(tmp_path: Pat
 
 def test_generated_observation_schemas_validate_public_examples() -> None:
     root = Path(__file__).parents[1]
-    pairs = {
-        "profiles.yml": "profile",
-        "instances.yml": "instance",
-        "edges.yml": "dependency",
-        "secrets.yml": "secrets",
-        "operations.yml": "operations-view",
+    example_root = root / "examples/observation"
+    profiles = yaml.safe_load((example_root / "profiles.yml").read_text())
+    instances = yaml.safe_load((example_root / "instances.yml").read_text())
+    edges = yaml.safe_load((example_root / "edges.yml").read_text())
+    secrets = yaml.safe_load((example_root / "secrets.yml").read_text())
+    operations = yaml.safe_load((example_root / "operations.yml").read_text())
+    documents = {
+        "profile": profiles,
+        "instance": instances,
+        "application": {
+            "schema_version": instances["schema_version"],
+            "applications": instances["applications"],
+        },
+        "dependency": edges,
+        "secrets": secrets,
+        "operations-view": operations,
+        "readiness-suite": {
+            "schema_version": operations["schema_version"],
+            "readiness_suites": operations["readiness_suites"],
+        },
     }
-    for example, schema_name in pairs.items():
-        document = yaml.safe_load((root / "examples/observation" / example).read_text())
+    for schema_name, document in documents.items():
         schema = json.loads(
             (root / "src/infralink/schemas/observation/v1" / f"{schema_name}.json").read_text()
         )
         Draft202012Validator(schema).validate(document)
+        missing = dict(document)
+        missing.pop("schema_version")
+        with pytest.raises(JsonSchemaValidationError):
+            Draft202012Validator(schema).validate(missing)
+        wrong = dict(document, schema_version="infralink.observation/v99")
+        with pytest.raises(JsonSchemaValidationError):
+            Draft202012Validator(schema).validate(wrong)
 
 
 def test_end_to_end_example_directory_validates_and_projects() -> None:
@@ -299,6 +319,34 @@ def test_source_equals_internal_failure_keeps_observation_envelope(
     )
     assert payload["schema_version"] == "agent-cli.response.v1"
     assert payload["error"]["code"] == "internal-invariant"
+
+
+@pytest.mark.parametrize("output_args", [("--output=json",), ("-oyaml",)])
+def test_validate_resolves_registry_revision_in_command_metadata(
+    tmp_path: Path, output_args: tuple[str, ...]
+) -> None:
+    source = _source(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            *output_args,
+            "validate",
+            "--source",
+            str(source),
+            "--as-of",
+            "2026-08-04T00:00:00Z",
+            "--registry-revision",
+            "revision-7",
+        ],
+    )
+    payload = (
+        json.loads(result.output)
+        if output_args == ("--output=json",)
+        else yaml.safe_load(result.output)
+    )
+
+    assert result.exit_code == 0
+    assert payload["command"]["resolved"]["registry_revision"] == "revision-7"
 
 
 def test_response_schemas_reject_wrong_and_extra_nested_domain_fields() -> None:

@@ -239,6 +239,33 @@ def test_invalid_registry_revision_is_a_typed_projection_failure(
     assert caught.value.report.diagnostics[0].code == "invalid-registry-revision"
 
 
+@pytest.mark.parametrize("revision", ["", "   "])
+def test_validate_rejects_invalid_registry_revision(tmp_path: Path, revision: str) -> None:
+    from infralink.observation import validate
+
+    source = tmp_path / "source.yml"
+    source.write_text("schema_version: infralink.observation/v1\n")
+
+    report = validate([source], as_of=AS_OF, registry_revision=revision)
+
+    assert not report.valid
+    assert "invalid-registry-revision" in {item.code for item in report.diagnostics}
+
+
+def test_validate_enforces_declared_registry_revision(tmp_path: Path) -> None:
+    from infralink.observation import validate
+
+    source = tmp_path / "source.yml"
+    _write_contract(source)
+    text = source.read_text()
+    source.write_text("registry_revision: source-7\n" + text)
+
+    report = validate([source], as_of=AS_OF, registry_revision="expected-8")
+
+    assert not report.valid
+    assert "registry-revision-conflict" in {item.code for item in report.diagnostics}
+
+
 @pytest.mark.parametrize("use_empty_directory", [False, True])
 def test_empty_inputs_use_typed_no_usable_document_boundary(
     tmp_path: Path, use_empty_directory: bool
