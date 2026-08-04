@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from infralink.observation.canonical import canonical_digest
+from infralink.observation.codes import DUPLICATE_IDENTITY_KINDS
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.loader import DEFAULT_DIAGNOSTIC_LIMIT, ObservationDocument
 from infralink.observation.models import (
@@ -1181,6 +1182,8 @@ def resolve_observation_documents(
 def _unique(
     entries: list[tuple[BaseModel, SourceRef]], kind: str, findings: list[Diagnostic]
 ) -> dict[str, tuple[BaseModel, SourceRef]]:
+    if kind not in DUPLICATE_IDENTITY_KINDS:
+        raise RuntimeError(f"unregistered duplicate identity kind: {kind}")
     result: dict[str, tuple[BaseModel, SourceRef]] = {}
     for item, ref in entries:
         identity = str(item.id)  # type: ignore[attr-defined]
@@ -1198,6 +1201,8 @@ def _unique(
 
 
 def _index_planned(items: list[Any], kind: str, findings: list[Diagnostic]) -> dict[str, Any]:
+    if kind not in DUPLICATE_IDENTITY_KINDS:
+        raise RuntimeError(f"unregistered duplicate identity kind: {kind}")
     result: dict[str, Any] = {}
     for item in items:
         if item.id in result:

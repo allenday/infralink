@@ -136,8 +136,12 @@ def project(
 
 
 def _invalid_as_of_diagnostic(as_of: object) -> Diagnostic | None:
-    if isinstance(as_of, datetime) and as_of.tzinfo is not None:
-        return None
+    if isinstance(as_of, datetime):
+        try:
+            if as_of.utcoffset() is not None:
+                return None
+        except Exception:
+            pass
     return _argument_diagnostic(
         "invalid-as-of",
         "/as_of",

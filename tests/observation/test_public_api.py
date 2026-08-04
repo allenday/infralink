@@ -4,12 +4,23 @@ import builtins
 import json
 import socket
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 
 import pytest
 
 AS_OF = datetime(2026, 8, 4, tzinfo=timezone.utc)
+
+
+class _IndeterminateTimezone(tzinfo):
+    def utcoffset(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return "indeterminate"
 
 
 def _write_contract(path: Path, *, comment: str = "") -> None:
@@ -197,6 +208,19 @@ def test_invalid_as_of_is_a_typed_validation_diagnostic(tmp_path: Path) -> None:
     assert report.diagnostics[0].code == "invalid-as-of"
     with pytest.raises(ProjectValidationError) as caught:
         project([source], as_of=naive)
+    assert caught.value.report.diagnostics[0].code == "invalid-as-of"
+
+
+def test_as_of_with_indeterminate_utc_offset_is_typed_invalid(tmp_path: Path) -> None:
+    from infralink.observation import ProjectValidationError, project, validate
+
+    source = tmp_path / "contract.yml"
+    _write_contract(source)
+    indeterminate = datetime(2026, 8, 4, tzinfo=_IndeterminateTimezone())
+
+    assert validate([source], as_of=indeterminate).diagnostics[0].code == "invalid-as-of"
+    with pytest.raises(ProjectValidationError) as caught:
+        project([source], as_of=indeterminate)
     assert caught.value.report.diagnostics[0].code == "invalid-as-of"
 
 

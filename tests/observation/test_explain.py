@@ -23,6 +23,7 @@ def test_explain_catalog_covers_every_declared_emitted_code() -> None:
 
 def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
     from infralink.observation import DIAGNOSTIC_CODES, api, loader, planner
+    from infralink.observation.codes import DUPLICATE_IDENTITY_KINDS
 
     emitted: set[str] = set()
     for module in (api, loader, planner):
@@ -46,7 +47,21 @@ def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
                 if isinstance(code_arg, ast.Constant) and isinstance(code_arg.value, str):
                     emitted.add(code_arg.value)
 
-    assert emitted <= set(DIAGNOSTIC_CODES)
+    emitted.update(f"duplicate-{kind}-id" for kind in DUPLICATE_IDENTITY_KINDS)
+    assert emitted == set(DIAGNOSTIC_CODES)
+
+
+def test_explanation_catalog_exactly_matches_authoritative_emitted_codes() -> None:
+    from infralink.observation import DIAGNOSTIC_CODES
+    from infralink.observation.codes import (
+        ALL_DIAGNOSTIC_CODES,
+        DUPLICATE_IDENTITY_KINDS,
+        PLANNER_DIAGNOSTIC_CODES,
+    )
+
+    dynamic = {f"duplicate-{kind}-id" for kind in DUPLICATE_IDENTITY_KINDS}
+    assert dynamic <= PLANNER_DIAGNOSTIC_CODES
+    assert set(DIAGNOSTIC_CODES) == ALL_DIAGNOSTIC_CODES
 
 
 def test_unknown_explanation_is_typed_and_discoverable() -> None:
