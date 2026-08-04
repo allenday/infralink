@@ -75,6 +75,78 @@ def test_public_api_imports_without_click_or_provider_modules(
     assert callable(validate)
 
 
+def test_public_api_projects_same_instance_key_on_distinct_hosts(tmp_path: Path) -> None:
+    from infralink.observation import project, validate
+
+    source = tmp_path / "contract.yml"
+    source.write_text(
+        """schema_version: infralink.observation/v1
+hosts:
+  - id: 11111111-1111-4111-8111-111111111111
+  - id: 22222222-2222-4222-8222-222222222222
+service_profiles:
+  - id: node-exporter
+    endpoints: []
+    health: []
+    metrics: []
+    logs: []
+    signals: []
+    secret_slots: []
+service_instances:
+  - id: node-exporter
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: node-exporter
+  - id: node-exporter
+    host_id: 22222222-2222-4222-8222-222222222222
+    profile_id: node-exporter
+""",
+        encoding="ascii",
+    )
+
+    report = validate([source], as_of=AS_OF)
+    result = project([source], as_of=AS_OF)
+
+    assert report.valid
+    assert [service.id for service in result.plan.services] == [
+        "11111111-1111-4111-8111-111111111111/node-exporter",
+        "22222222-2222-4222-8222-222222222222/node-exporter",
+    ]
+
+
+def test_bounded_validation_prioritizes_malformed_instance_host_diagnostic(
+    tmp_path: Path,
+) -> None:
+    from infralink.observation import validate
+
+    source = tmp_path / "invalid.yml"
+    source.write_text(
+        """schema_version: infralink.observation/v1
+service_profiles:
+  - id: node-exporter
+    endpoints: []
+    health: []
+    metrics: []
+    logs: []
+    signals: []
+    secret_slots: []
+service_instances:
+  - id: node-exporter
+    profile_id: node-exporter
+  - id: node-exporter
+    host_id: [not-a-host]
+    profile_id: node-exporter
+""",
+        encoding="ascii",
+    )
+
+    report = validate([source], limit=1, as_of=AS_OF)
+
+    assert not report.valid
+    assert report.diagnostics.total_count == 2
+    assert [item.code for item in report.diagnostics] == ["invalid-document-record"]
+    assert report.diagnostics[0].location.pointer == "/service_instances/1/host_id"
+
+
 def test_validate_aggregates_model_errors_and_is_bounded(tmp_path: Path) -> None:
     from infralink.observation import validate
 
