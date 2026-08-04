@@ -168,8 +168,10 @@ def test_declared_input_failures_raise_typed_projection_error(tmp_path: Path) ->
     with pytest.raises(ProjectValidationError) as caught:
         project([source], as_of=AS_OF)
 
-    assert caught.value.report.diagnostics.error_count == 1
-    assert caught.value.report.diagnostics[0].code == "schema-version-unsupported"
+    assert {item.code for item in caught.value.report.diagnostics} == {
+        "no-usable-observation-document",
+        "schema-version-unsupported",
+    }
 
 
 def test_as_of_is_required_by_both_public_operations(tmp_path: Path) -> None:
@@ -211,6 +213,27 @@ def test_invalid_registry_revision_is_a_typed_projection_failure(
         project([source], registry_revision=revision, as_of=AS_OF)
 
     assert caught.value.report.diagnostics[0].code == "invalid-registry-revision"
+
+
+@pytest.mark.parametrize("use_empty_directory", [False, True])
+def test_empty_inputs_use_typed_no_usable_document_boundary(
+    tmp_path: Path, use_empty_directory: bool
+) -> None:
+    from infralink.observation import ProjectValidationError, project, validate
+
+    paths = [tmp_path] if use_empty_directory else []
+
+    report = validate(paths, as_of=AS_OF)
+    assert not report.valid
+    assert report.document_count == 0
+    assert [item.code for item in report.diagnostics] == ["no-usable-observation-document"]
+
+    with pytest.raises(ProjectValidationError) as caught:
+        project(paths, as_of=AS_OF)
+    assert caught.value.report.document_count == 0
+    assert [item.code for item in caught.value.report.diagnostics] == [
+        "no-usable-observation-document"
+    ]
 
 
 def test_public_results_do_not_contain_secret_values(tmp_path: Path) -> None:

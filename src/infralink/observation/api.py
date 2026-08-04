@@ -68,7 +68,7 @@ def validate(paths: Sequence[Path], *, limit: int = 50, as_of: datetime) -> Vali
     invalid_as_of = _invalid_as_of_diagnostic(as_of)
     if invalid_as_of is not None:
         phases.append(DiagnosticSet.from_diagnostics([invalid_as_of], limit=limit))
-    elif loaded.documents:
+    else:
         try:
             resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=limit)
         except PlanValidationError as error:
@@ -103,7 +103,7 @@ def project(
         phases.append(DiagnosticSet.from_diagnostics(argument_findings, limit=50))
 
     plan: Plan | None = None
-    if invalid_as_of is None and loaded.documents:
+    if invalid_as_of is None:
         try:
             plan = resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=50)
         except PlanValidationError as error:
