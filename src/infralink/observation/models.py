@@ -22,9 +22,11 @@ from pydantic import (
 
 def _validate_uuid(value: str) -> str:
     try:
-        UUID(value)
+        parsed = UUID(value)
     except (ValueError, AttributeError) as error:
         raise ValueError("host id must be a UUID") from error
+    if value != str(parsed):
+        raise ValueError("host id must use canonical lowercase hyphenated UUID spelling")
     return value
 
 

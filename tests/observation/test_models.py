@@ -15,6 +15,7 @@ from infralink.observation.models import (
     EndpointProtocol,
     HealthCapability,
     HealthEvaluator,
+    Host,
     LogCapability,
     LogEvaluator,
     LogicalSignal,
@@ -41,6 +42,19 @@ from infralink.observation.models import (
     WaiverScope,
     WaiverScopeKind,
 )
+
+
+@pytest.mark.parametrize(
+    "host_id",
+    [
+        "11111111-1111-4111-8111-AAAAAAAAAAAA",
+        "11111111111141118111111111111111",
+        "{11111111-1111-4111-8111-111111111111}",
+    ],
+)
+def test_host_id_rejects_noncanonical_uuid_spelling(host_id: str) -> None:
+    with pytest.raises(ValidationError, match="canonical lowercase hyphenated"):
+        Host(id=host_id)
 
 
 def test_profile_binds_capabilities_to_named_endpoints() -> None:

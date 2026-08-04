@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 from datetime import datetime
@@ -297,7 +298,7 @@ def resolve_observation_documents(
             for index, value in enumerate(raw):
                 pointer = f"/{section}/{index}"
                 try:
-                    item = model.model_validate(value, strict=False)
+                    item = model.model_validate_json(json.dumps(value))
                 except ValidationError as error:
                     for detail in error.errors(include_url=False):
                         suffix = "".join(f"/{_escape(str(part))}" for part in detail["loc"])
@@ -777,7 +778,7 @@ def resolve_observation_documents(
     planned_waivers: list[PlannedWaiver] = []
     for waiver, ref in waivers.values():
         assert isinstance(waiver, Waiver)
-        if waiver.expires_on < as_of.date():
+        if waiver.expires_on <= as_of.date():
             _finding(
                 findings,
                 "waiver-expired",

@@ -325,3 +325,63 @@ def test_known_override_of_unselected_endpoint_is_rejected() -> None:
     assert "endpoint-override-not-selected" in {
         item.code for item in caught.value.report.diagnostics
     }
+
+
+@pytest.mark.parametrize(
+    ("section", "index", "field", "value"),
+    [
+        ("service_profiles", 0, "endpoints", [{"id": "http", "protocol": "http", "port": "8080"}]),
+        ("dependency_contracts", 0, "required", "true"),
+        ("dependency_contracts", 0, "port", 8080.0),
+    ],
+)
+def test_source_records_reject_scalar_coercion(
+    section: str, index: int, field: str, value: object
+) -> None:
+    data = base_data()
+    data[section][index][field] = value  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert "invalid-document-record" in {item.code for item in caught.value.report.diagnostics}
+
+
+@pytest.mark.parametrize(
+    ("expires_on", "expired"),
+    [("2026-08-03", True), ("2026-08-04", True), ("2026-08-05", False)],
+)
+def test_waiver_expiry_is_fail_closed_on_as_of_date(expires_on: str, expired: bool) -> None:
+    data = base_data()
+    data["waivers"] = [
+        {
+            "id": "temporary",
+            "scope": {
+                "kind": "signal",
+                "ref": "service/11111111-1111-4111-8111-111111111111/api/ready/up",
+            },
+            "owner": "ops",
+            "reason": "migration",
+            "created_on": "2026-01-01",
+            "expires_on": expires_on,
+        }
+    ]
+    if expired:
+        with pytest.raises(PlanValidationError) as caught:
+            resolve_observation_documents([document(data)], as_of=AS_OF)
+        assert "waiver-expired" in {item.code for item in caught.value.report.diagnostics}
+    else:
+        plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+        assert [waiver.id for waiver in plan.waivers] == ["temporary"]
+
+
+def test_noncanonical_uuid_spelling_cannot_alias_existing_host_identity() -> None:
+    data = base_data()
+    data["hosts"] = [
+        {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+        {"id": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"},
+    ]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item for item in caught.value.report.diagnostics if item.code == "invalid-document-record"
+    )
+    assert finding.location.pointer == "/hosts/1/id"
