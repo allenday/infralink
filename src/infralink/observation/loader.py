@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -245,6 +246,21 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
                 )
             )
             continue
+        unsupported_value = _find_unsupported_value(parsed)
+        if unsupported_value is not None:
+            pointer, value_type = unsupported_value
+            findings.append(
+                Diagnostic(
+                    code="canonical-value-unsupported",
+                    severity="error",
+                    message=f"YAML value type {value_type!r} is outside the canonical domain.",
+                    location=SourceLocation(source_path, pointer, document_index),
+                    next_actions=(
+                        "Use only mappings, lists, strings, integers, finite floats, booleans, or null.",
+                    ),
+                )
+            )
+            continue
         semantic_sha256 = hashlib.sha256(canonical_parsed_content(parsed)).hexdigest()
         loaded.append(
             ObservationDocument(
@@ -381,6 +397,32 @@ def _find_non_string_key(value: Any, pointer: str = "/") -> str | None:
 
 def _escape_pointer_token(token: str) -> str:
     return token.replace("~", "~0").replace("/", "~1")
+
+
+def _find_unsupported_value(value: Any, pointer: str = "/") -> tuple[str, str] | None:
+    if value is None or type(value) in (str, int, bool):
+        return None
+    if type(value) is float:
+        return None if math.isfinite(value) else (pointer, "non-finite-float")
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            child_pointer = (
+                f"/{_escape_pointer_token(key)}"
+                if pointer == "/"
+                else f"{pointer}/{_escape_pointer_token(key)}"
+            )
+            invalid = _find_unsupported_value(child, child_pointer)
+            if invalid is not None:
+                return invalid
+        return None
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            child_pointer = f"/{index}" if pointer == "/" else f"{pointer}/{index}"
+            invalid = _find_unsupported_value(child, child_pointer)
+            if invalid is not None:
+                return invalid
+        return None
+    return pointer, type(value).__name__
 
 
 def _freeze_mapping(data: Mapping[str, Any]) -> Mapping[str, Any]:

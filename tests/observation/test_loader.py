@@ -142,6 +142,28 @@ def test_non_string_mapping_keys_are_rejected_before_hashing(tmp_path: Path, sou
 
 
 @pytest.mark.parametrize(
+    "source",
+    [
+        "schema_version: infralink.observation/v1\nunsupported: !!set {one: null}\n",
+        "schema_version: infralink.observation/v1\nunsupported: 2026-08-04\n",
+        "schema_version: infralink.observation/v1\nunsupported: !!binary SGVsbG8=\n",
+        "schema_version: infralink.observation/v1\nunsupported: .nan\n",
+        "schema_version: infralink.observation/v1\nunsupported: .inf\n",
+    ],
+)
+def test_values_outside_canonical_domain_are_rejected_before_hashing(
+    tmp_path: Path, source: str
+) -> None:
+    _write(tmp_path / "contract.yml", source)
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["canonical-value-unsupported"]
+    assert report.diagnostics[0].location.pointer == "/unsupported"
+
+
+@pytest.mark.parametrize(
     ("source", "code", "pointer"),
     [
         ("applications: []\n", "schema-version-missing", "/schema_version"),

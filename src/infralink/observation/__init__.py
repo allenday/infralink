@@ -2,7 +2,6 @@
 
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.loader import LoadReport, ObservationDocument, load_observation_documents
-
 from infralink.observation.models import (
     Application,
     BackendKind,
