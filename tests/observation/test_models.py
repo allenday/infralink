@@ -13,6 +13,7 @@ from infralink.observation.models import (
     DependencyContract,
     Endpoint,
     EndpointProtocol,
+    FailurePolicy,
     HealthCapability,
     HealthEvaluator,
     Host,
@@ -24,6 +25,7 @@ from infralink.observation.models import (
     MetricsEvaluator,
     ObservationBackend,
     OperationsView,
+    OperationsViewSection,
     ProviderAlias,
     ReadinessSuite,
     RendererBindingIdentity,
@@ -37,7 +39,6 @@ from infralink.observation.models import (
     SignalMembership,
     SignalRequirement,
     SuiteMember,
-    SuitePolicy,
     Waiver,
     WaiverScope,
     WaiverScopeKind,
@@ -448,34 +449,38 @@ def test_application_members_edges_and_health_are_explicit() -> None:
 def test_views_and_suites_have_typed_membership_policy() -> None:
     view = OperationsView(
         id="mail-operations",
-        title="Mail operations",
-        signals=[
-            SignalMembership(
-                signal_ref="smtp-ready",
-                requirement=SignalRequirement.REQUIRED,
-                display=SignalDisplay.STATUS,
-            ),
-            SignalMembership(
-                signal_ref="queue",
-                requirement=SignalRequirement.OPTIONAL,
-                display=SignalDisplay.VALUE,
-            ),
+        purpose="Mail operations",
+        sections=[
+            OperationsViewSection(
+                id="status",
+                members=[
+                    SignalMembership(
+                        signal_id="smtp-ready",
+                        signal_ref="smtp-ready",
+                        datasource_binding_id="metrics-source",
+                        requirement=SignalRequirement.REQUIRED,
+                        display=SignalDisplay.STATUS,
+                    )
+                ],
+            )
         ],
     )
     suite = ReadinessSuite(
         id="mail-readiness",
         members=[
             SuiteMember(
+                id="smtp-ready",
                 signal_ref="smtp-ready",
-                policy=SuitePolicy.MUST_PASS,
                 cadence_seconds=30,
                 continuity_seconds=300,
                 freshness_seconds=90,
+                no_data_policy=FailurePolicy.FAIL,
+                error_policy=FailurePolicy.FAIL,
             )
         ],
     )
 
-    assert view.signals[0].requirement.value == "required"
+    assert view.sections[0].members[0].requirement.value == "required"
     assert suite.members[0].continuity_seconds == 300
 
 
@@ -544,11 +549,11 @@ def test_opaque_binding_models_capture_identity_without_vendor_config() -> None:
     )
     datasource = DatasourceBinding(
         id="metrics-source",
-        backend_id="metrics-primary",
+        observation_backend_id="metrics-primary",
         datasource_ref="uid/metrics",
         observed_at=datetime(2026, 8, 4, tzinfo=timezone.utc),
     )
 
     assert renderer.binding_ref == "ops/default"
     assert backend.backend_ref == "production/metrics"
-    assert datasource.backend_id == "metrics-primary"
+    assert datasource.observation_backend_id == "metrics-primary"

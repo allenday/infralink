@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 
 SCHEMA_VERSION = "infralink.observation/v1"
@@ -73,12 +74,7 @@ class LoadReport:
 def canonical_parsed_content(data: Mapping[str, Any]) -> bytes:
     """Serialize parsed YAML deterministically for semantic provenance hashing."""
 
-    return yaml.safe_dump(
-        _thaw_mapping(data),
-        allow_unicode=True,
-        canonical=True,
-        sort_keys=True,
-    ).encode("utf-8")
+    return canonical_json(_thaw_mapping(data))
 
 
 def load_observation_documents(

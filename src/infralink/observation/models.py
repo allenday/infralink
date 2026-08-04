@@ -112,11 +112,6 @@ class SignalDisplay(str, Enum):
     RATE = "rate"
 
 
-class SuitePolicy(str, Enum):
-    MUST_PASS = "must-pass"
-    SHOULD_PASS = "should-pass"
-
-
 class FailurePolicy(str, Enum):
     FAIL = "fail"
 
@@ -363,7 +358,7 @@ class ObservationBackend(StrictModel):
 
 class DatasourceBinding(StrictModel):
     id: CanonicalId
-    backend_id: CanonicalId
+    observation_backend_id: CanonicalId
     datasource_ref: Annotated[str, Field(min_length=1)]
     observed_at: datetime | None = None
 
@@ -400,9 +395,9 @@ class Waiver(StrictModel):
 
 
 class SignalMembership(StrictModel):
-    id: CanonicalId | None = None
-    signal_id: CanonicalId | None = None
+    signal_id: CanonicalId
     signal_ref: QualifiedRef
+    datasource_binding_id: CanonicalId
     requirement: SignalRequirement
     display: SignalDisplay = SignalDisplay.STATUS
     label: str | None = None
@@ -416,51 +411,23 @@ class SignalMembership(StrictModel):
 class OperationsViewSection(StrictModel):
     id: CanonicalId
     title: Annotated[str, Field(min_length=1)] | None = None
-    members: list[SignalMembership] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_explicit_member_ids(self) -> OperationsViewSection:
-        if any((member.id is None) == (member.signal_id is None) for member in self.members):
-            raise ValueError(
-                "operations view section members require exactly one explicit signal_id"
-            )
-        return self
+    members: Annotated[list[SignalMembership], Field(min_length=1)]
 
 
 class OperationsView(StrictModel):
     id: CanonicalId
-    purpose: Annotated[str, Field(min_length=1)] | None = None
-    title: Annotated[str, Field(min_length=1)] | None = None
-    sections: list[OperationsViewSection] = Field(default_factory=list)
-    signals: list[SignalMembership] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> OperationsView:
-        if self.sections and self.signals:
-            raise ValueError("use sections rather than top-level signals")
-        if self.sections and self.purpose is None:
-            raise ValueError("sectioned operations view requires purpose")
-        return self
+    purpose: Annotated[str, Field(min_length=1)]
+    sections: Annotated[list[OperationsViewSection], Field(min_length=1)]
 
 
 class SuiteMember(StrictModel):
-    id: CanonicalId | None = None
+    id: CanonicalId
     signal_ref: QualifiedRef
-    policy: SuitePolicy | None = None
     cadence_seconds: PositiveSeconds
     continuity_seconds: Annotated[StrictInt, Field(ge=0)]
     freshness_seconds: PositiveSeconds
-    no_data_policy: FailurePolicy | None = None
-    error_policy: FailurePolicy | None = None
-
-    @model_validator(mode="after")
-    def validate_fail_closed_policy(self) -> SuiteMember:
-        legacy = self.policy is not None
-        if not legacy and self.id is None:
-            raise ValueError("readiness suite member requires explicit id")
-        if not legacy and (self.no_data_policy is None or self.error_policy is None):
-            raise ValueError("readiness suite member requires no_data_policy and error_policy")
-        return self
+    no_data_policy: FailurePolicy
+    error_policy: FailurePolicy
 
 
 class ReadinessSuite(StrictModel):

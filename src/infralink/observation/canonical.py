@@ -11,6 +11,59 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+_UNORDERED_LIST_KEYS = frozenset(
+    {
+        "applications",
+        "datasource_bindings",
+        "delivery_forms",
+        "dependency_contracts",
+        "endpoint_ids",
+        "endpoint_overrides",
+        "endpoints",
+        "expected_statuses",
+        "health",
+        "health_signal_refs",
+        "hosts",
+        "logs",
+        "metrics",
+        "observation_backends",
+        "operations_views",
+        "provider_aliases",
+        "readiness_suites",
+        "renderer_binding_identities",
+        "renderer_bindings",
+        "required_dependency_edge_ids",
+        "secret_binding_ids",
+        "secret_bindings",
+        "secret_slots",
+        "service_instance_ids",
+        "service_instances",
+        "service_profiles",
+        "signals",
+        "waivers",
+    }
+)
+
+
+def _list_sort_key(item: object) -> tuple[str, str]:
+    if isinstance(item, Mapping):
+        for key in ("id", "endpoint_id"):
+            identity = item.get(key)
+            if isinstance(identity, str):
+                return key, identity
+    if isinstance(item, (str, int, float, bool)):
+        return "value", str(item)
+    return (
+        "canonical",
+        json.dumps(
+            item, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ),
+    )
+
+
+def _sort_normalized_list(values: list[object]) -> list[object]:
+    return sorted(values, key=_list_sort_key)
+
 
 def _normalize(value: object) -> object:
     if isinstance(value, BaseModel):
@@ -23,11 +76,15 @@ def _normalize(value: object) -> object:
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("canonical mappings require string keys")
-        return {
-            key: _normalize(child)
-            for key, child in value.items()
-            if child is not None and key != "source_refs"
-        }
+        result: dict[str, object] = {}
+        for key, child in value.items():
+            if child is None or key == "source_refs":
+                continue
+            normalized = _normalize(child)
+            if key in _UNORDERED_LIST_KEYS and isinstance(normalized, list):
+                normalized = _sort_normalized_list(normalized)
+            result[key] = normalized
+        return result
     if isinstance(value, (list, tuple)):
         return [_normalize(child) for child in value]
     if isinstance(value, Enum):

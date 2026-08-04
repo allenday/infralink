@@ -103,6 +103,7 @@ class PlannedViewMember(PlanModel):
     id: str
     key: str
     signal_ref: str
+    datasource_binding_id: str
     requirement: SignalRequirement
     evaluator: str
     datasource_binding_ids: tuple[str, ...] = ()
@@ -150,6 +151,7 @@ class PlannedSecretRequirement(PlanModel):
     slot_id: str
     required: bool
     delivery_forms: tuple[SecretDeliveryForm, ...]
+    purpose: str
     source_refs: tuple[SourceRef, ...]
 
 
@@ -176,6 +178,9 @@ class PlannedWaiver(PlanModel):
     scope_kind: WaiverScopeKind
     target_ref: str
     suite_ref: str | None
+    owner: str
+    reason: str
+    created_on: str
     expires_on: str
     source_refs: tuple[SourceRef, ...]
 
@@ -184,6 +189,7 @@ class OpaqueIdentity(PlanModel):
     id: str
     kind: str
     identity_digest: str
+    related_identity: str | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -411,11 +417,11 @@ def resolve_observation_documents(
     datasources = _unique(parsed["datasource_bindings"], "datasource-binding", findings)
     for datasource, datasource_ref in datasources.values():
         assert isinstance(datasource, DatasourceBinding)
-        if datasource.backend_id not in backends:
+        if datasource.observation_backend_id not in backends:
             _finding(
                 findings,
                 "unknown-observation-backend",
-                _child(datasource_ref, "backend_id"),
+                _child(datasource_ref, "observation_backend_id"),
                 datasource.id,
                 "Reference a declared observation backend.",
             )
@@ -596,6 +602,7 @@ def resolve_observation_documents(
                     slot_id=slot.id,
                     required=slot.required,
                     delivery_forms=tuple(slot.delivery_forms),
+                    purpose=slot.purpose,
                     source_refs=(_child(profile_entry[1], "secret_slots", str(slot_index)), ref),
                 )
             )
@@ -850,7 +857,6 @@ def resolve_observation_documents(
 
     planned_views: list[PlannedOperationsView] = []
     view_member_requirement: dict[str, SignalRequirement] = {}
-    datasource_ids = tuple(sorted(datasources))
     for view, ref in operation_views.values():
         assert isinstance(view, OperationsView)
         sections: list[PlannedViewSection] = []
@@ -870,20 +876,28 @@ def resolve_observation_documents(
             view_members: list[PlannedViewMember] = []
             for member_index, member in enumerate(view_section.members):
                 member_ref = _child(section_ref, "members", str(member_index))
-                query_key = member.signal_id or member.id
-                assert query_key is not None
+                query_key = member.signal_id
                 source_signal = signal_map.get(member.signal_ref)
                 derived_id = f"view/{view.id}/query/{view_section.id}/{query_key}"
                 if derived_id in seen_query_ids:
                     _finding(
                         findings,
                         "duplicate-view-query-id",
-                        _child(member_ref, "signal_id" if member.signal_id is not None else "id"),
+                        _child(member_ref, "signal_id"),
                         derived_id,
                         "Give every query in a view section a unique identity.",
                     )
                     continue
                 seen_query_ids.add(derived_id)
+                datasource_valid = member.datasource_binding_id in datasources
+                if not datasource_valid:
+                    _finding(
+                        findings,
+                        "unknown-view-datasource-binding",
+                        _child(member_ref, "datasource_binding_id"),
+                        derived_id,
+                        "Reference a declared datasource binding.",
+                    )
                 if source_signal is None:
                     _finding(
                         findings,
@@ -893,13 +907,16 @@ def resolve_observation_documents(
                         "Reference an existing service or dependency signal.",
                     )
                     continue
+                if not datasource_valid:
+                    continue
                 resolved = PlannedViewMember(
                     id=derived_id,
                     key=query_key,
                     signal_ref=member.signal_ref,
+                    datasource_binding_id=member.datasource_binding_id,
                     requirement=member.requirement,
                     evaluator=source_signal.evaluator or "dependency-health",
-                    datasource_binding_ids=source_signal.datasource_binding_ids or datasource_ids,
+                    datasource_binding_ids=(member.datasource_binding_id,),
                     display=member.display.value,
                     label=member.label,
                     unit=member.unit,
@@ -943,7 +960,7 @@ def resolve_observation_documents(
         planned_views.append(
             PlannedOperationsView(
                 id=view.id,
-                purpose=view.purpose or view.title or view.id,
+                purpose=view.purpose,
                 sections=tuple(sections),
                 source_refs=(ref,),
             )
@@ -958,7 +975,7 @@ def resolve_observation_documents(
         seen_suite_member_ids: set[str] = set()
         for member_index, suite_member in enumerate(suite.members):
             member_ref = _child(ref, "members", str(member_index))
-            member_id = suite_member.id or suite_member.signal_ref.rsplit("/", 1)[-1]
+            member_id = suite_member.id
             if member_id in seen_suite_member_ids:
                 _finding(
                     findings,
@@ -992,8 +1009,8 @@ def resolve_observation_documents(
                 cadence_seconds=suite_member.cadence_seconds,
                 continuity_seconds=suite_member.continuity_seconds,
                 freshness_seconds=suite_member.freshness_seconds,
-                no_data_policy="fail",
-                error_policy="fail",
+                no_data_policy=suite_member.no_data_policy.value,
+                error_policy=suite_member.error_policy.value,
                 source_refs=(member_ref,),
             )
             suite_members.append(planned_member)
@@ -1049,6 +1066,9 @@ def resolve_observation_documents(
                 scope_kind=waiver.scope.kind,
                 target_ref=waiver.scope.ref,
                 suite_ref=waiver.scope.suite_ref,
+                owner=waiver.owner,
+                reason=waiver.reason,
+                created_on=waiver.created_on.isoformat(),
                 expires_on=waiver.expires_on.isoformat(),
                 source_refs=(ref,),
             )
@@ -1072,6 +1092,9 @@ def resolve_observation_documents(
                     id=str(item.id),  # type: ignore[attr-defined]
                     kind=section,
                     identity_digest=canonical_digest(_semantic_value(item)),
+                    related_identity=(
+                        item.observation_backend_id if isinstance(item, DatasourceBinding) else None
+                    ),
                     source_refs=(ref,),
                 )
             )
@@ -1104,12 +1127,13 @@ def resolve_observation_documents(
         operations_views=_sorted(planned_views),
         readiness_suites=_sorted(planned_suites),
     )
-    digest = canonical_digest(_semantic_value(plan, omit={"plan_digest", "scoped_plan_digest"}))
     scoped_suites = tuple(
         suite.model_copy(update={"scoped_plan_digest": _scoped_digest(plan, suite)})
         for suite in plan.readiness_suites
     )
-    return plan.model_copy(update={"readiness_suites": scoped_suites, "plan_digest": digest})
+    plan = plan.model_copy(update={"readiness_suites": scoped_suites})
+    digest = canonical_digest(plan.model_copy(update={"plan_digest": None}))
+    return plan.model_copy(update={"plan_digest": digest})
 
 
 def _unique(
@@ -1192,6 +1216,9 @@ def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
         for signal_id in selected_signals
         if signal_id.startswith("dependency/")
     }
+    relevant_dependencies = [edge for edge in plan.dependencies if edge.id in dependency_ids]
+    for edge in relevant_dependencies:
+        service_ids.update((edge.source_service_id, edge.target_service_id))
     services = [service for service in plan.services if service.id in service_ids]
     profile_ids = {service.profile_id for service in services}
     capability_refs = {
@@ -1217,13 +1244,23 @@ def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
         for signal in selected_signals.values()
         for datasource_id in signal.datasource_binding_ids
     }
+    datasource_identities = {
+        identity.id: identity
+        for identity in plan.opaque_identities
+        if identity.kind == "datasource_bindings" and identity.id in datasource_ids
+    }
+    backend_ids = {
+        identity.related_identity
+        for identity in datasource_identities.values()
+        if identity.related_identity is not None
+    }
     opaque = [
         identity
         for identity in plan.opaque_identities
         if (
             identity.id in renderer_ids
             or identity.id in datasource_ids
-            or identity.kind == "observation_backends"
+            or (identity.kind == "observation_backends" and identity.id in backend_ids)
         )
     ]
     scoped = {
@@ -1237,7 +1274,7 @@ def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
         "endpoints": _sorted(
             [endpoint for endpoint in plan.endpoints if endpoint.service_id in service_ids]
         ),
-        "dependencies": _sorted([edge for edge in plan.dependencies if edge.id in dependency_ids]),
+        "dependencies": _sorted(relevant_dependencies),
         "views": _sorted([view for view in plan.operations_views if view.id in view_ids]),
         "waivers": _sorted(
             [
@@ -1249,6 +1286,13 @@ def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
             ]
         ),
         "secret_bindings": _sorted(relevant_bindings),
+        "secret_requirements": _sorted(
+            [
+                requirement
+                for requirement in plan.secret_requirements
+                if requirement.service_id in service_ids
+            ]
+        ),
         "provider_aliases": _sorted(
             [
                 alias
