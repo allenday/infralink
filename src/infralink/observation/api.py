@@ -60,21 +60,22 @@ class ProjectValidationError(ValueError):
         super().__init__(f"observation projection has {report.diagnostics.error_count} error(s)")
 
 
-def validate(
-    paths: Sequence[Path], *, limit: int = 50, as_of: datetime | None = None
-) -> ValidationReport:
-    """Validate explicit paths; ``as_of`` is required when planning waiver-bearing input."""
+def validate(paths: Sequence[Path], *, limit: int = 50, as_of: datetime) -> ValidationReport:
+    """Validate explicit paths at a caller-supplied, timezone-aware instant."""
 
     loaded = load_observation_documents(paths, diagnostic_limit=limit)
-    if not loaded.valid:
-        return ValidationReport(loaded.diagnostics, len(loaded.documents))
-    if as_of is None:
-        as_of = _as_of_without_waivers(loaded.documents)
-    try:
-        resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=limit)
-    except PlanValidationError as error:
-        return ValidationReport(error.report.diagnostics, len(loaded.documents))
-    return ValidationReport(loaded.diagnostics, len(loaded.documents))
+    phases = [loaded.diagnostics]
+    invalid_as_of = _invalid_as_of_diagnostic(as_of)
+    if invalid_as_of is not None:
+        phases.append(DiagnosticSet.from_diagnostics([invalid_as_of], limit=limit))
+    elif loaded.documents:
+        try:
+            resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=limit)
+        except PlanValidationError as error:
+            phases.append(error.report.diagnostics)
+    return ValidationReport(
+        _combine_diagnostics(phases, limit=limit), loaded.attempted_document_count
+    )
 
 
 def project(
@@ -83,17 +84,37 @@ def project(
     """Project explicit paths deterministically using the caller's waiver evaluation time."""
 
     loaded = load_observation_documents(paths, diagnostic_limit=50)
-    if not loaded.valid:
-        raise ProjectValidationError(ValidationReport(loaded.diagnostics, len(loaded.documents)))
-    try:
-        plan = resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=50)
-    except PlanValidationError as error:
-        raise ProjectValidationError(
-            ValidationReport(error.report.diagnostics, len(loaded.documents))
-        ) from None
+    phases = [loaded.diagnostics]
+    argument_findings: list[Diagnostic] = []
+    invalid_as_of = _invalid_as_of_diagnostic(as_of)
+    if invalid_as_of is not None:
+        argument_findings.append(invalid_as_of)
     if registry_revision is not None:
-        if not registry_revision:
-            raise ValueError("registry_revision must be non-empty when supplied")
+        if not isinstance(registry_revision, str) or not registry_revision.strip():
+            argument_findings.append(
+                _argument_diagnostic(
+                    "invalid-registry-revision",
+                    "/registry_revision",
+                    "registry_revision",
+                    "Supply a non-empty registry revision string or omit it.",
+                )
+            )
+    if argument_findings:
+        phases.append(DiagnosticSet.from_diagnostics(argument_findings, limit=50))
+
+    plan: Plan | None = None
+    if invalid_as_of is None and loaded.documents:
+        try:
+            plan = resolve_observation_documents(loaded.documents, as_of=as_of, diagnostic_limit=50)
+        except PlanValidationError as error:
+            phases.append(error.report.diagnostics)
+    combined = _combine_diagnostics(phases, limit=50)
+    if combined.error_count:
+        raise ProjectValidationError(ValidationReport(combined, loaded.attempted_document_count))
+    if plan is None:
+        raise RuntimeError("projection validation succeeded without producing a plan")
+
+    if registry_revision is not None:
         if plan.registry_revision not in (None, registry_revision):
             diagnostic = Diagnostic(
                 code="registry-revision-conflict",
@@ -105,7 +126,8 @@ def project(
             )
             raise ProjectValidationError(
                 ValidationReport(
-                    DiagnosticSet.from_diagnostics([diagnostic], limit=50), len(loaded.documents)
+                    DiagnosticSet.from_diagnostics([diagnostic], limit=50),
+                    loaded.attempted_document_count,
                 )
             )
         plan = plan.model_copy(update={"registry_revision": registry_revision, "plan_digest": None})
@@ -113,11 +135,52 @@ def project(
     return ProjectResult(plan=plan, sources=_source_provenance(loaded.documents))
 
 
-def _as_of_without_waivers(documents: tuple[ObservationDocument, ...]) -> datetime:
-    if any(document.data.get("waivers") for document in documents):
-        raise ValueError("as_of is required when validating documents containing waivers")
-    # No date-sensitive records exist, so this fixed instant is a deterministic policy.
-    return datetime.fromisoformat("1970-01-01T00:00:00+00:00")
+def _invalid_as_of_diagnostic(as_of: object) -> Diagnostic | None:
+    if isinstance(as_of, datetime) and as_of.tzinfo is not None:
+        return None
+    return _argument_diagnostic(
+        "invalid-as-of",
+        "/as_of",
+        "as_of",
+        "Supply a timezone-aware datetime for deterministic waiver evaluation.",
+    )
+
+
+def _argument_diagnostic(code: str, pointer: str, identity: str, action: str) -> Diagnostic:
+    return Diagnostic(
+        code=code,
+        severity="error",
+        message=code.replace("-", " ").capitalize() + ".",
+        location=SourceLocation("<input>", pointer),
+        identity=identity,
+        next_actions=(action,),
+    )
+
+
+def _combine_diagnostics(phases: Sequence[DiagnosticSet], *, limit: int) -> DiagnosticSet:
+    retained = sorted(
+        (item for phase in phases for item in phase.diagnostics),
+        key=lambda item: (
+            0 if item.severity == "error" else 1,
+            item.code,
+            item.location.path,
+            item.location.document_index,
+            item.location.pointer,
+            item.identity or "",
+            item.message,
+            tuple(sorted(item.next_actions)),
+        ),
+    )[:limit]
+    total_count = sum(phase.total_count for phase in phases)
+    error_count = sum(phase.error_count for phase in phases)
+    return DiagnosticSet(
+        diagnostics=tuple(retained),
+        limit=limit,
+        total_count=total_count,
+        truncated=total_count > limit,
+        error_count=error_count,
+        warning_count=total_count - error_count,
+    )
 
 
 def _source_provenance(

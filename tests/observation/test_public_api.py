@@ -88,6 +88,41 @@ service_instances:
     assert len(report.diagnostics) == 1
 
 
+def test_validate_aggregates_loader_and_planner_errors_under_one_global_limit(
+    tmp_path: Path,
+) -> None:
+    from infralink.observation import ProjectValidationError, project, validate
+
+    malformed = tmp_path / "a.yml"
+    malformed.write_text("schema_version: [broken\n", encoding="utf-8")
+    model_invalid = tmp_path / "b.yml"
+    model_invalid.write_text(
+        """schema_version: infralink.observation/v1
+hosts:
+  - id: not-a-uuid
+service_instances:
+  - id: api
+    host_id: not-a-uuid
+    profile_id: missing
+""",
+        encoding="utf-8",
+    )
+
+    report = validate([malformed, model_invalid], limit=2, as_of=AS_OF)
+
+    assert report.document_count == 2
+    assert report.diagnostics.total_count == 3
+    assert report.diagnostics.truncated
+    assert len(report.diagnostics) == 2
+    assert {item.code for item in report.diagnostics} == {"invalid-document-record"}
+    with pytest.raises(ProjectValidationError) as caught:
+        project([malformed, model_invalid], as_of=AS_OF)
+    assert {item.code for item in caught.value.report.diagnostics} >= {
+        "invalid-document-record",
+        "yaml-malformed",
+    }
+
+
 def test_project_returns_plan_and_separate_raw_provenance(tmp_path: Path) -> None:
     from infralink.observation import ProjectResult, project
 
@@ -135,6 +170,47 @@ def test_declared_input_failures_raise_typed_projection_error(tmp_path: Path) ->
 
     assert caught.value.report.diagnostics.error_count == 1
     assert caught.value.report.diagnostics[0].code == "schema-version-unsupported"
+
+
+def test_as_of_is_required_by_both_public_operations(tmp_path: Path) -> None:
+    from infralink.observation import project, validate
+
+    source = tmp_path / "contract.yml"
+    _write_contract(source)
+
+    with pytest.raises(TypeError):
+        validate([source])  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        project([source])  # type: ignore[call-arg]
+
+
+def test_invalid_as_of_is_a_typed_validation_diagnostic(tmp_path: Path) -> None:
+    from infralink.observation import ProjectValidationError, project, validate
+
+    source = tmp_path / "contract.yml"
+    _write_contract(source)
+    naive = datetime(2026, 8, 4)
+
+    report = validate([source], as_of=naive)
+    assert report.diagnostics[0].code == "invalid-as-of"
+    with pytest.raises(ProjectValidationError) as caught:
+        project([source], as_of=naive)
+    assert caught.value.report.diagnostics[0].code == "invalid-as-of"
+
+
+@pytest.mark.parametrize("revision", ["", "   "])
+def test_invalid_registry_revision_is_a_typed_projection_failure(
+    tmp_path: Path, revision: str
+) -> None:
+    from infralink.observation import ProjectValidationError, project
+
+    source = tmp_path / "contract.yml"
+    _write_contract(source)
+
+    with pytest.raises(ProjectValidationError) as caught:
+        project([source], registry_revision=revision, as_of=AS_OF)
+
+    assert caught.value.report.diagnostics[0].code == "invalid-registry-revision"
 
 
 def test_public_results_do_not_contain_secret_values(tmp_path: Path) -> None:

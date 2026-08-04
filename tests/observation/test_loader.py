@@ -297,3 +297,24 @@ def test_zero_diagnostic_limit_does_not_hide_invalid_report(tmp_path: Path) -> N
     assert not report.valid
     assert report.diagnostics.error_count == 1
     assert report.diagnostics.total_count == 1
+
+
+def test_attempted_document_count_includes_invalid_and_multidocument_sources(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "multi.yml").write_text(
+        """schema_version: infralink.observation/v1
+hosts: []
+---
+- invalid-root
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "malformed.yml").write_text("schema_version: [broken\n", encoding="utf-8")
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.attempted_document_count == 3
+    assert len(report.documents) == 1
+    assert report.diagnostics.error_count == 2
+    assert report.diagnostics.total_count == 2

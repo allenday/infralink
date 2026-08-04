@@ -65,6 +65,7 @@ class LoadReport:
 
     documents: tuple[ObservationDocument, ...]
     diagnostics: DiagnosticSet
+    attempted_document_count: int
 
     @property
     def valid(self) -> bool:
@@ -86,16 +87,19 @@ def load_observation_documents(
 
     discovered, base, findings = _discover_sources(sources)
     documents: list[ObservationDocument] = []
+    attempted_document_count = len(findings)
     for path in discovered:
         source_path = path.relative_to(base).as_posix()
-        loaded, load_findings = _load_file(path, source_path)
+        loaded, load_findings, attempted = _load_file(path, source_path)
         documents.extend(loaded)
         findings.extend(load_findings)
+        attempted_document_count += attempted
 
     findings.extend(_duplicate_id_diagnostics(documents))
     return LoadReport(
         documents=tuple(documents),
         diagnostics=DiagnosticSet.from_diagnostics(findings, limit=diagnostic_limit),
+        attempted_document_count=attempted_document_count,
     )
 
 
@@ -158,22 +162,28 @@ def _common_path(paths: list[str]) -> str:
     return commonpath(paths)
 
 
-def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument], list[Diagnostic]]:
+def _load_file(
+    path: Path, source_path: str
+) -> tuple[list[ObservationDocument], list[Diagnostic], int]:
     raw = path.read_bytes()
     raw_sha256 = hashlib.sha256(raw).hexdigest()
     if len(raw) > MAX_SOURCE_BYTES:
-        return [], [
-            Diagnostic(
-                code="yaml-source-too-large",
-                severity="error",
-                message=f"The YAML source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
-                location=SourceLocation(source_path),
-                next_actions=("Split the contract into smaller YAML source files.",),
-            )
-        ]
+        return (
+            [],
+            [
+                Diagnostic(
+                    code="yaml-source-too-large",
+                    severity="error",
+                    message=f"The YAML source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
+                    location=SourceLocation(source_path),
+                    next_actions=("Split the contract into smaller YAML source files.",),
+                )
+            ],
+            1,
+        )
     inspection_finding = _inspect_yaml(raw, source_path)
     if inspection_finding is not None:
-        return [], [inspection_finding]
+        return [], [inspection_finding], _count_attempted_documents(raw)
     try:
         parsed_documents = list(yaml.safe_load_all(raw))
     except (UnicodeDecodeError, yaml.YAMLError) as error:
@@ -181,15 +191,19 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
         message = "The YAML source is malformed."
         if isinstance(problem, str) and problem:
             message = f"The YAML source is malformed: {problem}."
-        return [], [
-            Diagnostic(
-                code="yaml-malformed",
-                severity="error",
-                message=message,
-                location=SourceLocation(source_path),
-                next_actions=("Repair the YAML syntax and load the source again.",),
-            )
-        ]
+        return (
+            [],
+            [
+                Diagnostic(
+                    code="yaml-malformed",
+                    severity="error",
+                    message=message,
+                    location=SourceLocation(source_path),
+                    next_actions=("Repair the YAML syntax and load the source again.",),
+                )
+            ],
+            _count_attempted_documents(raw),
+        )
 
     loaded: list[ObservationDocument] = []
     findings: list[Diagnostic] = []
@@ -267,7 +281,18 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
                 document_index=document_index,
             )
         )
-    return loaded, findings
+    return loaded, findings, len(parsed_documents)
+
+
+def _count_attempted_documents(raw: bytes) -> int:
+    count = 0
+    try:
+        for event in yaml.parse(raw):
+            if isinstance(event, yaml.events.DocumentStartEvent):
+                count += 1
+    except (UnicodeDecodeError, yaml.YAMLError):
+        pass
+    return max(1, count)
 
 
 def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[Diagnostic]:
