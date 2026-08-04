@@ -81,6 +81,92 @@ def test_profile_rejects_capability_with_absent_endpoint() -> None:
         )
 
 
+def test_profile_rejects_duplicate_endpoint_ids() -> None:
+    with pytest.raises(ValidationError, match="duplicate endpoint id"):
+        ServiceProfile(
+            id="nginx",
+            endpoints=[
+                Endpoint(id="web", protocol=EndpointProtocol.HTTP, port=80),
+                Endpoint(id="web", protocol=EndpointProtocol.HTTPS, port=443),
+            ],
+        )
+
+
+def test_profile_rejects_duplicate_capability_ids_across_capability_kinds() -> None:
+    with pytest.raises(ValidationError, match="duplicate capability id"):
+        ServiceProfile(
+            id="nginx",
+            endpoints=[Endpoint(id="web", protocol=EndpointProtocol.HTTP, port=80)],
+            health=[
+                HealthCapability(
+                    id="status", endpoint_id="web", evaluator=HealthEvaluator.HTTP_STATUS
+                )
+            ],
+            metrics=[
+                MetricsCapability(
+                    id="status",
+                    endpoint_id="web",
+                    evaluator=MetricsEvaluator.PROMETHEUS_SCRAPE,
+                )
+            ],
+        )
+
+
+def test_profile_rejects_duplicate_signal_ids() -> None:
+    signal = LogicalSignal(
+        id="ready",
+        capability_id="health",
+        evaluator=SignalEvaluator.CAPABILITY_STATE,
+    )
+    with pytest.raises(ValidationError, match="duplicate signal id"):
+        ServiceProfile(
+            id="nginx",
+            endpoints=[Endpoint(id="web", protocol=EndpointProtocol.HTTP, port=80)],
+            health=[
+                HealthCapability(
+                    id="health", endpoint_id="web", evaluator=HealthEvaluator.HTTP_STATUS
+                )
+            ],
+            signals=[signal, signal.model_copy()],
+        )
+
+
+def test_profile_rejects_signal_with_absent_capability() -> None:
+    with pytest.raises(ValidationError, match="missing capability"):
+        ServiceProfile(
+            id="nginx",
+            signals=[
+                LogicalSignal(
+                    id="ready",
+                    capability_id="health",
+                    evaluator=SignalEvaluator.CAPABILITY_STATE,
+                )
+            ],
+        )
+
+
+def test_profile_rejects_signal_resolving_to_wrong_capability_kind() -> None:
+    with pytest.raises(ValidationError, match="metrics capability"):
+        ServiceProfile(
+            id="nginx",
+            endpoints=[Endpoint(id="web", protocol=EndpointProtocol.HTTP, port=80)],
+            health=[
+                HealthCapability(
+                    id="requests", endpoint_id="web", evaluator=HealthEvaluator.HTTP_STATUS
+                )
+            ],
+            signals=[
+                LogicalSignal(
+                    id="request-rate-high",
+                    capability_id="requests",
+                    evaluator=SignalEvaluator.METRIC_THRESHOLD,
+                    metric="requests_total",
+                    condition=MetricCondition(operator=ComparisonOperator.GT, threshold=100),
+                )
+            ],
+        )
+
+
 def test_metric_logical_signal_is_vendor_neutral() -> None:
     signal = LogicalSignal(
         id="mail-queue-high",
@@ -92,6 +178,18 @@ def test_metric_logical_signal_is_vendor_neutral() -> None:
 
     assert signal.condition is not None
     assert signal.condition.operator.value == "gt"
+
+
+@pytest.mark.parametrize("threshold", [float("nan"), float("inf"), float("-inf")])
+def test_metric_condition_rejects_non_finite_thresholds(threshold: float) -> None:
+    with pytest.raises(ValidationError):
+        MetricCondition(operator=ComparisonOperator.GT, threshold=threshold)
+
+
+def test_metric_condition_finite_threshold_is_serialization_safe() -> None:
+    condition = MetricCondition(operator=ComparisonOperator.GTE, threshold=12.5)
+
+    assert condition.model_dump_json() == '{"operator":"gte","threshold":12.5}'
 
 
 @pytest.mark.parametrize("bad_id", ["Upper", "two_words", "-leading", "trailing-", ""])
@@ -282,9 +380,7 @@ def test_representative_profiles_use_only_closed_vendor_neutral_contracts() -> N
         ),
         ServiceProfile(
             id="postgresql",
-            endpoints=[
-                Endpoint(id="database", protocol=EndpointProtocol.POSTGRESQL, port=5432)
-            ],
+            endpoints=[Endpoint(id="database", protocol=EndpointProtocol.POSTGRESQL, port=5432)],
             health=[
                 HealthCapability(
                     id="ready",

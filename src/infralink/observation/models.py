@@ -142,7 +142,7 @@ class LogCapability(StrictModel):
 
 class MetricCondition(StrictModel):
     operator: ComparisonOperator
-    threshold: float
+    threshold: Annotated[float, Field(allow_inf_nan=False)]
 
 
 class LogicalSignal(StrictModel):
@@ -188,11 +188,28 @@ class ServiceProfile(StrictModel):
 
     @model_validator(mode="after")
     def validate_endpoint_references(self) -> ServiceProfile:
-        endpoint_ids = {endpoint.id for endpoint in self.endpoints}
+        endpoint_id_list = [endpoint.id for endpoint in self.endpoints]
+        if len(endpoint_id_list) != len(set(endpoint_id_list)):
+            raise ValueError("duplicate endpoint id in service profile")
+
+        health_ids = {capability.id for capability in self.health}
+        metrics_ids = {capability.id for capability in self.metrics}
+        log_ids = {capability.id for capability in self.logs}
+        capability_id_list = [
+            *(capability.id for capability in self.health),
+            *(capability.id for capability in self.metrics),
+            *(capability.id for capability in self.logs),
+        ]
+        if len(capability_id_list) != len(set(capability_id_list)):
+            raise ValueError("duplicate capability id in service profile")
+
+        signal_id_list = [signal.id for signal in self.signals]
+        if len(signal_id_list) != len(set(signal_id_list)):
+            raise ValueError("duplicate signal id in service profile")
+
+        endpoint_ids = set(endpoint_id_list)
         references = [(capability.id, capability.endpoint_id) for capability in self.health]
-        references.extend(
-            (capability.id, capability.endpoint_id) for capability in self.metrics
-        )
+        references.extend((capability.id, capability.endpoint_id) for capability in self.metrics)
         references.extend(
             (capability.id, capability.endpoint_id)
             for capability in self.logs
@@ -203,6 +220,26 @@ class ServiceProfile(StrictModel):
                 raise ValueError(
                     f"capability {capability_id!r} references missing endpoint {endpoint_id!r}"
                 )
+
+        expected_capability_ids = {
+            SignalEvaluator.CAPABILITY_STATE: health_ids,
+            SignalEvaluator.METRIC_THRESHOLD: metrics_ids,
+            SignalEvaluator.LOG_MATCH: log_ids,
+        }
+        capability_labels = {
+            SignalEvaluator.CAPABILITY_STATE: "health",
+            SignalEvaluator.METRIC_THRESHOLD: "metrics",
+            SignalEvaluator.LOG_MATCH: "logs",
+        }
+        all_capability_ids = health_ids | metrics_ids | log_ids
+        for signal in self.signals:
+            if signal.capability_id not in all_capability_ids:
+                raise ValueError(
+                    f"signal {signal.id!r} references missing capability {signal.capability_id!r}"
+                )
+            if signal.capability_id not in expected_capability_ids[signal.evaluator]:
+                label = capability_labels[signal.evaluator]
+                raise ValueError(f"signal {signal.id!r} must reference a {label} capability")
         return self
 
 
@@ -214,6 +251,8 @@ class ServiceInstance(StrictModel):
 
 
 _SENSITIVE_KEY = re.compile(r"(?:^|[^a-z])(value|secret|password|token)(?:$|[^a-z])")
+
+
 def _contains_inline_secret(value: object) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
