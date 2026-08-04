@@ -113,6 +113,40 @@ service_instances:
     ]
 
 
+def test_bounded_validation_prioritizes_malformed_instance_host_diagnostic(
+    tmp_path: Path,
+) -> None:
+    from infralink.observation import validate
+
+    source = tmp_path / "invalid.yml"
+    source.write_text(
+        """schema_version: infralink.observation/v1
+service_profiles:
+  - id: node-exporter
+    endpoints: []
+    health: []
+    metrics: []
+    logs: []
+    signals: []
+    secret_slots: []
+service_instances:
+  - id: node-exporter
+    profile_id: node-exporter
+  - id: node-exporter
+    host_id: [not-a-host]
+    profile_id: node-exporter
+""",
+        encoding="ascii",
+    )
+
+    report = validate([source], limit=1, as_of=AS_OF)
+
+    assert not report.valid
+    assert report.diagnostics.total_count == 2
+    assert [item.code for item in report.diagnostics] == ["invalid-document-record"]
+    assert report.diagnostics[0].location.pointer == "/service_instances/1/host_id"
+
+
 def test_validate_aggregates_model_errors_and_is_bounded(tmp_path: Path) -> None:
     from infralink.observation import validate
 

@@ -278,6 +278,32 @@ service_instances:
     ]
 
 
+def test_malformed_instance_hosts_defer_identity_validation_to_the_model(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "missing.yml",
+        """schema_version: infralink.observation/v1
+service_instances:
+  - id: node-exporter
+    profile_id: node-exporter
+""",
+    )
+    _write(
+        tmp_path / "malformed.yml",
+        """schema_version: infralink.observation/v1
+service_instances:
+  - id: node-exporter
+    host_id: [not-a-host]
+    profile_id: node-exporter
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert not [item for item in report.diagnostics if item.code == "duplicate-object-id"]
+
+
 def test_duplicate_ids_in_same_multi_document_file_have_distinct_locations(
     tmp_path: Path,
 ) -> None:

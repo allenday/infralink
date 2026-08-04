@@ -305,8 +305,11 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
             for index, item in enumerate(objects):
                 if isinstance(item, Mapping) and isinstance(item.get("id"), str):
                     object_id = item["id"]
-                    if collection == "service_instances" and isinstance(item.get("host_id"), str):
-                        object_id = f"{item['host_id']}/{object_id}"
+                    if collection == "service_instances":
+                        host_id = item.get("host_id")
+                        if not isinstance(host_id, str):
+                            continue
+                        object_id = f"{host_id}/{object_id}"
                     locations[(collection, object_id)].append(
                         SourceLocation(
                             document.source_path,
