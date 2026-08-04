@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -45,6 +46,11 @@ class ObservationDocument:
     raw_sha256: str
     semantic_sha256: str
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return an independent mutable copy for downstream validation."""
+
+        return _thaw_mapping(self.data)
+
 
 @dataclass(frozen=True, slots=True)
 class LoadReport:
@@ -55,14 +61,14 @@ class LoadReport:
 
     @property
     def valid(self) -> bool:
-        return not any(item.severity == "error" for item in self.diagnostics)
+        return self.diagnostics.error_count == 0
 
 
 def canonical_parsed_content(data: Mapping[str, Any]) -> bytes:
     """Serialize parsed YAML deterministically for semantic provenance hashing."""
 
     return yaml.safe_dump(
-        dict(data),
+        _thaw_mapping(data),
         allow_unicode=True,
         canonical=True,
         sort_keys=True,
@@ -109,7 +115,18 @@ def _discover_sources(
                 if path.is_file() and path.suffix in {".yml", ".yaml"}
             )
         elif source.is_file():
-            discovered.add(source)
+            if source.suffix in {".yml", ".yaml"}:
+                discovered.add(source)
+            else:
+                findings.append(
+                    Diagnostic(
+                        code="unsupported-source-extension",
+                        severity="error",
+                        message="Observation source files must use .yml or .yaml.",
+                        location=SourceLocation(source.name),
+                        next_actions=("Supply a .yml or .yaml observation source file.",),
+                    )
+                )
         else:
             findings.append(
                 Diagnostic(
@@ -198,12 +215,13 @@ def _load_file(path: Path, source_path: str) -> tuple[list[ObservationDocument],
             )
             continue
         parsed = dict(data)
+        semantic_sha256 = hashlib.sha256(canonical_parsed_content(parsed)).hexdigest()
         loaded.append(
             ObservationDocument(
                 source_path=source_path,
-                data=parsed,
+                data=_freeze_mapping(parsed),
                 raw_sha256=raw_sha256,
-                semantic_sha256=hashlib.sha256(canonical_parsed_content(parsed)).hexdigest(),
+                semantic_sha256=semantic_sha256,
             )
         )
     return loaded, findings
@@ -214,7 +232,7 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
     for document in documents:
         for collection in sorted(_IDENTITY_COLLECTIONS):
             objects = document.data.get(collection)
-            if not isinstance(objects, list):
+            if not isinstance(objects, tuple):
                 continue
             for index, item in enumerate(objects):
                 if isinstance(item, Mapping) and isinstance(item.get("id"), str):
@@ -239,3 +257,31 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
                 )
             )
     return findings
+
+
+def _freeze_mapping(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    return MappingProxyType({key: _freeze_value(value) for key, value in data.items()})
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _freeze_mapping(value)
+    if isinstance(value, list):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
+def _thaw_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: _thaw_value(value) for key, value in data.items()}
+
+
+def _thaw_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _thaw_mapping(value)
+    if isinstance(value, tuple):
+        return [_thaw_value(item) for item in value]
+    if isinstance(value, frozenset):
+        return {_thaw_value(item) for item in value}
+    return value

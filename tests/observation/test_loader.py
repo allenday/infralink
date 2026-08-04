@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import builtins
 import hashlib
+import socket
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -49,6 +52,33 @@ def test_raw_and_semantic_digests_have_distinct_stability(tmp_path: Path) -> Non
     assert first_document.semantic_sha256 == second_document.semantic_sha256
 
 
+def test_parsed_document_content_is_deeply_immutable_and_can_be_thawed(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "contract.yml",
+        "schema_version: infralink.observation/v1\napplications:\n  - id: mail\n",
+    )
+    document = load_observation_documents(tmp_path).documents[0]
+    digest = document.semantic_sha256
+
+    with pytest.raises(TypeError):
+        document.data["schema_version"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        document.data["applications"][0]["id"] = "changed"  # type: ignore[index]
+
+    assert document.semantic_sha256 == digest
+    assert document.to_dict()["applications"] == [{"id": "mail"}]
+
+
+def test_explicit_non_yaml_file_returns_typed_diagnostic(tmp_path: Path) -> None:
+    _write(tmp_path / "contract.json", '{"schema_version": "infralink.observation/v1"}')
+
+    report = load_observation_documents(tmp_path / "contract.json")
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["unsupported-source-extension"]
+    assert report.diagnostics[0].location.path == "contract.json"
+
+
 @pytest.mark.parametrize(
     ("source", "code", "pointer"),
     [
@@ -84,7 +114,7 @@ def test_unknown_top_level_fields_are_retained(tmp_path: Path) -> None:
 
     document = load_observation_documents(tmp_path).documents[0]
 
-    assert document.data["future_collection"] == [{"id": "later"}]
+    assert document.to_dict()["future_collection"] == [{"id": "later"}]
 
 
 def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) -> None:
@@ -120,6 +150,28 @@ def test_loading_does_not_read_environment_or_initialize_providers(
     assert len(load_observation_documents(tmp_path).documents) == 1
 
 
+def test_loading_does_not_access_network_or_import_provider_adapters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path / "contract.yml", "schema_version: infralink.observation/v1\n")
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("network access is forbidden")
+
+    real_import = builtins.__import__
+
+    def guarded_import(name: str, *args: object, **kwargs: object) -> object:
+        if name.startswith("infralink.adapters"):
+            raise AssertionError("provider adapter import is forbidden")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    assert len(load_observation_documents(tmp_path).documents) == 1
+
+
 def test_diagnostic_limit_is_applied_after_global_sort(tmp_path: Path) -> None:
     for name in ("z.yml", "a.yml", "m.yml"):
         _write(tmp_path / name, "not: [valid\n")
@@ -129,3 +181,13 @@ def test_diagnostic_limit_is_applied_after_global_sort(tmp_path: Path) -> None:
     assert [d.location.path for d in report.diagnostics] == ["a.yml", "m.yml"]
     assert report.diagnostics.total_count == 3
     assert report.diagnostics.truncated
+
+
+def test_zero_diagnostic_limit_does_not_hide_invalid_report(tmp_path: Path) -> None:
+    _write(tmp_path / "bad.yml", "not: [valid\n")
+
+    report = load_observation_documents(tmp_path, diagnostic_limit=0)
+
+    assert not report.valid
+    assert report.diagnostics.error_count == 1
+    assert report.diagnostics.total_count == 1
