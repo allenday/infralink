@@ -147,3 +147,77 @@ def test_observation_invocation_and_internal_failures_keep_agent_envelope(
     assert yaml.safe_load(internal.output)["schema_version"] == "agent-cli.response.v1"
     assert yaml.safe_load(internal.output)["error"]["code"] == "internal-invariant"
     assert invocation.stderr == internal.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("output_args", "expected"),
+    [
+        (("-o", "json"), "json"),
+        (("--output", "json"), "json"),
+        (("--output=json",), "json"),
+        (("-ojson",), "json"),
+        (("-vojson",), "json"),
+        (("-o", "yaml"), "yaml"),
+        (("--output", "yaml"), "yaml"),
+        (("--output=yaml",), "yaml"),
+        (("-oyaml",), "yaml"),
+        (("-voyaml",), "yaml"),
+        (("--output", "yaml", "--output=json"), "json"),
+        (("-ojson", "-o", "yaml"), "yaml"),
+    ],
+)
+@pytest.mark.parametrize("failure", ["project", "validate"])
+def test_observation_boundary_failure_honors_click_output_spellings(
+    tmp_path: Path,
+    output_args: tuple[str, ...],
+    expected: str,
+    failure: str,
+) -> None:
+    source = _source(tmp_path)
+    command = ["project"] if failure == "project" else ["validate", "--source", str(source)]
+
+    result = CliRunner().invoke(cli, [*output_args, *command])
+
+    assert result.exit_code == 2
+    assert result.stderr == ""
+    if expected == "json":
+        assert result.output.startswith("{")
+        payload = json.loads(result.output)
+    else:
+        assert result.output.startswith("schema_version:")
+        payload = yaml.safe_load(result.output)
+    assert payload["schema_version"] == "agent-cli.response.v1"
+    assert payload["error"]["code"] == "invocation-error"
+
+
+def test_legacy_boundary_failure_remains_json_with_default_output() -> None:
+    result = CliRunner().invoke(cli, ["resolve"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["schema_version"] == "infralink.cli/v1"
+
+
+@pytest.mark.parametrize(
+    ("output_args", "expected"),
+    [
+        (("-o", "json"), "json"),
+        (("--output=json",), "json"),
+        (("-vojson",), "json"),
+        (("--output", "yaml"), "yaml"),
+        (("-oyaml",), "yaml"),
+        (("--output=json", "-oyaml"), "yaml"),
+    ],
+)
+def test_observation_internal_failure_honors_explicit_output(
+    monkeypatch: pytest.MonkeyPatch, output_args: tuple[str, ...], expected: str
+) -> None:
+    monkeypatch.setattr("infralink.cli.observation._request_id", lambda: 1 / 0)
+
+    result = CliRunner().invoke(cli, [*output_args, "capabilities"])
+
+    assert result.exit_code == 4
+    if expected == "json":
+        assert json.loads(result.output)["error"]["code"] == "internal-invariant"
+    else:
+        assert result.output.startswith("schema_version:")
+        assert yaml.safe_load(result.output)["error"]["code"] == "internal-invariant"

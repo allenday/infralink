@@ -79,7 +79,7 @@ def emit_boundary_failure(incoming: list[str], *, code: str, message: str) -> No
     """Emit an agent envelope when failure happens outside a command callback."""
     from infralink.cli.main import _ENVELOPE_EMITTED
 
-    output = "json" if "--output" in incoming and "json" in incoming else "yaml"
+    output = _output_from_argv(incoming)
     payload = {
         "schema_version": "agent-cli.response.v1",
         "request_id": str(uuid4()),
@@ -101,6 +101,49 @@ def emit_boundary_failure(incoming: list[str], *, code: str, message: str) -> No
         click.echo(json.dumps(payload, separators=(",", ":")))
     else:
         click.echo(yaml.safe_dump(payload, sort_keys=False), nl=False)
+
+
+def _output_from_argv(argv: list[str]) -> str:
+    """Resolve Click's root output option forms without re-entering command parsing."""
+    output = "yaml"
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            break
+        if not token.startswith("-"):
+            break
+        if token in {"--registry", "--edges", "-r", "-e"}:
+            index += 2
+            continue
+        if token.startswith("--registry=") or token.startswith("--edges="):
+            index += 1
+            continue
+        if token == "--output" or token == "-o":
+            if index + 1 < len(argv):
+                output = argv[index + 1].lower()
+            index += 2
+            continue
+        if token.startswith("--output="):
+            output = token.partition("=")[2].lower()
+            index += 1
+            continue
+        if token.startswith("-") and not token.startswith("--"):
+            option_cluster = token[1:]
+            output_offset = option_cluster.find("o")
+            if output_offset >= 0:
+                attached = option_cluster[output_offset + 1 :]
+                if attached:
+                    output = attached.lower()
+                    index += 1
+                elif index + 1 < len(argv):
+                    output = argv[index + 1].lower()
+                    index += 2
+                else:
+                    index += 1
+                continue
+        index += 1
+    return output if output in {"json", "yaml"} else "yaml"
 
 
 def _envelope(
