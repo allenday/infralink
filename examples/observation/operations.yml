@@ -1,8 +1,10 @@
 schema_version: infralink.observation/v1
 observation_backends:
   - {id: health-main, kind: health, backend_ref: opaque-observation-backend}
+  - {id: logs-main, kind: logs, backend_ref: opaque-logs-backend}
 datasource_bindings:
   - {id: live-health, observation_backend_id: health-main, datasource_ref: opaque-datasource}
+  - {id: live-logs, observation_backend_id: logs-main, datasource_ref: opaque-log-datasource}
 operations_views:
   - id: service-overview
     purpose: Multi-service operations overview
@@ -12,6 +14,8 @@ operations_views:
         members:
           - {signal_id: web-up, signal_ref: service/11111111-1111-4111-8111-111111111111/web/health/up, datasource_binding_id: live-health, requirement: required}
           - {signal_id: ci-up, signal_ref: service/22222222-2222-4222-8222-222222222222/ci/health/up, datasource_binding_id: live-health, requirement: required}
+          - {signal_id: web-traffic, signal_ref: service/11111111-1111-4111-8111-111111111111/web/access/traffic, datasource_binding_id: live-logs, requirement: optional}
+          - {signal_id: ci-failures, signal_ref: service/22222222-2222-4222-8222-222222222222/ci/builds/failures, datasource_binding_id: live-logs, requirement: optional}
 readiness_suites:
   - id: ci-release
     members:

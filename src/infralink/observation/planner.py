@@ -100,6 +100,8 @@ class PlannedSignal(PlanModel):
     datasource_binding_ids: tuple[str, ...] = ()
     source_endpoint_id: str | None = None
     capability_evaluator: str | None = None
+    capability_path: str | None = None
+    log_stream: str | None = None
     expected_statuses: tuple[int, ...] = ()
     metric: str | None = None
     comparator: str | None = None
@@ -625,6 +627,14 @@ def resolve_observation_documents(
                         else None
                     ),
                     capability_evaluator=capability.evaluator.value,
+                    capability_path=(
+                        capability.path
+                        if isinstance(capability, HealthCapability | MetricsCapability)
+                        else None
+                    ),
+                    log_stream=(
+                        capability.stream if isinstance(capability, LogCapability) else None
+                    ),
                     expected_statuses=(
                         tuple(capability.expected_statuses)
                         if isinstance(capability, HealthCapability)
@@ -1024,6 +1034,8 @@ def resolve_observation_documents(
                     datasource_binding_ids=resolved.datasource_binding_ids,
                     source_endpoint_id=source_signal.source_endpoint_id,
                     capability_evaluator=source_signal.capability_evaluator,
+                    capability_path=source_signal.capability_path,
+                    log_stream=source_signal.log_stream,
                     expected_statuses=source_signal.expected_statuses,
                     metric=source_signal.metric,
                     comparator=source_signal.comparator,

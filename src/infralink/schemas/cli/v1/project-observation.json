@@ -1239,6 +1239,18 @@
           "default": null,
           "title": "Capability Evaluator"
         },
+        "capability_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Path"
+        },
         "capability_ref": {
           "anyOf": [
             {
@@ -1328,6 +1340,18 @@
           ],
           "title": "Kind",
           "type": "string"
+        },
+        "log_stream": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Stream"
         },
         "metric": {
           "anyOf": [

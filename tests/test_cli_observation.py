@@ -150,7 +150,19 @@ def test_end_to_end_example_directory_validates_and_projects() -> None:
     projected = CliRunner().invoke(cli, ["project", "observation", *args])
 
     assert validated.exit_code == projected.exit_code == 0
-    assert yaml.safe_load(projected.output)["result"]["plan"]["plan_digest"]
+    plan = yaml.safe_load(projected.output)["result"]["plan"]
+    assert plan["plan_digest"]
+    signals = {item["id"]: item for item in plan["signals"]}
+    nginx = "service/11111111-1111-4111-8111-111111111111/web"
+    ci = "service/22222222-2222-4222-8222-222222222222/ci"
+    assert signals[f"{nginx}/health/up"]["capability_path"] == "/healthz"
+    assert signals[f"{nginx}/metrics/requests"]["capability_path"] == "/metrics"
+    assert signals[f"{nginx}/access/traffic"]["log_stream"] == "nginx.access"
+    assert signals[f"{ci}/builds/failures"]["log_stream"] == "ci.builds"
+    view_signal = signals["view/service-overview/query/core/web-up"]
+    assert view_signal["capability_path"] == "/healthz"
+    assert signals["view/service-overview/query/core/web-traffic"]["log_stream"] == "nginx.access"
+    assert signals["view/service-overview/query/core/ci-failures"]["log_stream"] == "ci.builds"
 
 
 def test_observation_invocation_and_internal_failures_keep_agent_envelope(

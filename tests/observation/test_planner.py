@@ -199,10 +199,62 @@ def test_planned_signals_serialize_adapter_inputs_and_digest_changes() -> None:
     assert metric.source_endpoint_id.endswith("/http")
     assert (metric.metric, metric.comparator, metric.threshold) == ("queue_depth", "lt", 10)
     assert metric.capability_evaluator == "prometheus-scrape"
+    assert metric.capability_path is None
+    assert metric.log_stream is None
     assert dependency.source_endpoint_id.endswith("/frontend/http")
     assert dependency.capability_evaluator == "dependency-health"
 
     profile["signals"][-1]["condition"]["threshold"] = 11
+    second = resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert first.plan_digest != second.plan_digest
+
+
+def test_capability_path_and_log_stream_are_normalized_and_digest_relevant() -> None:
+    data = base_data()
+    profile = data["service_profiles"][0]  # type: ignore[index]
+    profile["health"][0]["path"] = "/healthz"
+    profile["metrics"] = [
+        {
+            "id": "metrics",
+            "endpoint_id": "http",
+            "evaluator": "prometheus-scrape",
+            "path": "/metrics",
+        }
+    ]
+    profile["logs"] = [{"id": "access", "evaluator": "contains", "stream": "nginx.access"}]
+    profile["signals"].extend(
+        [
+            {
+                "id": "load",
+                "capability_id": "metrics",
+                "evaluator": "metric-threshold",
+                "metric": "requests_total",
+                "condition": {"operator": "gte", "threshold": 0},
+            },
+            {
+                "id": "traffic",
+                "capability_id": "access",
+                "evaluator": "log-match",
+                "pattern": "GET",
+            },
+        ]
+    )
+    first = resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert (
+        next(item for item in first.signals if item.id.endswith("/ready/up")).capability_path
+        == "/healthz"
+    )
+    assert (
+        next(item for item in first.signals if item.id.endswith("/metrics/load")).capability_path
+        == "/metrics"
+    )
+    assert (
+        next(item for item in first.signals if item.id.endswith("/access/traffic")).log_stream
+        == "nginx.access"
+    )
+
+    profile["logs"][0]["stream"] = "nginx.changed"
     second = resolve_observation_documents([document(data)], as_of=AS_OF)
     assert first.plan_digest != second.plan_digest
 
