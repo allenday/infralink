@@ -220,6 +220,64 @@ def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) ->
     ]
 
 
+def test_service_instance_ids_are_scoped_to_their_host(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "watchtower.yml",
+        """schema_version: infralink.observation/v1
+service_instances:
+  - id: node-exporter
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: node-exporter
+""",
+    )
+    _write(
+        tmp_path / "citadel.yml",
+        """schema_version: infralink.observation/v1
+service_instances:
+  - id: node-exporter
+    host_id: 22222222-2222-4222-8222-222222222222
+    profile_id: node-exporter
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.valid
+    assert not [item for item in report.diagnostics if item.code == "duplicate-object-id"]
+
+
+def test_duplicate_service_instance_ids_on_one_host_report_both_locations(
+    tmp_path: Path,
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    for path in (tmp_path / "a.yml", tmp_path / "nested" / "b.yml"):
+        _write(
+            path,
+            f"""schema_version: infralink.observation/v1
+service_instances:
+  - id: node-exporter
+    host_id: {host_id}
+    profile_id: node-exporter
+""",
+        )
+
+    report = load_observation_documents(tmp_path)
+
+    duplicates = [item for item in report.diagnostics if item.code == "duplicate-object-id"]
+    assert [(item.location.path, item.location.pointer, item.identity) for item in duplicates] == [
+        (
+            "a.yml",
+            "/service_instances/0/id",
+            f"service_instances/{host_id}/node-exporter",
+        ),
+        (
+            "nested/b.yml",
+            "/service_instances/0/id",
+            f"service_instances/{host_id}/node-exporter",
+        ),
+    ]
+
+
 def test_duplicate_ids_in_same_multi_document_file_have_distinct_locations(
     tmp_path: Path,
 ) -> None:
