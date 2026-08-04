@@ -1,5 +1,8 @@
 """Public observation source contracts."""
 
+from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
+from infralink.observation.loader import LoadReport, ObservationDocument, load_observation_documents
+
 from infralink.observation.models import (
     Application,
     BackendKind,
@@ -44,6 +47,8 @@ __all__ = [
     "CanonicalId",
     "ComparisonOperator",
     "DatasourceBinding",
+    "Diagnostic",
+    "DiagnosticSet",
     "DependencyContract",
     "Endpoint",
     "EndpointProtocol",
@@ -51,11 +56,13 @@ __all__ = [
     "HealthEvaluator",
     "LogCapability",
     "LogEvaluator",
+    "LoadReport",
     "LogicalSignal",
     "MetricCondition",
     "MetricsCapability",
     "MetricsEvaluator",
     "ObservationBackend",
+    "ObservationDocument",
     "OperationsView",
     "ProviderAlias",
     "ReadinessSuite",
@@ -69,9 +76,11 @@ __all__ = [
     "SignalEvaluator",
     "SignalMembership",
     "SignalRequirement",
+    "SourceLocation",
     "SuiteMember",
     "SuitePolicy",
     "Waiver",
     "WaiverScope",
     "WaiverScopeKind",
+    "load_observation_documents",
 ]
