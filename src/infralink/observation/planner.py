@@ -680,6 +680,7 @@ def resolve_observation_documents(
             planned_signal = PlannedSignal(
                 id=signal_id,
                 kind="dependency",
+                evaluator="dependency-health",
                 source_refs=(_child(ref, "health_signal_ref"),),
             )
             if signal_id in signal_map:

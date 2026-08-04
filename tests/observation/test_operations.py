@@ -151,6 +151,33 @@ def test_view_datasource_backend_must_match_source_evaluator_kind() -> None:
     assert finding.location.pointer.endswith("/datasource_binding_id")
 
 
+def test_dependency_view_query_uses_explicit_health_evaluator_and_backend() -> None:
+    data = operational_data()
+    member = data["operations_views"][0]["sections"][0]["members"][0]  # type: ignore[index]
+    member["signal_ref"] = "dependency/api-to-frontend/health/reachable"
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+    query = plan.operations_views[0].sections[0].members[0]
+    source = next(
+        signal
+        for signal in plan.signals
+        if signal.id == "dependency/api-to-frontend/health/reachable"
+    )
+    assert source.evaluator == "dependency-health"
+    assert query.evaluator == "dependency-health"
+
+
+def test_dependency_view_query_rejects_non_health_backend() -> None:
+    data = operational_data()
+    member = data["operations_views"][0]["sections"][0]["members"][0]  # type: ignore[index]
+    member["signal_ref"] = "dependency/api-to-frontend/health/reachable"
+    data["observation_backends"][0]["kind"] = "metrics"  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert "view-datasource-kind-incompatible" in {
+        item.code for item in caught.value.report.diagnostics
+    }
+
+
 @pytest.mark.parametrize(
     "field",
     [
