@@ -1,0 +1,393 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "argv",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "ObservationCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw_redacted": {
+          "title": "Raw Redacted",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw_redacted",
+        "parsed",
+        "resolved"
+      ],
+      "title": "ObservationCommand",
+      "type": "object"
+    },
+    "ObservationError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ObservationError",
+      "type": "object"
+    },
+    "ObservationMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "ObservationMeta",
+      "type": "object"
+    },
+    "ObservationReadinessSuite": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/PlannedSuiteMember"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "scoped_plan_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scoped Plan Digest",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "suite_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Suite Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "members",
+        "suite_digest",
+        "scoped_plan_digest",
+        "source_refs"
+      ],
+      "title": "ObservationReadinessSuite",
+      "type": "object"
+    },
+    "PlannedSuiteMember": {
+      "additionalProperties": false,
+      "properties": {
+        "cadence_seconds": {
+          "title": "Cadence Seconds",
+          "type": "integer"
+        },
+        "continuity_seconds": {
+          "title": "Continuity Seconds",
+          "type": "integer"
+        },
+        "error_policy": {
+          "const": "fail",
+          "title": "Error Policy",
+          "type": "string"
+        },
+        "freshness_seconds": {
+          "title": "Freshness Seconds",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "no_data_policy": {
+          "const": "fail",
+          "title": "No Data Policy",
+          "type": "string"
+        },
+        "signal_ref": {
+          "title": "Signal Ref",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "signal_ref",
+        "cadence_seconds",
+        "continuity_seconds",
+        "freshness_seconds",
+        "no_data_policy",
+        "error_policy",
+        "source_refs"
+      ],
+      "title": "PlannedSuiteMember",
+      "type": "object"
+    },
+    "ProjectReadinessResult": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Digest",
+          "type": "string"
+        },
+        "readiness_suite": {
+          "$ref": "#/$defs/ObservationReadinessSuite"
+        }
+      },
+      "required": [
+        "plan_digest",
+        "readiness_suite"
+      ],
+      "title": "ProjectReadinessResult",
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "document_index": {
+          "title": "Document Index",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "pointer": {
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "document_index",
+        "pointer"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/ObservationCommand"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ObservationError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "meta": {
+      "$ref": "#/$defs/ObservationMeta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProjectReadinessResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "agent-cli.response.v1",
+      "default": "agent-cli.response.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "generated_at",
+    "ok",
+    "command"
+  ],
+  "title": "ObservationEnvelope[ProjectReadinessResult]",
+  "type": "object"
+}

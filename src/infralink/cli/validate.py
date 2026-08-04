@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 import click
@@ -52,12 +53,18 @@ def _edge_node_type_error(source_service: str | None) -> str | None:
     is_flag=True,
     help="Validate all edges can be resolved",
 )
+@click.option("--source", type=click.Path(path_type=Path), default=None)
+@click.option("--as-of", default=None)
+@click.option("--registry-revision", default=None)
 @_page_options
 @pass_context
 def validate(
     ctx: Context,
     strict: bool,
     check_resolution: bool,
+    source: Any,
+    as_of: str | None,
+    registry_revision: str | None,
     limit: int,
     cursor: str | None,
     collection: str | None,
@@ -75,6 +82,13 @@ def validate(
         # Strict validation with resolution checks
         infralink validate --strict --check-resolution
     """
+    if source is not None:
+        if as_of is None:
+            raise click.UsageError("--as-of is required with --source")
+        from infralink.cli.observation import run_validate
+
+        return run_validate(ctx, source, as_of, registry_revision)
+
     from infralink.core.resolver import EdgeResolver
 
     errors: list[Diagnostic] = []

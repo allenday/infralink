@@ -1,0 +1,497 @@
+{
+  "$defs": {
+    "BackendKind": {
+      "enum": [
+        "health",
+        "metrics",
+        "logs"
+      ],
+      "title": "BackendKind",
+      "type": "string"
+    },
+    "DatasourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "datasource_ref": {
+          "minLength": 1,
+          "title": "Datasource Ref",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "observation_backend_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Observation Backend Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        }
+      },
+      "required": [
+        "id",
+        "observation_backend_id",
+        "datasource_ref"
+      ],
+      "title": "DatasourceBinding",
+      "type": "object"
+    },
+    "FailurePolicy": {
+      "enum": [
+        "fail"
+      ],
+      "title": "FailurePolicy",
+      "type": "string"
+    },
+    "ObservationBackend": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_ref": {
+          "minLength": 1,
+          "title": "Backend Ref",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/BackendKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "backend_ref"
+      ],
+      "title": "ObservationBackend",
+      "type": "object"
+    },
+    "OperationsView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/OperationsViewSection"
+          },
+          "minItems": 1,
+          "title": "Sections",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "purpose",
+        "sections"
+      ],
+      "title": "OperationsView",
+      "type": "object"
+    },
+    "OperationsViewSection": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/SignalMembership"
+          },
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        }
+      },
+      "required": [
+        "id",
+        "members"
+      ],
+      "title": "OperationsViewSection",
+      "type": "object"
+    },
+    "ReadinessSuite": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/SuiteMember"
+          },
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "members"
+      ],
+      "title": "ReadinessSuite",
+      "type": "object"
+    },
+    "SignalDisplay": {
+      "enum": [
+        "status",
+        "value",
+        "rate"
+      ],
+      "title": "SignalDisplay",
+      "type": "string"
+    },
+    "SignalMembership": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aggregation"
+        },
+        "datasource_binding_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Datasource Binding Id",
+          "type": "string"
+        },
+        "display": {
+          "$ref": "#/$defs/SignalDisplay",
+          "default": "status"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "requirement": {
+          "$ref": "#/$defs/SignalRequirement"
+        },
+        "signal_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Signal Id",
+          "type": "string"
+        },
+        "signal_ref": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Signal Ref",
+          "type": "string"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "visualization": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visualization"
+        },
+        "visualization_class": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visualization Class"
+        }
+      },
+      "required": [
+        "signal_id",
+        "signal_ref",
+        "datasource_binding_id",
+        "requirement"
+      ],
+      "title": "SignalMembership",
+      "type": "object"
+    },
+    "SignalRequirement": {
+      "enum": [
+        "required",
+        "optional"
+      ],
+      "title": "SignalRequirement",
+      "type": "string"
+    },
+    "SuiteMember": {
+      "additionalProperties": false,
+      "properties": {
+        "cadence_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Cadence Seconds",
+          "type": "integer"
+        },
+        "continuity_seconds": {
+          "minimum": 0,
+          "title": "Continuity Seconds",
+          "type": "integer"
+        },
+        "error_policy": {
+          "$ref": "#/$defs/FailurePolicy"
+        },
+        "freshness_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Freshness Seconds",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "no_data_policy": {
+          "$ref": "#/$defs/FailurePolicy"
+        },
+        "signal_ref": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Signal Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "signal_ref",
+        "cadence_seconds",
+        "continuity_seconds",
+        "freshness_seconds",
+        "no_data_policy",
+        "error_policy"
+      ],
+      "title": "SuiteMember",
+      "type": "object"
+    },
+    "Waiver": {
+      "additionalProperties": false,
+      "properties": {
+        "created_on": {
+          "format": "date",
+          "title": "Created On",
+          "type": "string"
+        },
+        "expires_on": {
+          "format": "date",
+          "title": "Expires On",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/WaiverScope"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "owner",
+        "reason",
+        "created_on",
+        "expires_on"
+      ],
+      "title": "Waiver",
+      "type": "object"
+    },
+    "WaiverScope": {
+      "additionalProperties": false,
+      "description": "Stable identity of the exact contract member waived.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/WaiverScopeKind"
+        },
+        "ref": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "suite_ref": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suite Ref"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "WaiverScope",
+      "type": "object"
+    },
+    "WaiverScopeKind": {
+      "enum": [
+        "signal",
+        "capability",
+        "suite-member"
+      ],
+      "title": "WaiverScopeKind",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "datasource_bindings": {
+      "items": {
+        "$ref": "#/$defs/DatasourceBinding"
+      },
+      "title": "Datasource Bindings",
+      "type": "array"
+    },
+    "observation_backends": {
+      "items": {
+        "$ref": "#/$defs/ObservationBackend"
+      },
+      "title": "Observation Backends",
+      "type": "array"
+    },
+    "operations_views": {
+      "items": {
+        "$ref": "#/$defs/OperationsView"
+      },
+      "title": "Operations Views",
+      "type": "array"
+    },
+    "readiness_suites": {
+      "items": {
+        "$ref": "#/$defs/ReadinessSuite"
+      },
+      "title": "Readiness Suites",
+      "type": "array"
+    },
+    "registry_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registry Revision"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "waivers": {
+      "items": {
+        "$ref": "#/$defs/Waiver"
+      },
+      "title": "Waivers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "operations_views"
+  ],
+  "title": "OperationsViewDocument",
+  "type": "object"
+}

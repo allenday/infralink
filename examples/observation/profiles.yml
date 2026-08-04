@@ -1,0 +1,48 @@
+schema_version: infralink.observation/v1
+service_profiles:
+  - id: nginx
+    endpoints: [{id: http, protocol: http, port: 8080, path: /healthz}]
+    health:
+      - id: health
+        endpoint_id: http
+        evaluator: http-status
+        path: /healthz
+        expected_statuses:
+          - 200
+    metrics: [{id: metrics, endpoint_id: http, evaluator: prometheus-scrape, path: /metrics}]
+    logs: [{id: access, evaluator: contains, stream: nginx.access}]
+    signals:
+      - {id: up, capability_id: health, evaluator: capability-state}
+      - {id: requests, capability_id: metrics, evaluator: metric-threshold, metric: http_requests_total, condition: {operator: gte, threshold: 0}}
+      - {id: traffic, capability_id: access, evaluator: log-match, pattern: GET}
+  - id: postfix
+    endpoints:
+      - {id: smtp, protocol: smtp, port: 2525}
+    health: [{id: health, endpoint_id: smtp, evaluator: smtp-banner}]
+    signals: [{id: up, capability_id: health, evaluator: capability-state}]
+  - id: inspircd
+    endpoints:
+      - {id: irc, protocol: irc, port: 6667}
+    health: [{id: health, endpoint_id: irc, evaluator: irc-handshake}]
+    signals: [{id: up, capability_id: health, evaluator: capability-state}]
+  - id: postgresql
+    endpoints:
+      - {id: postgres, protocol: postgresql, port: 5432}
+    health: [{id: health, endpoint_id: postgres, evaluator: postgres-ready}]
+    signals: [{id: up, capability_id: health, evaluator: capability-state}]
+    secret_slots: [{id: password, delivery_forms: [environment], purpose: PostgreSQL authentication}]
+  - id: ci
+    endpoints:
+      - {id: http, protocol: http, port: 8000}
+    health:
+      - id: health
+        endpoint_id: http
+        evaluator: http-status
+        expected_statuses:
+          - 200
+    metrics: [{id: metrics, endpoint_id: http, evaluator: prometheus-scrape, path: /metrics}]
+    logs: [{id: builds, evaluator: regex, stream: ci.builds}]
+    signals:
+      - {id: up, capability_id: health, evaluator: capability-state}
+      - {id: builds, capability_id: metrics, evaluator: metric-threshold, metric: builds_total, condition: {operator: gte, threshold: 0}}
+      - {id: failures, capability_id: builds, evaluator: log-match, pattern: "failed|error"}

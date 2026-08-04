@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "FailurePolicy": {
+      "enum": [
+        "fail"
+      ],
+      "title": "FailurePolicy",
+      "type": "string"
+    },
+    "ReadinessSuite": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/SuiteMember"
+          },
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "members"
+      ],
+      "title": "ReadinessSuite",
+      "type": "object"
+    },
+    "SuiteMember": {
+      "additionalProperties": false,
+      "properties": {
+        "cadence_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Cadence Seconds",
+          "type": "integer"
+        },
+        "continuity_seconds": {
+          "minimum": 0,
+          "title": "Continuity Seconds",
+          "type": "integer"
+        },
+        "error_policy": {
+          "$ref": "#/$defs/FailurePolicy"
+        },
+        "freshness_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Freshness Seconds",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "no_data_policy": {
+          "$ref": "#/$defs/FailurePolicy"
+        },
+        "signal_ref": {
+          "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+          "title": "Signal Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "signal_ref",
+        "cadence_seconds",
+        "continuity_seconds",
+        "freshness_seconds",
+        "no_data_policy",
+        "error_policy"
+      ],
+      "title": "SuiteMember",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "readiness_suites": {
+      "items": {
+        "$ref": "#/$defs/ReadinessSuite"
+      },
+      "title": "Readiness Suites",
+      "type": "array"
+    },
+    "registry_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registry Revision"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "readiness_suites"
+  ],
+  "title": "ReadinessSuiteDocument",
+  "type": "object"
+}

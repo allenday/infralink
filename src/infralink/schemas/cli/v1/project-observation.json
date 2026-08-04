@@ -1,0 +1,2005 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "argv",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "ComparisonOperator": {
+      "enum": [
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "eq",
+        "ne"
+      ],
+      "title": "ComparisonOperator",
+      "type": "string"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "A generic named network endpoint exposed by a service.",
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/EndpointProtocol"
+        }
+      },
+      "required": [
+        "id",
+        "protocol",
+        "port"
+      ],
+      "title": "Endpoint",
+      "type": "object"
+    },
+    "EndpointExposure": {
+      "enum": [
+        "private",
+        "public"
+      ],
+      "title": "EndpointExposure",
+      "type": "string"
+    },
+    "EndpointProtocol": {
+      "enum": [
+        "tcp",
+        "http",
+        "https",
+        "smtp",
+        "irc",
+        "postgresql"
+      ],
+      "title": "EndpointProtocol",
+      "type": "string"
+    },
+    "HealthCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/HealthEvaluator"
+        },
+        "expected_statuses": {
+          "items": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "title": "Expected Statuses",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "id",
+        "endpoint_id",
+        "evaluator"
+      ],
+      "title": "HealthCapability",
+      "type": "object"
+    },
+    "HealthEvaluator": {
+      "enum": [
+        "tcp-connect",
+        "http-status",
+        "smtp-banner",
+        "irc-handshake",
+        "postgres-ready"
+      ],
+      "title": "HealthEvaluator",
+      "type": "string"
+    },
+    "LogCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Id"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/LogEvaluator"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "stream": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stream"
+        }
+      },
+      "required": [
+        "id",
+        "evaluator"
+      ],
+      "title": "LogCapability",
+      "type": "object"
+    },
+    "LogEvaluator": {
+      "enum": [
+        "contains",
+        "regex"
+      ],
+      "title": "LogEvaluator",
+      "type": "string"
+    },
+    "LogicalSignal": {
+      "additionalProperties": false,
+      "description": "A vendor-neutral assertion derived from one declared capability.",
+      "properties": {
+        "capability_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evaluator": {
+          "$ref": "#/$defs/SignalEvaluator"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pattern"
+        }
+      },
+      "required": [
+        "id",
+        "capability_id",
+        "evaluator"
+      ],
+      "title": "LogicalSignal",
+      "type": "object"
+    },
+    "MetricCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/ComparisonOperator"
+        },
+        "threshold": {
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "operator",
+        "threshold"
+      ],
+      "title": "MetricCondition",
+      "type": "object"
+    },
+    "MetricsCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/MetricsEvaluator"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "id",
+        "endpoint_id",
+        "evaluator"
+      ],
+      "title": "MetricsCapability",
+      "type": "object"
+    },
+    "MetricsEvaluator": {
+      "enum": [
+        "prometheus-scrape"
+      ],
+      "title": "MetricsEvaluator",
+      "type": "string"
+    },
+    "ObservationCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw_redacted": {
+          "title": "Raw Redacted",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw_redacted",
+        "parsed",
+        "resolved"
+      ],
+      "title": "ObservationCommand",
+      "type": "object"
+    },
+    "ObservationError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ObservationError",
+      "type": "object"
+    },
+    "ObservationMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "ObservationMeta",
+      "type": "object"
+    },
+    "ObservationPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "applications": {
+          "items": {
+            "$ref": "#/$defs/PlannedApplication"
+          },
+          "title": "Applications",
+          "type": "array"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/PlanCompatibility"
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/PlannedDependency"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "document_digests": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Document Digests",
+          "type": "array"
+        },
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/PlannedEndpoint"
+          },
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "hosts": {
+          "items": {
+            "$ref": "#/$defs/PlannedHost"
+          },
+          "title": "Hosts",
+          "type": "array"
+        },
+        "opaque_identities": {
+          "items": {
+            "$ref": "#/$defs/OpaqueIdentity"
+          },
+          "title": "Opaque Identities",
+          "type": "array"
+        },
+        "operations_views": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PlannedOperationsView"
+          },
+          "title": "Operations Views",
+          "type": "array"
+        },
+        "plan_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Digest",
+          "type": "string"
+        },
+        "provider_aliases": {
+          "items": {
+            "$ref": "#/$defs/PlannedAlias"
+          },
+          "title": "Provider Aliases",
+          "type": "array"
+        },
+        "readiness_suites": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PlannedReadinessSuite"
+          },
+          "title": "Readiness Suites",
+          "type": "array"
+        },
+        "registry_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Registry Revision"
+        },
+        "schema_version": {
+          "const": "infralink.plan.v1",
+          "default": "infralink.plan.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "secret_bindings": {
+          "items": {
+            "$ref": "#/$defs/PlannedSecretBinding"
+          },
+          "title": "Secret Bindings",
+          "type": "array"
+        },
+        "secret_requirements": {
+          "items": {
+            "$ref": "#/$defs/PlannedSecretRequirement"
+          },
+          "title": "Secret Requirements",
+          "type": "array"
+        },
+        "service_profiles": {
+          "items": {
+            "$ref": "#/$defs/PlannedServiceProfile"
+          },
+          "title": "Service Profiles",
+          "type": "array"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/PlannedService"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "signals": {
+          "items": {
+            "$ref": "#/$defs/PlannedSignal"
+          },
+          "title": "Signals",
+          "type": "array"
+        },
+        "waivers": {
+          "items": {
+            "$ref": "#/$defs/PlannedWaiver"
+          },
+          "title": "Waivers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "registry_revision",
+        "document_digests",
+        "service_profiles",
+        "hosts",
+        "services",
+        "endpoints",
+        "applications",
+        "dependencies",
+        "signals",
+        "waivers",
+        "secret_requirements",
+        "secret_bindings",
+        "provider_aliases",
+        "opaque_identities",
+        "plan_digest"
+      ],
+      "title": "ObservationPlan",
+      "type": "object"
+    },
+    "OpaqueIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "identity_digest": {
+          "title": "Identity Digest",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "related_identity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Related Identity"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "identity_digest",
+        "source_refs"
+      ],
+      "title": "OpaqueIdentity",
+      "type": "object"
+    },
+    "PlanCompatibility": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_contract": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Adapter Contract",
+          "type": "string"
+        },
+        "infralink_schema": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Infralink Schema",
+          "type": "string"
+        }
+      },
+      "title": "PlanCompatibility",
+      "type": "object"
+    },
+    "PlannedAlias": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "object_id": {
+          "title": "Object Id",
+          "type": "string"
+        },
+        "project": {
+          "title": "Project",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "project",
+        "object_id",
+        "source_refs"
+      ],
+      "title": "PlannedAlias",
+      "type": "object"
+    },
+    "PlannedApplication": {
+      "additionalProperties": false,
+      "properties": {
+        "health_signal_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Health Signal Refs",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "required_dependency_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Dependency Ids",
+          "type": "array"
+        },
+        "service_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Service Ids",
+          "type": "array"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "service_ids",
+        "required_dependency_ids",
+        "health_signal_refs",
+        "source_refs"
+      ],
+      "title": "PlannedApplication",
+      "type": "object"
+    },
+    "PlannedDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_adapter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Execution Adapter"
+        },
+        "health_signal_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Health Signal Refs",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "port": {
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/EndpointProtocol"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "source_service_id": {
+          "title": "Source Service Id",
+          "type": "string"
+        },
+        "target_endpoint_id": {
+          "title": "Target Endpoint Id",
+          "type": "string"
+        },
+        "target_service_id": {
+          "title": "Target Service Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_service_id",
+        "target_service_id",
+        "target_endpoint_id",
+        "protocol",
+        "port",
+        "required",
+        "health_signal_refs",
+        "execution_adapter",
+        "source_refs"
+      ],
+      "title": "PlannedDependency",
+      "type": "object"
+    },
+    "PlannedEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Address"
+        },
+        "exposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointExposure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Path"
+        },
+        "port": {
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/EndpointProtocol"
+        },
+        "service_id": {
+          "title": "Service Id",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "service_id",
+        "key",
+        "protocol",
+        "port",
+        "address",
+        "exposure",
+        "path",
+        "source_refs"
+      ],
+      "title": "PlannedEndpoint",
+      "type": "object"
+    },
+    "PlannedHost": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "source_refs"
+      ],
+      "title": "PlannedHost",
+      "type": "object"
+    },
+    "PlannedOperationsView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/PlannedViewSection"
+          },
+          "title": "Sections",
+          "type": "array"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "purpose",
+        "sections",
+        "source_refs"
+      ],
+      "title": "PlannedOperationsView",
+      "type": "object"
+    },
+    "PlannedReadinessSuite": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/PlannedSuiteMember"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "scoped_plan_digest": {
+          "title": "Scoped Plan Digest",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "suite_digest": {
+          "title": "Suite Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "members",
+        "suite_digest",
+        "scoped_plan_digest",
+        "source_refs"
+      ],
+      "title": "PlannedReadinessSuite",
+      "type": "object"
+    },
+    "PlannedSecretBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "alias": {
+          "title": "Alias",
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/SecretDeliveryForm"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "renderer_binding_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Renderer Binding Id"
+        },
+        "service_id": {
+          "title": "Service Id",
+          "type": "string"
+        },
+        "slot_id": {
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "service_id",
+        "slot_id",
+        "alias",
+        "delivery",
+        "renderer_binding_id",
+        "source_refs"
+      ],
+      "title": "PlannedSecretBinding",
+      "type": "object"
+    },
+    "PlannedSecretRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_forms": {
+          "items": {
+            "$ref": "#/$defs/SecretDeliveryForm"
+          },
+          "title": "Delivery Forms",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "service_id": {
+          "title": "Service Id",
+          "type": "string"
+        },
+        "slot_id": {
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "service_id",
+        "slot_id",
+        "required",
+        "delivery_forms",
+        "purpose",
+        "source_refs"
+      ],
+      "title": "PlannedSecretRequirement",
+      "type": "object"
+    },
+    "PlannedService": {
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "title": "Host Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "instance_key": {
+          "title": "Instance Key",
+          "type": "string"
+        },
+        "profile_id": {
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "host_id",
+        "instance_key",
+        "profile_id",
+        "source_refs"
+      ],
+      "title": "PlannedService",
+      "type": "object"
+    },
+    "PlannedServiceProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          },
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "health": {
+          "items": {
+            "$ref": "#/$defs/HealthCapability"
+          },
+          "title": "Health",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "logs": {
+          "items": {
+            "$ref": "#/$defs/LogCapability"
+          },
+          "title": "Logs",
+          "type": "array"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricsCapability"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "secret_slots": {
+          "items": {
+            "$ref": "#/$defs/SecretSlot"
+          },
+          "title": "Secret Slots",
+          "type": "array"
+        },
+        "signals": {
+          "items": {
+            "$ref": "#/$defs/LogicalSignal"
+          },
+          "title": "Signals",
+          "type": "array"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "endpoints",
+        "health",
+        "metrics",
+        "logs",
+        "signals",
+        "secret_slots",
+        "source_refs"
+      ],
+      "title": "PlannedServiceProfile",
+      "type": "object"
+    },
+    "PlannedSignal": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aggregation"
+        },
+        "capability_evaluator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Evaluator"
+        },
+        "capability_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Path"
+        },
+        "capability_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Ref"
+        },
+        "comparator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparator"
+        },
+        "datasource_binding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Datasource Binding Ids",
+          "type": "array"
+        },
+        "error_policy": {
+          "anyOf": [
+            {
+              "const": "fail",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Policy"
+        },
+        "evaluator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evaluator"
+        },
+        "expected_statuses": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Expected Statuses",
+          "type": "array"
+        },
+        "freshness_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Freshness Seconds"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "service",
+            "dependency",
+            "view"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "log_stream": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Stream"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "no_data_policy": {
+          "anyOf": [
+            {
+              "const": "fail",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "No Data Policy"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pattern"
+        },
+        "service_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Id"
+        },
+        "source_endpoint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Endpoint Id"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "source_signal_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Signal Ref"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "source_refs"
+      ],
+      "title": "PlannedSignal",
+      "type": "object"
+    },
+    "PlannedSuiteMember": {
+      "additionalProperties": false,
+      "properties": {
+        "cadence_seconds": {
+          "title": "Cadence Seconds",
+          "type": "integer"
+        },
+        "continuity_seconds": {
+          "title": "Continuity Seconds",
+          "type": "integer"
+        },
+        "error_policy": {
+          "const": "fail",
+          "title": "Error Policy",
+          "type": "string"
+        },
+        "freshness_seconds": {
+          "title": "Freshness Seconds",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "no_data_policy": {
+          "const": "fail",
+          "title": "No Data Policy",
+          "type": "string"
+        },
+        "signal_ref": {
+          "title": "Signal Ref",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "signal_ref",
+        "cadence_seconds",
+        "continuity_seconds",
+        "freshness_seconds",
+        "no_data_policy",
+        "error_policy",
+        "source_refs"
+      ],
+      "title": "PlannedSuiteMember",
+      "type": "object"
+    },
+    "PlannedViewMember": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Aggregation"
+        },
+        "datasource_binding_id": {
+          "title": "Datasource Binding Id",
+          "type": "string"
+        },
+        "datasource_binding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Datasource Binding Ids",
+          "type": "array"
+        },
+        "display": {
+          "title": "Display",
+          "type": "string"
+        },
+        "evaluator": {
+          "title": "Evaluator",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label"
+        },
+        "requirement": {
+          "$ref": "#/$defs/SignalRequirement"
+        },
+        "signal_ref": {
+          "title": "Signal Ref",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Threshold"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Unit"
+        },
+        "visualization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Visualization"
+        },
+        "visualization_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Visualization Class"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "signal_ref",
+        "datasource_binding_id",
+        "requirement",
+        "evaluator",
+        "display",
+        "label",
+        "unit",
+        "threshold",
+        "visualization",
+        "visualization_class",
+        "aggregation",
+        "source_refs"
+      ],
+      "title": "PlannedViewMember",
+      "type": "object"
+    },
+    "PlannedViewSection": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/PlannedViewMember"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "members",
+        "source_refs"
+      ],
+      "title": "PlannedViewSection",
+      "type": "object"
+    },
+    "PlannedWaiver": {
+      "additionalProperties": false,
+      "properties": {
+        "created_on": {
+          "title": "Created On",
+          "type": "string"
+        },
+        "expires_on": {
+          "title": "Expires On",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "scope_kind": {
+          "$ref": "#/$defs/WaiverScopeKind"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "suite_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Suite Ref"
+        },
+        "target_ref": {
+          "title": "Target Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "scope_kind",
+        "target_ref",
+        "suite_ref",
+        "owner",
+        "reason",
+        "created_on",
+        "expires_on",
+        "source_refs"
+      ],
+      "title": "PlannedWaiver",
+      "type": "object"
+    },
+    "ProjectObservationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/ObservationPlan"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/SourceProvenanceResult"
+          },
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan",
+        "sources"
+      ],
+      "title": "ProjectObservationResult",
+      "type": "object"
+    },
+    "SecretDeliveryForm": {
+      "enum": [
+        "environment",
+        "file",
+        "stdin"
+      ],
+      "title": "SecretDeliveryForm",
+      "type": "string"
+    },
+    "SecretSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_forms": {
+          "items": {
+            "$ref": "#/$defs/SecretDeliveryForm"
+          },
+          "minItems": 1,
+          "title": "Delivery Forms",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "delivery_forms",
+        "purpose"
+      ],
+      "title": "SecretSlot",
+      "type": "object"
+    },
+    "SignalEvaluator": {
+      "enum": [
+        "capability-state",
+        "metric-threshold",
+        "log-match"
+      ],
+      "title": "SignalEvaluator",
+      "type": "string"
+    },
+    "SignalRequirement": {
+      "enum": [
+        "required",
+        "optional"
+      ],
+      "title": "SignalRequirement",
+      "type": "string"
+    },
+    "SourceProvenanceResult": {
+      "additionalProperties": false,
+      "properties": {
+        "document_index": {
+          "minimum": 0,
+          "title": "Document Index",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Raw Sha256",
+          "type": "string"
+        },
+        "semantic_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "document_index",
+        "raw_sha256",
+        "semantic_sha256"
+      ],
+      "title": "SourceProvenanceResult",
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "document_index": {
+          "title": "Document Index",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "pointer": {
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "document_index",
+        "pointer"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    },
+    "WaiverScopeKind": {
+      "enum": [
+        "signal",
+        "capability",
+        "suite-member"
+      ],
+      "title": "WaiverScopeKind",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/ObservationCommand"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ObservationError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "meta": {
+      "$ref": "#/$defs/ObservationMeta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProjectObservationResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "agent-cli.response.v1",
+      "default": "agent-cli.response.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "generated_at",
+    "ok",
+    "command"
+  ],
+  "title": "ObservationEnvelope[ProjectObservationResult]",
+  "type": "object"
+}

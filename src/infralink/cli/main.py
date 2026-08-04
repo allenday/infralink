@@ -58,6 +58,7 @@ class Context:
         self.edges_path: Path | None = None
         self.verbose: bool = False
         self.output: str = "json"
+        self.output_explicit: bool = False
         self._registry: Any = None
         self._edges: Any = None
 
@@ -171,6 +172,18 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     "secrets": {
         "description": "Inspect and audit secret references.",
         "usage": "infralink secrets [inspect|audit]",
+    },
+    "capabilities": {
+        "description": "Describe offline observation capabilities.",
+        "usage": "infralink capabilities",
+    },
+    "project": {
+        "description": "Project observation contracts.",
+        "usage": "infralink project [observation|secrets|view|readiness]",
+    },
+    "explain": {
+        "description": "Explain an observation diagnostic code.",
+        "usage": "infralink explain ERROR_CODE",
     },
 }
 
@@ -592,6 +605,18 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.validate import validate
 
         return validate
+    if name == "capabilities":
+        from infralink.cli.observation import capabilities
+
+        return capabilities
+    if name == "project":
+        from infralink.cli.observation import project_group
+
+        return project_group
+    if name == "explain":
+        from infralink.cli.observation import explain_command
+
+        return explain_command
     if name == "app":
         from infralink.cli.app import app
 
@@ -658,6 +683,19 @@ class JsonGroup(click.Group):
                         exit_code = failure.exit_code
             except click.UsageError:
                 path, _, _ = _parse_invocation(redact_argv(incoming))
+                from infralink.cli.observation import is_observation_argv
+
+                observation_command = is_observation_argv(incoming)
+                if observation_command:
+                    from infralink.cli.observation import emit_boundary_failure
+
+                    emit_boundary_failure(
+                        incoming, code="invocation-error", message="Invalid command usage"
+                    )
+                    exit_code = ExitCode.USAGE_ERROR
+                    continue_after_usage = True
+                else:
+                    continue_after_usage = False
                 artifact_command = (
                     path[0] if path and path[0] in {"analyze", "diagram", "docs"} else None
                 )
@@ -682,9 +720,10 @@ class JsonGroup(click.Group):
                         )
                     ],
                 )
-                if not _ENVELOPE_EMITTED.get():
+                if not continue_after_usage and not _ENVELOPE_EMITTED.get():
                     _emit(error_envelope(_context_for(incoming), usage_failure))
-                exit_code = usage_failure.exit_code
+                if not continue_after_usage:
+                    exit_code = usage_failure.exit_code
             except CliFailure as cli_failure:
                 if not _ENVELOPE_EMITTED.get():
                     _emit(error_envelope(_context_for(incoming), cli_failure))
@@ -702,9 +741,22 @@ class JsonGroup(click.Group):
                     _emit(error_envelope(_context_for(incoming), failure))
                     exit_code = failure.exit_code
             except Exception:
-                failure = internal_failure()
-                _emit(error_envelope(_context_for(incoming), failure))
-                exit_code = failure.exit_code
+                from infralink.cli.observation import is_observation_argv
+
+                observation_command = is_observation_argv(incoming)
+                if observation_command:
+                    from infralink.cli.observation import emit_boundary_failure
+
+                    emit_boundary_failure(
+                        incoming,
+                        code="internal-invariant",
+                        message="An internal invariant failed",
+                    )
+                    exit_code = 4
+                else:
+                    failure = internal_failure()
+                    _emit(error_envelope(_context_for(incoming), failure))
+                    exit_code = failure.exit_code
         finally:
             pending_envelope = _PENDING_ENVELOPE.get()
             _PENDING_ENVELOPE.reset(pending_token)
@@ -763,7 +815,7 @@ def version_command() -> None:
 @click.option(
     "-o",
     "--output",
-    type=click.Choice(["json"], case_sensitive=False),
+    type=click.Choice(["json", "yaml"], case_sensitive=False),
     default="json",
     show_default=True,
     help="Output format (json = agent-first)",
@@ -780,6 +832,10 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
     ctx.edges_path = edges
     ctx.verbose = verbose
     ctx.output = output
+    ctx.output_explicit = (
+        click.get_current_context().get_parameter_source("output")
+        is not click.core.ParameterSource.DEFAULT
+    )
 
     click_ctx = click.get_current_context()
     if click_ctx.invoked_subcommand is not None:

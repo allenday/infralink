@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "Application": {
+      "additionalProperties": false,
+      "properties": {
+        "health_signal_refs": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Health Signal Refs",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "required_dependency_edge_ids": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Required Dependency Edge Ids",
+          "type": "array"
+        },
+        "service_instance_ids": {
+          "items": {
+            "pattern": "^[a-z0-9](?:[a-z0-9/-]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Service Instance Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "service_instance_ids"
+      ],
+      "title": "Application",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applications": {
+      "items": {
+        "$ref": "#/$defs/Application"
+      },
+      "title": "Applications",
+      "type": "array"
+    },
+    "registry_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Registry Revision"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "applications"
+  ],
+  "title": "ApplicationDocument",
+  "type": "object"
+}
