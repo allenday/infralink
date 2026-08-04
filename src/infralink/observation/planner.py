@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from infralink.observation.canonical import canonical_digest
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.loader import DEFAULT_DIAGNOSTIC_LIMIT, ObservationDocument
 from infralink.observation.models import (
@@ -26,13 +27,16 @@ from infralink.observation.models import (
     LogicalSignal,
     MetricsCapability,
     ObservationBackend,
+    OperationsView,
     ProviderAlias,
+    ReadinessSuite,
     RendererBindingIdentity,
     SecretBinding,
     SecretDeliveryForm,
     SecretSlot,
     ServiceInstance,
     ServiceProfile,
+    SignalRequirement,
     Waiver,
     WaiverScopeKind,
 )
@@ -86,7 +90,36 @@ class PlannedEndpoint(PlanModel):
 
 class PlannedSignal(PlanModel):
     id: str
-    kind: Literal["service", "dependency"]
+    kind: Literal["service", "dependency", "view"]
+    evaluator: str | None = None
+    capability_ref: str | None = None
+    service_id: str | None = None
+    source_signal_ref: str | None = None
+    datasource_binding_ids: tuple[str, ...] = ()
+    source_refs: tuple[SourceRef, ...]
+
+
+class PlannedViewMember(PlanModel):
+    id: str
+    key: str
+    signal_ref: str
+    requirement: SignalRequirement
+    evaluator: str
+    datasource_binding_ids: tuple[str, ...] = ()
+    display: str
+    label: str | None
+    unit: str | None
+    threshold: float | None
+    visualization: str | None
+    visualization_class: str | None
+    aggregation: str | None
+    source_refs: tuple[SourceRef, ...]
+
+
+class PlannedViewSection(PlanModel):
+    id: str
+    title: str | None
+    members: tuple[PlannedViewMember, ...]
     source_refs: tuple[SourceRef, ...]
 
 
@@ -150,16 +183,33 @@ class PlannedWaiver(PlanModel):
 class OpaqueIdentity(PlanModel):
     id: str
     kind: str
+    identity_digest: str
     source_refs: tuple[SourceRef, ...]
 
 
 class PlannedOperationsView(PlanModel):
     id: str
+    purpose: str
+    sections: tuple[PlannedViewSection, ...]
+    source_refs: tuple[SourceRef, ...]
+
+
+class PlannedSuiteMember(PlanModel):
+    id: str
+    signal_ref: str
+    cadence_seconds: int
+    continuity_seconds: int
+    freshness_seconds: int
+    no_data_policy: Literal["fail"]
+    error_policy: Literal["fail"]
     source_refs: tuple[SourceRef, ...]
 
 
 class PlannedReadinessSuite(PlanModel):
     id: str
+    members: tuple[PlannedSuiteMember, ...]
+    suite_digest: str
+    scoped_plan_digest: str
     source_refs: tuple[SourceRef, ...]
 
 
@@ -187,7 +237,7 @@ class Plan(PlanModel):
     opaque_identities: tuple[OpaqueIdentity, ...]
     operations_views: tuple[PlannedOperationsView, ...] = ()
     readiness_suites: tuple[PlannedReadinessSuite, ...] = ()
-    plan_digest: None = None
+    plan_digest: str | None = None
 
 
 class PlanReport(PlanModel):
@@ -215,9 +265,10 @@ _SECTIONS: dict[str, type[BaseModel]] = {
     "observation_backends": ObservationBackend,
     "datasource_bindings": DatasourceBinding,
     "waivers": Waiver,
+    "operations_views": OperationsView,
+    "readiness_suites": ReadinessSuite,
 }
-_IGNORED_SECTIONS = {"operations_views", "readiness_suites"}
-_TOP_LEVEL = {"schema_version", "registry_revision", *_SECTIONS, *_IGNORED_SECTIONS}
+_TOP_LEVEL = {"schema_version", "registry_revision", *_SECTIONS}
 
 
 def resolve_observation_documents(
@@ -354,17 +405,29 @@ def resolve_observation_documents(
     dependencies = _unique(parsed["dependency_contracts"], "dependency", findings)
     applications = _unique(parsed["applications"], "application", findings)
     waivers = _unique(parsed["waivers"], "waiver", findings)
-    _unique(parsed["observation_backends"], "observation-backend", findings)
-    _unique(parsed["datasource_bindings"], "datasource-binding", findings)
+    operation_views = _unique(parsed["operations_views"], "view", findings)
+    readiness_suites = _unique(parsed["readiness_suites"], "suite", findings)
+    backends = _unique(parsed["observation_backends"], "observation-backend", findings)
+    datasources = _unique(parsed["datasource_bindings"], "datasource-binding", findings)
+    for datasource, datasource_ref in datasources.values():
+        assert isinstance(datasource, DatasourceBinding)
+        if datasource.backend_id not in backends:
+            _finding(
+                findings,
+                "unknown-observation-backend",
+                _child(datasource_ref, "backend_id"),
+                datasource.id,
+                "Reference a declared observation backend.",
+            )
     planned_profiles = [
         PlannedServiceProfile(
             id=profile.id,
-            endpoints=tuple(profile.endpoints),
-            health=tuple(profile.health),
-            metrics=tuple(profile.metrics),
-            logs=tuple(profile.logs),
-            signals=tuple(profile.signals),
-            secret_slots=tuple(profile.secret_slots),
+            endpoints=tuple(sorted(profile.endpoints, key=lambda item: item.id)),
+            health=tuple(sorted(profile.health, key=lambda item: item.id)),
+            metrics=tuple(sorted(profile.metrics, key=lambda item: item.id)),
+            logs=tuple(sorted(profile.logs, key=lambda item: item.id)),
+            signals=tuple(sorted(profile.signals, key=lambda item: item.id)),
+            secret_slots=tuple(sorted(profile.secret_slots, key=lambda item: item.id)),
             source_refs=(ref,),
         )
         for profile, ref in profiles.values()
@@ -514,10 +577,14 @@ def resolve_observation_documents(
                 )
             )
         for signal_index, signal in enumerate(profile.signals):
+            signal_id = f"service/{service_id}/{signal.capability_id}/{signal.id}"
             planned_signals.append(
                 PlannedSignal(
-                    id=f"service/{service_id}/{signal.capability_id}/{signal.id}",
+                    id=signal_id,
                     kind="service",
+                    evaluator=signal.evaluator.value,
+                    capability_ref=f"service/{service_id}/{signal.capability_id}",
+                    service_id=service_id,
                     source_refs=(_child(profile_entry[1], "signals", str(signal_index)), ref),
                 )
             )
@@ -781,6 +848,170 @@ def resolve_observation_documents(
             )
         )
 
+    planned_views: list[PlannedOperationsView] = []
+    view_member_requirement: dict[str, SignalRequirement] = {}
+    datasource_ids = tuple(sorted(datasources))
+    for view, ref in operation_views.values():
+        assert isinstance(view, OperationsView)
+        sections: list[PlannedViewSection] = []
+        seen_section_ids: set[str] = set()
+        seen_query_ids: set[str] = set()
+        for section_index, view_section in enumerate(view.sections):
+            section_ref = _child(ref, "sections", str(section_index))
+            if view_section.id in seen_section_ids:
+                _finding(
+                    findings,
+                    "duplicate-view-section-id",
+                    _child(section_ref, "id"),
+                    f"{view.id}/{view_section.id}",
+                    "Give every section in a view a unique identity.",
+                )
+            seen_section_ids.add(view_section.id)
+            view_members: list[PlannedViewMember] = []
+            for member_index, member in enumerate(view_section.members):
+                member_ref = _child(section_ref, "members", str(member_index))
+                query_key = member.signal_id or member.id
+                assert query_key is not None
+                source_signal = signal_map.get(member.signal_ref)
+                derived_id = f"view/{view.id}/query/{view_section.id}/{query_key}"
+                if derived_id in seen_query_ids:
+                    _finding(
+                        findings,
+                        "duplicate-view-query-id",
+                        _child(member_ref, "signal_id" if member.signal_id is not None else "id"),
+                        derived_id,
+                        "Give every query in a view section a unique identity.",
+                    )
+                    continue
+                seen_query_ids.add(derived_id)
+                if source_signal is None:
+                    _finding(
+                        findings,
+                        "unknown-view-signal",
+                        _child(member_ref, "signal_ref"),
+                        derived_id,
+                        "Reference an existing service or dependency signal.",
+                    )
+                    continue
+                resolved = PlannedViewMember(
+                    id=derived_id,
+                    key=query_key,
+                    signal_ref=member.signal_ref,
+                    requirement=member.requirement,
+                    evaluator=source_signal.evaluator or "dependency-health",
+                    datasource_binding_ids=source_signal.datasource_binding_ids or datasource_ids,
+                    display=member.display.value,
+                    label=member.label,
+                    unit=member.unit,
+                    threshold=member.threshold,
+                    visualization=member.visualization,
+                    visualization_class=member.visualization_class,
+                    aggregation=member.aggregation,
+                    source_refs=(member_ref, *source_signal.source_refs),
+                )
+                view_members.append(resolved)
+                view_member_requirement[derived_id] = member.requirement
+                view_signal = PlannedSignal(
+                    id=derived_id,
+                    kind="view",
+                    evaluator=resolved.evaluator,
+                    capability_ref=source_signal.capability_ref,
+                    service_id=source_signal.service_id,
+                    source_signal_ref=member.signal_ref,
+                    datasource_binding_ids=resolved.datasource_binding_ids,
+                    source_refs=resolved.source_refs,
+                )
+                if derived_id in signal_map:
+                    _finding(
+                        findings,
+                        "duplicate-signal-id",
+                        member_ref,
+                        derived_id,
+                        "Give every view query a globally unique derived identity.",
+                    )
+                else:
+                    signal_map[derived_id] = view_signal
+                    planned_signals.append(view_signal)
+            sections.append(
+                PlannedViewSection(
+                    id=view_section.id,
+                    title=view_section.title,
+                    members=tuple(view_members),
+                    source_refs=(section_ref,),
+                )
+            )
+        planned_views.append(
+            PlannedOperationsView(
+                id=view.id,
+                purpose=view.purpose or view.title or view.id,
+                sections=tuple(sections),
+                source_refs=(ref,),
+            )
+        )
+
+    all_signal_ids = set(signal_map)
+    planned_suites: list[PlannedReadinessSuite] = []
+    suite_member_refs: set[tuple[str, str]] = set()
+    for suite, ref in readiness_suites.values():
+        assert isinstance(suite, ReadinessSuite)
+        suite_members: list[PlannedSuiteMember] = []
+        seen_suite_member_ids: set[str] = set()
+        for member_index, suite_member in enumerate(suite.members):
+            member_ref = _child(ref, "members", str(member_index))
+            member_id = suite_member.id or suite_member.signal_ref.rsplit("/", 1)[-1]
+            if member_id in seen_suite_member_ids:
+                _finding(
+                    findings,
+                    "duplicate-suite-member-id",
+                    _child(member_ref, "id"),
+                    f"{suite.id}/{member_id}",
+                    "Give every readiness suite member a unique identity.",
+                )
+                continue
+            seen_suite_member_ids.add(member_id)
+            if suite_member.signal_ref not in all_signal_ids:
+                _finding(
+                    findings,
+                    "unknown-suite-signal",
+                    _child(member_ref, "signal_ref"),
+                    f"{suite.id}/{member_id}",
+                    "Reference an existing service, dependency, or view query signal.",
+                )
+                continue
+            if view_member_requirement.get(suite_member.signal_ref) == SignalRequirement.OPTIONAL:
+                _finding(
+                    findings,
+                    "optional-view-signal-gate",
+                    _child(member_ref, "signal_ref"),
+                    f"{suite.id}/{member_id}",
+                    "Reference a required view query or its underlying source signal.",
+                )
+            planned_member = PlannedSuiteMember(
+                id=member_id,
+                signal_ref=suite_member.signal_ref,
+                cadence_seconds=suite_member.cadence_seconds,
+                continuity_seconds=suite_member.continuity_seconds,
+                freshness_seconds=suite_member.freshness_seconds,
+                no_data_policy="fail",
+                error_policy="fail",
+                source_refs=(member_ref,),
+            )
+            suite_members.append(planned_member)
+            suite_member_refs.add((suite.id, member_id))
+        definition = {
+            "id": suite.id,
+            "members": [_semantic_value(member) for member in suite_members],
+        }
+        planned_suites.append(
+            PlannedReadinessSuite(
+                id=suite.id,
+                members=tuple(suite_members),
+                suite_digest=canonical_digest(definition),
+                scoped_plan_digest="",
+                source_refs=(ref,),
+            )
+        )
+
     capability_refs: set[str] = set()
     for service_id, profile in service_profiles.items():
         capability_refs.update(f"service/{service_id}/{item.id}" for item in profile.health)
@@ -803,7 +1034,7 @@ def resolve_observation_documents(
             else waiver.scope.ref in capability_refs
         )
         if waiver.scope.kind == WaiverScopeKind.SUITE_MEMBER:
-            exists = False
+            exists = (waiver.scope.suite_ref or "", waiver.scope.ref) in suite_member_refs
         if not exists:
             _finding(
                 findings,
@@ -836,7 +1067,14 @@ def resolve_observation_documents(
         "datasource_bindings",
     ):
         for item, ref in parsed[section]:
-            opaque.append(OpaqueIdentity(id=str(item.id), kind=section, source_refs=(ref,)))  # type: ignore[attr-defined]
+            opaque.append(
+                OpaqueIdentity(
+                    id=str(item.id),  # type: ignore[attr-defined]
+                    kind=section,
+                    identity_digest=canonical_digest(_semantic_value(item)),
+                    source_refs=(ref,),
+                )
+            )
     planned_aliases = [
         PlannedAlias(
             id=item.id,
@@ -848,7 +1086,7 @@ def resolve_observation_documents(
         for item, ref in aliases.values()
         if isinstance(item, ProviderAlias)
     ]
-    return Plan(
+    plan = Plan(
         registry_revision=next(iter(revisions), None),
         document_digests=tuple(sorted(doc.semantic_sha256 for doc in docs)),
         service_profiles=_sorted(planned_profiles),
@@ -863,7 +1101,15 @@ def resolve_observation_documents(
         secret_bindings=_sorted(planned_bindings),
         provider_aliases=_sorted(planned_aliases),
         opaque_identities=tuple(sorted(opaque, key=lambda item: (item.kind, item.id))),
+        operations_views=_sorted(planned_views),
+        readiness_suites=_sorted(planned_suites),
     )
+    digest = canonical_digest(_semantic_value(plan, omit={"plan_digest", "scoped_plan_digest"}))
+    scoped_suites = tuple(
+        suite.model_copy(update={"scoped_plan_digest": _scoped_digest(plan, suite)})
+        for suite in plan.readiness_suites
+    )
+    return plan.model_copy(update={"readiness_suites": scoped_suites, "plan_digest": digest})
 
 
 def _unique(
@@ -903,6 +1149,116 @@ def _index_planned(items: list[Any], kind: str, findings: list[Diagnostic]) -> d
 
 def _sorted(items: list[Any]) -> tuple[Any, ...]:
     return tuple(sorted(items, key=lambda item: item.id))
+
+
+def _semantic_value(value: object, *, omit: set[str] | None = None) -> object:
+    """Strip diagnostic provenance and digest slots from a model tree."""
+
+    omitted = {"source_refs", *(omit or set())}
+    if isinstance(value, BaseModel):
+        return {
+            key: _semantic_value(child, omit=omitted)
+            for key, child in value.__iter__()
+            if key not in omitted and child is not None
+        }
+    if isinstance(value, dict):
+        return {
+            str(key): _semantic_value(child, omit=omitted)
+            for key, child in value.items()
+            if str(key) not in omitted and child is not None
+        }
+    if isinstance(value, (list, tuple)):
+        return [_semantic_value(child, omit=omitted) for child in value]
+    return value
+
+
+def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
+    signal_index = {signal.id: signal for signal in plan.signals}
+    selected_signals: dict[str, PlannedSignal] = {}
+
+    def add_signal(signal_id: str) -> None:
+        signal = signal_index.get(signal_id)
+        if signal is None or signal_id in selected_signals:
+            return
+        selected_signals[signal_id] = signal
+        if signal.source_signal_ref is not None:
+            add_signal(signal.source_signal_ref)
+
+    for member in suite.members:
+        add_signal(member.signal_ref)
+    service_ids = {signal.service_id for signal in selected_signals.values() if signal.service_id}
+    dependency_ids = {
+        signal_id.split("/", 2)[1]
+        for signal_id in selected_signals
+        if signal_id.startswith("dependency/")
+    }
+    services = [service for service in plan.services if service.id in service_ids]
+    profile_ids = {service.profile_id for service in services}
+    capability_refs = {
+        signal.capability_ref
+        for signal in selected_signals.values()
+        if signal.capability_ref is not None
+    }
+    view_ids = {
+        signal_id.split("/", 3)[1]
+        for signal_id in selected_signals
+        if signal_id.startswith("view/")
+    }
+    relevant_bindings = [
+        binding for binding in plan.secret_bindings if binding.service_id in service_ids
+    ]
+    renderer_ids = {
+        binding.renderer_binding_id
+        for binding in relevant_bindings
+        if binding.renderer_binding_id is not None
+    }
+    datasource_ids = {
+        datasource_id
+        for signal in selected_signals.values()
+        for datasource_id in signal.datasource_binding_ids
+    }
+    opaque = [
+        identity
+        for identity in plan.opaque_identities
+        if (
+            identity.id in renderer_ids
+            or identity.id in datasource_ids
+            or identity.kind == "observation_backends"
+        )
+    ]
+    scoped = {
+        "suite_id": suite.id,
+        "signals": _sorted(list(selected_signals.values())),
+        "services": _sorted(services),
+        "hosts": _sorted([host for host in plan.hosts if host.id in {s.host_id for s in services}]),
+        "profiles": _sorted(
+            [profile for profile in plan.service_profiles if profile.id in profile_ids]
+        ),
+        "endpoints": _sorted(
+            [endpoint for endpoint in plan.endpoints if endpoint.service_id in service_ids]
+        ),
+        "dependencies": _sorted([edge for edge in plan.dependencies if edge.id in dependency_ids]),
+        "views": _sorted([view for view in plan.operations_views if view.id in view_ids]),
+        "waivers": _sorted(
+            [
+                waiver
+                for waiver in plan.waivers
+                if waiver.target_ref in selected_signals
+                or waiver.target_ref in capability_refs
+                or waiver.suite_ref == suite.id
+            ]
+        ),
+        "secret_bindings": _sorted(relevant_bindings),
+        "provider_aliases": _sorted(
+            [
+                alias
+                for alias in plan.provider_aliases
+                if alias.id in {binding.alias for binding in relevant_bindings}
+            ]
+        ),
+        "opaque_identities": sorted(opaque, key=lambda item: (item.kind, item.id)),
+    }
+    return canonical_digest(_semantic_value(scoped))
 
 
 def _ref(doc: ObservationDocument, pointer: str) -> SourceRef:

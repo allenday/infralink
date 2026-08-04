@@ -1,5 +1,6 @@
 """Public observation source contracts."""
 
+from infralink.observation.canonical import canonical_digest, canonical_json, canonical_json_bytes
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.loader import LoadReport, ObservationDocument, load_observation_documents
 from infralink.observation.models import (
@@ -13,6 +14,7 @@ from infralink.observation.models import (
     EndpointExposure,
     EndpointOverride,
     EndpointProtocol,
+    FailurePolicy,
     HealthCapability,
     HealthEvaluator,
     Host,
@@ -25,6 +27,7 @@ from infralink.observation.models import (
     MetricsEvaluator,
     ObservationBackend,
     OperationsView,
+    OperationsViewSection,
     ProviderAlias,
     QualifiedRef,
     ReadinessSuite,
@@ -65,6 +68,7 @@ __all__ = [
     "EndpointExposure",
     "EndpointOverride",
     "EndpointProtocol",
+    "FailurePolicy",
     "HealthCapability",
     "HealthEvaluator",
     "Host",
@@ -79,6 +83,7 @@ __all__ = [
     "ObservationBackend",
     "ObservationDocument",
     "OperationsView",
+    "OperationsViewSection",
     "ProviderAlias",
     "QualifiedRef",
     "ReadinessSuite",
@@ -104,4 +109,7 @@ __all__ = [
     "PlanValidationError",
     "SourceRef",
     "resolve_observation_documents",
+    "canonical_digest",
+    "canonical_json",
+    "canonical_json_bytes",
 ]
