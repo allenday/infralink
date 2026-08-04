@@ -1,7 +1,21 @@
 """Public observation source contracts."""
 
+from infralink.observation.api import (
+    ProjectResult,
+    ProjectValidationError,
+    SourceProvenance,
+    ValidationReport,
+    project,
+    validate,
+)
 from infralink.observation.canonical import canonical_digest, canonical_json, canonical_json_bytes
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
+from infralink.observation.explain import (
+    DIAGNOSTIC_CODES,
+    DiagnosticCodeNotFoundError,
+    DiagnosticExplanation,
+    explain,
+)
 from infralink.observation.loader import LoadReport, ObservationDocument, load_observation_documents
 from infralink.observation.models import (
     Application,
@@ -60,7 +74,10 @@ __all__ = [
     "CanonicalId",
     "ComparisonOperator",
     "DatasourceBinding",
+    "DIAGNOSTIC_CODES",
     "Diagnostic",
+    "DiagnosticCodeNotFoundError",
+    "DiagnosticExplanation",
     "DiagnosticSet",
     "DependencyContract",
     "Endpoint",
@@ -84,6 +101,8 @@ __all__ = [
     "OperationsView",
     "OperationsViewSection",
     "ProviderAlias",
+    "ProjectResult",
+    "ProjectValidationError",
     "QualifiedRef",
     "ReadinessSuite",
     "RendererBindingIdentity",
@@ -97,10 +116,12 @@ __all__ = [
     "SignalMembership",
     "SignalRequirement",
     "SourceLocation",
+    "SourceProvenance",
     "SuiteMember",
     "Waiver",
     "WaiverScope",
     "WaiverScopeKind",
+    "ValidationReport",
     "load_observation_documents",
     "Plan",
     "PlanReport",
@@ -110,4 +131,7 @@ __all__ = [
     "canonical_digest",
     "canonical_json",
     "canonical_json_bytes",
+    "explain",
+    "project",
+    "validate",
 ]
