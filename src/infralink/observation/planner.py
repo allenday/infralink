@@ -17,6 +17,7 @@ from infralink.observation.models import (
     DependencyContract,
     Endpoint,
     EndpointExposure,
+    EndpointOverride,
     EndpointProtocol,
     HealthCapability,
     Host,
@@ -428,28 +429,51 @@ def resolve_observation_documents(
         service_profiles[service_id] = profile
         service_refs[service_id] = ref
         instance_by_service[service_id] = instance
-        selected = (
-            set(instance.endpoint_ids)
-            if instance.endpoint_ids
-            else {e.id for e in profile.endpoints}
-        )
-        overrides = {
-            override.endpoint_id: (override, _child(ref, "endpoint_overrides", str(index)))
-            for index, override in enumerate(instance.endpoint_overrides)
-        }
-        for endpoint_id in overrides.keys() - {endpoint.id for endpoint in profile.endpoints}:
-            _finding(
-                findings,
-                "unknown-endpoint-override",
-                _child(overrides[endpoint_id][1], "endpoint_id"),
-                f"{service_id}/{endpoint_id}",
-                "Override only an endpoint declared by the service profile.",
-            )
+        profile_endpoint_ids = {endpoint.id for endpoint in profile.endpoints}
+        selected = set(instance.endpoint_ids) if instance.endpoint_ids else profile_endpoint_ids
+        for selection_index, endpoint_id in enumerate(instance.endpoint_ids):
+            if endpoint_id not in profile_endpoint_ids:
+                _finding(
+                    findings,
+                    "unknown-selected-endpoint",
+                    _child(ref, "endpoint_ids", str(selection_index)),
+                    f"{service_id}/{endpoint_id}",
+                    "Select only an endpoint declared by the service profile.",
+                )
+        overrides: dict[str, tuple[EndpointOverride, SourceRef]] = {}
+        for override_index, override in enumerate(instance.endpoint_overrides):
+            override_ref = _child(ref, "endpoint_overrides", str(override_index))
+            if override.endpoint_id in overrides:
+                _finding(
+                    findings,
+                    "duplicate-endpoint-override",
+                    _child(override_ref, "endpoint_id"),
+                    f"{service_id}/{override.endpoint_id}",
+                    "Declare at most one override for each service endpoint.",
+                )
+                continue
+            overrides[override.endpoint_id] = (override, override_ref)
+            if override.endpoint_id not in profile_endpoint_ids:
+                _finding(
+                    findings,
+                    "unknown-endpoint-override",
+                    _child(override_ref, "endpoint_id"),
+                    f"{service_id}/{override.endpoint_id}",
+                    "Override only an endpoint declared by the service profile.",
+                )
+            elif override.endpoint_id not in selected:
+                _finding(
+                    findings,
+                    "endpoint-override-not-selected",
+                    _child(override_ref, "endpoint_id"),
+                    f"{service_id}/{override.endpoint_id}",
+                    "Add the endpoint to endpoint_ids before declaring its override.",
+                )
         for endpoint_index, endpoint in enumerate(profile.endpoints):
             if endpoint.id not in selected:
                 continue
             override_entry = overrides.get(endpoint.id)
-            override = override_entry[0] if override_entry is not None else None
+            resolved_override = override_entry[0] if override_entry is not None else None
             planned_endpoints.append(
                 PlannedEndpoint(
                     id=f"{service_id}/{endpoint.id}",
@@ -458,14 +482,16 @@ def resolve_observation_documents(
                     protocol=endpoint.protocol,
                     port=endpoint.port,
                     address=(
-                        override.address
-                        if override is not None and override.address is not None
+                        resolved_override.address
+                        if resolved_override is not None and resolved_override.address is not None
                         else endpoint.address
                     ),
-                    exposure=override.exposure if override is not None else None,
+                    exposure=(
+                        resolved_override.exposure if resolved_override is not None else None
+                    ),
                     path=(
-                        override.route
-                        if override is not None and override.route is not None
+                        resolved_override.route
+                        if resolved_override is not None and resolved_override.route is not None
                         else endpoint.path
                     ),
                     source_refs=(

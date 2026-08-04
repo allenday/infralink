@@ -276,3 +276,52 @@ def test_dependency_rejects_legacy_health_fields(legacy_field: str) -> None:
         item for item in caught.value.report.diagnostics if item.code == "invalid-document-record"
     )
     assert finding.location.pointer == f"/dependency_contracts/0/{legacy_field}"
+
+
+def test_unknown_selected_endpoint_invalidates_plan_at_selection_pointer() -> None:
+    data = base_data()
+    data["service_instances"][0]["endpoint_ids"] = ["missing"]  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item for item in caught.value.report.diagnostics if item.code == "unknown-selected-endpoint"
+    )
+    assert finding.location.pointer == "/service_instances/0/endpoint_ids/0"
+
+
+def test_duplicate_endpoint_overrides_are_ambiguous() -> None:
+    data = base_data()
+    override = {"endpoint_id": "http", "address": "frontend.internal"}
+    data["service_instances"][0]["endpoint_overrides"] = [override, dict(override)]  # type: ignore[index]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    finding = next(
+        item
+        for item in caught.value.report.diagnostics
+        if item.code == "duplicate-endpoint-override"
+    )
+    assert finding.location.pointer == "/service_instances/0/endpoint_overrides/1/endpoint_id"
+
+
+def test_override_requires_endpoint_to_be_explicitly_selected() -> None:
+    data = base_data()
+    instance = data["service_instances"][0]  # type: ignore[index]
+    instance["endpoint_ids"] = ["http"]
+    instance["endpoint_overrides"] = [{"endpoint_id": "other", "address": "internal"}]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert {item.code for item in caught.value.report.diagnostics} >= {"unknown-endpoint-override"}
+
+
+def test_known_override_of_unselected_endpoint_is_rejected() -> None:
+    data = base_data()
+    profile = data["service_profiles"][0]  # type: ignore[index]
+    profile["endpoints"].append({"id": "admin", "protocol": "http", "port": 8081})
+    instance = data["service_instances"][0]  # type: ignore[index]
+    instance["endpoint_ids"] = ["http"]
+    instance["endpoint_overrides"] = [{"endpoint_id": "admin", "address": "internal"}]
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+    assert "endpoint-override-not-selected" in {
+        item.code for item in caught.value.report.diagnostics
+    }
