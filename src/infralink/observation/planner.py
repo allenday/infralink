@@ -56,6 +56,7 @@ class SourceRef(PlanModel):
 
 class PlannedHost(PlanModel):
     id: str
+    display_name: str | None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -64,6 +65,7 @@ class PlannedService(PlanModel):
     host_id: str
     instance_key: str
     profile_id: str
+    display_name: str | None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -458,7 +460,11 @@ def resolve_observation_documents(
     planned_hosts: list[PlannedHost] = []
     for host, ref in hosts.values():
         assert isinstance(host, Host)
-        planned_hosts.append(PlannedHost(id=str(host.id), source_refs=(ref,)))
+        planned_hosts.append(
+            PlannedHost(
+                id=str(host.id), display_name=host.display_name, source_refs=(ref,)
+            )
+        )
     host_ids = {item.id for item in planned_hosts}
     planned_services: list[PlannedService] = []
     planned_endpoints: list[PlannedEndpoint] = []
@@ -519,6 +525,7 @@ def resolve_observation_documents(
                 host_id=host_id,
                 instance_key=instance.id,
                 profile_id=profile.id,
+                display_name=instance.display_name or profile.display_name,
                 source_refs=(ref, profile_entry[1]),
             )
         )

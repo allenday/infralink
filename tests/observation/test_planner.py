@@ -115,6 +115,33 @@ def test_resolves_two_hosts_and_exact_signal_namespaces_deterministically() -> N
     assert plan.document_digests == ("contract.yml",)
 
 
+def test_projects_explicit_host_and_service_display_names_without_identity_changes() -> None:
+    data = base_data()
+    data["hosts"][0]["display_name"] = "Operations API"  # type: ignore[index]
+    data["hosts"][1]["display_name"] = "Customer Edge"  # type: ignore[index]
+    data["service_profiles"][0]["display_name"] = "Web Service"  # type: ignore[index]
+    data["service_instances"][0]["display_name"] = "Public Frontend"  # type: ignore[index]
+
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert [(host.id, host.display_name) for host in plan.hosts] == [
+        ("11111111-1111-4111-8111-111111111111", "Operations API"),
+        ("22222222-2222-4222-8222-222222222222", "Customer Edge"),
+    ]
+    assert [(service.id, service.display_name) for service in plan.services] == [
+        ("11111111-1111-4111-8111-111111111111/api", "Web Service"),
+        ("22222222-2222-4222-8222-222222222222/frontend", "Public Frontend"),
+    ]
+    assert resolve_observation_documents([document(data)], as_of=AS_OF) == plan
+
+
+def test_legacy_source_documents_project_no_display_names() -> None:
+    plan = resolve_observation_documents([document(base_data())], as_of=AS_OF)
+
+    assert [host.display_name for host in plan.hosts] == [None, None]
+    assert [service.display_name for service in plan.services] == [None, None]
+
+
 def test_instance_applies_only_address_exposure_and_route_overrides() -> None:
     data = base_data()
     data["service_instances"][0]["endpoint_overrides"] = [  # type: ignore[index]
