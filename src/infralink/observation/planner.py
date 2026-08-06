@@ -461,9 +461,7 @@ def resolve_observation_documents(
     for host, ref in hosts.values():
         assert isinstance(host, Host)
         planned_hosts.append(
-            PlannedHost(
-                id=str(host.id), display_name=host.display_name, source_refs=(ref,)
-            )
+            PlannedHost(id=str(host.id), display_name=host.display_name, source_refs=(ref,))
         )
     host_ids = {item.id for item in planned_hosts}
     planned_services: list[PlannedService] = []
