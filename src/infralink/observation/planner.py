@@ -56,7 +56,7 @@ class SourceRef(PlanModel):
 
 class PlannedHost(PlanModel):
     id: str
-    display_name: str | None
+    display_name: str | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -65,7 +65,7 @@ class PlannedService(PlanModel):
     host_id: str
     instance_key: str
     profile_id: str
-    display_name: str | None
+    display_name: str | None = None
     source_refs: tuple[SourceRef, ...]
 
 

@@ -910,6 +910,18 @@
     "PlannedHost": {
       "additionalProperties": false,
       "properties": {
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
         "id": {
           "title": "Id",
           "type": "string"
@@ -1110,6 +1122,18 @@
     "PlannedService": {
       "additionalProperties": false,
       "properties": {
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
         "host_id": {
           "title": "Host Id",
           "type": "string"

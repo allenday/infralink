@@ -4,7 +4,7 @@ from types import MappingProxyType
 import pytest
 
 from infralink.observation.loader import ObservationDocument
-from infralink.observation.planner import PlanValidationError, resolve_observation_documents
+from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
 
 AS_OF = datetime(2026, 8, 4, tzinfo=timezone.utc)
 
@@ -140,6 +140,20 @@ def test_legacy_source_documents_project_no_display_names() -> None:
 
     assert [host.display_name for host in plan.hosts] == [None, None]
     assert [service.display_name for service in plan.services] == [None, None]
+
+
+def test_legacy_v1_plan_payload_without_display_names_still_validates() -> None:
+    payload = resolve_observation_documents([document(base_data())], as_of=AS_OF).model_dump()
+    for host in payload["hosts"]:
+        host.pop("display_name")
+    for service in payload["services"]:
+        service.pop("display_name")
+
+    restored = Plan.model_validate(payload)
+
+    assert restored.schema_version == "infralink.plan.v1"
+    assert [host.display_name for host in restored.hosts] == [None, None]
+    assert [service.display_name for service in restored.services] == [None, None]
 
 
 def test_instance_applies_only_address_exposure_and_route_overrides() -> None:

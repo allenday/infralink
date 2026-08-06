@@ -356,6 +356,19 @@
     "ServiceProfile": {
       "additionalProperties": false,
       "properties": {
+        "display_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
         "endpoints": {
           "items": {
             "$ref": "#/$defs/Endpoint"

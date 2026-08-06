@@ -102,6 +102,19 @@
     "Host": {
       "additionalProperties": false,
       "properties": {
+        "display_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
         "id": {
           "title": "Id",
           "type": "string"
@@ -116,6 +129,19 @@
     "ServiceInstance": {
       "additionalProperties": false,
       "properties": {
+        "display_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
         "endpoint_ids": {
           "items": {
             "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
