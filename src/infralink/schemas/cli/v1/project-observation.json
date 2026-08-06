@@ -913,6 +913,7 @@
         "display_name": {
           "anyOf": [
             {
+              "minLength": 1,
               "type": "string"
             },
             {
@@ -1125,6 +1126,7 @@
         "display_name": {
           "anyOf": [
             {
+              "minLength": 1,
               "type": "string"
             },
             {

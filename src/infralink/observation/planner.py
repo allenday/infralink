@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -56,7 +56,7 @@ class SourceRef(PlanModel):
 
 class PlannedHost(PlanModel):
     id: str
-    display_name: str | None = None
+    display_name: Annotated[str, Field(min_length=1)] | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -65,7 +65,7 @@ class PlannedService(PlanModel):
     host_id: str
     instance_key: str
     profile_id: str
-    display_name: str | None = None
+    display_name: Annotated[str, Field(min_length=1)] | None = None
     source_refs: tuple[SourceRef, ...]
 
 
