@@ -2,9 +2,10 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 
 import pytest
+from pydantic import ValidationError
 
 from infralink.observation.loader import ObservationDocument
-from infralink.observation.planner import PlanValidationError, resolve_observation_documents
+from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
 
 AS_OF = datetime(2026, 8, 4, tzinfo=timezone.utc)
 
@@ -113,6 +114,56 @@ def test_resolves_two_hosts_and_exact_signal_namespaces_deterministically() -> N
     )
     assert plan.schema_version == "infralink.plan.v1"
     assert plan.document_digests == ("contract.yml",)
+
+
+def test_projects_explicit_host_and_service_display_names_without_identity_changes() -> None:
+    data = base_data()
+    data["hosts"][0]["display_name"] = "Operations API"  # type: ignore[index]
+    data["hosts"][1]["display_name"] = "Customer Edge"  # type: ignore[index]
+    data["service_profiles"][0]["display_name"] = "Web Service"  # type: ignore[index]
+    data["service_instances"][0]["display_name"] = "Public Frontend"  # type: ignore[index]
+
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert [(host.id, host.display_name) for host in plan.hosts] == [
+        ("11111111-1111-4111-8111-111111111111", "Operations API"),
+        ("22222222-2222-4222-8222-222222222222", "Customer Edge"),
+    ]
+    assert [(service.id, service.display_name) for service in plan.services] == [
+        ("11111111-1111-4111-8111-111111111111/api", "Web Service"),
+        ("22222222-2222-4222-8222-222222222222/frontend", "Public Frontend"),
+    ]
+    assert resolve_observation_documents([document(data)], as_of=AS_OF) == plan
+
+
+def test_legacy_source_documents_project_no_display_names() -> None:
+    plan = resolve_observation_documents([document(base_data())], as_of=AS_OF)
+
+    assert [host.display_name for host in plan.hosts] == [None, None]
+    assert [service.display_name for service in plan.services] == [None, None]
+
+
+def test_legacy_v1_plan_payload_without_display_names_still_validates() -> None:
+    payload = resolve_observation_documents([document(base_data())], as_of=AS_OF).model_dump()
+    for host in payload["hosts"]:
+        host.pop("display_name")
+    for service in payload["services"]:
+        service.pop("display_name")
+
+    restored = Plan.model_validate(payload)
+
+    assert restored.schema_version == "infralink.plan.v1"
+    assert [host.display_name for host in restored.hosts] == [None, None]
+    assert [service.display_name for service in restored.services] == [None, None]
+
+
+@pytest.mark.parametrize(("section", "index"), [("hosts", 0), ("services", 0)])
+def test_plan_rejects_empty_display_names(section: str, index: int) -> None:
+    payload = resolve_observation_documents([document(base_data())], as_of=AS_OF).model_dump()
+    payload[section][index]["display_name"] = ""
+
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        Plan.model_validate(payload)
 
 
 def test_instance_applies_only_address_exposure_and_route_overrides() -> None:

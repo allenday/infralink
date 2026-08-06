@@ -203,6 +203,7 @@ class SecretSlot(StrictModel):
 
 class ServiceProfile(StrictModel):
     id: CanonicalId
+    display_name: Annotated[str, Field(min_length=1)] | None = None
     endpoints: list[Endpoint] = Field(default_factory=list)
     health: list[HealthCapability] = Field(default_factory=list)
     metrics: list[MetricsCapability] = Field(default_factory=list)
@@ -278,6 +279,7 @@ class ServiceInstance(StrictModel):
     id: CanonicalId
     host_id: HostId | None = None
     profile_id: CanonicalId
+    display_name: Annotated[str, Field(min_length=1)] | None = None
     endpoint_ids: list[CanonicalId] = Field(default_factory=list)
     endpoint_overrides: list[EndpointOverride] = Field(default_factory=list)
     secret_binding_ids: list[CanonicalId] = Field(default_factory=list)
@@ -285,6 +287,7 @@ class ServiceInstance(StrictModel):
 
 class Host(StrictModel):
     id: HostId
+    display_name: Annotated[str, Field(min_length=1)] | None = None
 
 
 _SENSITIVE_KEY = re.compile(r"(?:^|[^a-z])(value|secret|password|token)(?:$|[^a-z])")
