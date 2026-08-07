@@ -1328,24 +1328,47 @@ def _sorted(items: list[Any]) -> tuple[Any, ...]:
     return tuple(sorted(items, key=lambda item: item.id))
 
 
-def _semantic_value(value: object, *, omit: set[str] | None = None) -> object:
+_SCOPED_COMPATIBILITY_DEFAULT_FIELDS = frozenset(
+    {"baseline_capabilities", "required_host_baseline_capabilities"}
+)
+
+
+def _semantic_value(
+    value: object,
+    *,
+    omit: set[str] | None = None,
+    omit_default_fields: frozenset[str] = frozenset(),
+) -> object:
     """Strip diagnostic provenance and digest slots from a model tree."""
 
     omitted = {"source_refs", *(omit or set())}
     if isinstance(value, BaseModel):
         return {
-            key: _semantic_value(child, omit=omitted)
+            key: _semantic_value(
+                child,
+                omit=omitted,
+                omit_default_fields=omit_default_fields,
+            )
             for key, child in value.__iter__()
-            if key not in omitted and child is not None
+            if key not in omitted
+            and child is not None
+            and not (key in omit_default_fields and child == type(value).model_fields[key].default)
         }
     if isinstance(value, dict):
         return {
-            str(key): _semantic_value(child, omit=omitted)
+            str(key): _semantic_value(
+                child,
+                omit=omitted,
+                omit_default_fields=omit_default_fields,
+            )
             for key, child in value.items()
             if str(key) not in omitted and child is not None
         }
     if isinstance(value, (list, tuple)):
-        return [_semantic_value(child, omit=omitted) for child in value]
+        return [
+            _semantic_value(child, omit=omitted, omit_default_fields=omit_default_fields)
+            for child in value
+        ]
     return value
 
 
@@ -1458,7 +1481,9 @@ def _scoped_digest(plan: Plan, suite: PlannedReadinessSuite) -> str:
         ),
         "opaque_identities": sorted(opaque, key=lambda item: (item.kind, item.id)),
     }
-    return canonical_digest(_semantic_value(scoped))
+    return canonical_digest(
+        _semantic_value(scoped, omit_default_fields=_SCOPED_COMPATIBILITY_DEFAULT_FIELDS)
+    )
 
 
 def _ref(doc: ObservationDocument, pointer: str) -> SourceRef:

@@ -92,6 +92,15 @@ def test_plan_digest_is_exactly_public_canonical_plan_without_digest() -> None:
     assert b'"label":null' not in canonical_json(without_digest)
 
 
+def test_legacy_baseline_absence_preserves_global_and_scoped_digests() -> None:
+    plan = resolve_observation_documents([document(operational_data())], as_of=AS_OF)
+
+    assert plan.plan_digest == "6ad206b2c4e34452d2b96fad40f4c3bfeb86dc418e0ace7d7138ff7c8f2ea061"
+    assert plan.readiness_suites[0].scoped_plan_digest == (
+        "1d973bf4d4ee6cd7105b6820cf83b752456d14535444016acf919a69ea7a95a9"
+    )
+
+
 def test_legacy_view_signals_and_suite_policy_are_rejected() -> None:
     for section, key, value in [
         ("operations_views", "signals", []),
