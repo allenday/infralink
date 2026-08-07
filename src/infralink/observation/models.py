@@ -114,6 +114,14 @@ class SignalDisplay(str, Enum):
     RATE = "rate"
 
 
+class HostBaselineCapability(str, Enum):
+    SELF_DEPLOY_AUTHORITY = "self-deploy-authority"
+    DOCKER = "docker"
+    HOST_METRICS = "host-metrics"
+    CONTAINER_METRICS = "container-metrics"
+    LOG_FORWARDING = "log-forwarding"
+
+
 class FailurePolicy(str, Enum):
     FAIL = "fail"
 
@@ -210,9 +218,14 @@ class ServiceProfile(StrictModel):
     logs: list[LogCapability] = Field(default_factory=list)
     signals: list[LogicalSignal] = Field(default_factory=list)
     secret_slots: list[SecretSlot] = Field(default_factory=list)
+    required_host_baseline_capabilities: list[HostBaselineCapability] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_endpoint_references(self) -> ServiceProfile:
+        if len(self.required_host_baseline_capabilities) != len(
+            set(self.required_host_baseline_capabilities)
+        ):
+            raise ValueError("duplicate host baseline capability in service profile")
         endpoint_id_list = [endpoint.id for endpoint in self.endpoints]
         if len(endpoint_id_list) != len(set(endpoint_id_list)):
             raise ValueError("duplicate endpoint id in service profile")
@@ -288,6 +301,16 @@ class ServiceInstance(StrictModel):
 class Host(StrictModel):
     id: HostId
     display_name: Annotated[str, Field(min_length=1)] | None = None
+    baseline_capabilities: list[HostBaselineCapability] = Field(default_factory=list)
+
+    @field_validator("baseline_capabilities")
+    @classmethod
+    def reject_duplicate_baseline_capabilities(
+        cls, value: list[HostBaselineCapability]
+    ) -> list[HostBaselineCapability]:
+        if len(value) != len(set(value)):
+            raise ValueError("duplicate host baseline capability")
+        return value
 
 
 _SENSITIVE_KEY = re.compile(r"(?:^|[^a-z])(value|secret|password|token)(?:$|[^a-z])")

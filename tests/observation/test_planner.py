@@ -157,6 +157,116 @@ def test_legacy_v1_plan_payload_without_display_names_still_validates() -> None:
     assert [service.display_name for service in restored.services] == [None, None]
 
 
+def test_legacy_documents_preserve_empty_baseline_contracts_and_digest() -> None:
+    plan = resolve_observation_documents([document(base_data())], as_of=AS_OF)
+    payload = plan.model_dump()
+    for host in payload["hosts"]:
+        host.pop("baseline_capabilities")
+    for profile in payload["service_profiles"]:
+        profile.pop("required_host_baseline_capabilities")
+
+    restored = Plan.model_validate(payload)
+
+    assert all(host.baseline_capabilities == () for host in restored.hosts)
+    assert all(
+        profile.required_host_baseline_capabilities == () for profile in restored.service_profiles
+    )
+    assert restored.plan_digest == plan.plan_digest
+
+
+def test_projects_sorted_baseline_capabilities_with_declared_field_provenance() -> None:
+    data = base_data()
+    data["hosts"][0]["baseline_capabilities"] = [  # type: ignore[index]
+        "host-metrics",
+        "docker",
+    ]
+    data["hosts"][1]["baseline_capabilities"] = ["docker", "host-metrics"]  # type: ignore[index]
+    data["service_profiles"][0]["required_host_baseline_capabilities"] = [  # type: ignore[index]
+        "docker",
+        "host-metrics",
+    ]
+
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+    host = plan.hosts[0]
+    profile = plan.service_profiles[0]
+
+    assert tuple(item.value for item in host.baseline_capabilities) == ("docker", "host-metrics")
+    assert tuple(item.value for item in profile.required_host_baseline_capabilities) == (
+        "docker",
+        "host-metrics",
+    )
+    assert host.source_refs[-1].pointer == "/hosts/0/baseline_capabilities"
+    assert (
+        profile.source_refs[-1].pointer == "/service_profiles/0/required_host_baseline_capabilities"
+    )
+
+
+def test_missing_host_baseline_rejects_attachment_at_declaring_profile_field() -> None:
+    data = base_data()
+    data["service_profiles"][0]["required_host_baseline_capabilities"] = ["docker"]  # type: ignore[index]
+
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    findings = [
+        item
+        for item in caught.value.report.diagnostics
+        if item.code == "missing-required-host-baseline-capability"
+    ]
+    assert len(findings) == 2
+    assert {item.identity for item in findings} == {
+        "11111111-1111-4111-8111-111111111111/api/docker",
+        "22222222-2222-4222-8222-222222222222/frontend/docker",
+    }
+    assert {item.location.pointer for item in findings} == {
+        "/service_profiles/0/required_host_baseline_capabilities"
+    }
+    assert all(
+        "Declare docker in baseline_capabilities" in item.next_actions[0] for item in findings
+    )
+
+
+def test_baseline_incompatibilities_are_aggregate_deterministic_and_emit_no_services() -> None:
+    data = base_data()
+    data["hosts"][0]["baseline_capabilities"] = ["docker"]  # type: ignore[index]
+    data["service_profiles"][0]["required_host_baseline_capabilities"] = [  # type: ignore[index]
+        "log-forwarding",
+        "docker",
+        "container-metrics",
+    ]
+
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    findings = [
+        item
+        for item in caught.value.report.diagnostics
+        if item.code == "missing-required-host-baseline-capability"
+    ]
+    assert [(item.identity, item.location.pointer) for item in findings] == [
+        (
+            "11111111-1111-4111-8111-111111111111/api/container-metrics",
+            "/service_profiles/0/required_host_baseline_capabilities",
+        ),
+        (
+            "11111111-1111-4111-8111-111111111111/api/log-forwarding",
+            "/service_profiles/0/required_host_baseline_capabilities",
+        ),
+        (
+            "22222222-2222-4222-8222-222222222222/frontend/container-metrics",
+            "/service_profiles/0/required_host_baseline_capabilities",
+        ),
+        (
+            "22222222-2222-4222-8222-222222222222/frontend/docker",
+            "/service_profiles/0/required_host_baseline_capabilities",
+        ),
+        (
+            "22222222-2222-4222-8222-222222222222/frontend/log-forwarding",
+            "/service_profiles/0/required_host_baseline_capabilities",
+        ),
+    ]
+
+
 @pytest.mark.parametrize(("section", "index"), [("hosts", 0), ("services", 0)])
 def test_plan_rejects_empty_display_names(section: str, index: int) -> None:
     payload = resolve_observation_documents([document(base_data())], as_of=AS_OF).model_dump()

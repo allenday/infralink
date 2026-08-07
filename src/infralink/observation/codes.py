@@ -56,6 +56,7 @@ PLANNER_DIAGNOSTIC_CODES = _DYNAMIC_DUPLICATE_CODES | frozenset(
         "invalid-document-record",
         "invalid-document-section",
         "missing-service-host",
+        "missing-required-host-baseline-capability",
         "no-usable-observation-document",
         "optional-view-signal-gate",
         "registry-revision-conflict",

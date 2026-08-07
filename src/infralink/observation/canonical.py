@@ -15,6 +15,7 @@ from pydantic_core import PydanticUndefined
 _UNORDERED_LIST_KEYS = frozenset(
     {
         "applications",
+        "baseline_capabilities",
         "datasource_bindings",
         "delivery_forms",
         "dependency_contracts",
@@ -34,6 +35,7 @@ _UNORDERED_LIST_KEYS = frozenset(
         "renderer_binding_identities",
         "renderer_bindings",
         "required_dependency_edge_ids",
+        "required_host_baseline_capabilities",
         "secret_binding_ids",
         "secret_bindings",
         "secret_slots",

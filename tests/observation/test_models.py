@@ -17,6 +17,7 @@ from infralink.observation.models import (
     HealthCapability,
     HealthEvaluator,
     Host,
+    HostBaselineCapability,
     LogCapability,
     LogEvaluator,
     LogicalSignal,
@@ -56,6 +57,40 @@ from infralink.observation.models import (
 def test_host_id_rejects_noncanonical_uuid_spelling(host_id: str) -> None:
     with pytest.raises(ValidationError, match="canonical lowercase hyphenated"):
         Host(id=host_id)
+
+
+def test_host_baseline_capabilities_are_closed_and_explicit() -> None:
+    host = Host(
+        id="11111111-1111-4111-8111-111111111111",
+        baseline_capabilities=[
+            HostBaselineCapability.DOCKER,
+            HostBaselineCapability.CONTAINER_METRICS,
+        ],
+    )
+
+    assert [item.value for item in host.baseline_capabilities] == ["docker", "container-metrics"]
+    with pytest.raises(ValidationError):
+        Host(id="11111111-1111-4111-8111-111111111111", baseline_capabilities=["ssh"])
+
+
+@pytest.mark.parametrize(
+    ("model", "field"),
+    [
+        (Host, "baseline_capabilities"),
+        (ServiceProfile, "required_host_baseline_capabilities"),
+    ],
+)
+def test_baseline_capability_lists_reject_duplicates(model: type[object], field: str) -> None:
+    kwargs: dict[str, object] = {
+        field: [HostBaselineCapability.DOCKER, HostBaselineCapability.DOCKER]
+    }
+    if model is Host:
+        kwargs["id"] = "11111111-1111-4111-8111-111111111111"
+    else:
+        kwargs["id"] = "nginx"
+
+    with pytest.raises(ValidationError, match="duplicate host baseline capability"):
+        model(**kwargs)  # type: ignore[call-arg]
 
 
 def test_profile_binds_capabilities_to_named_endpoints() -> None:
