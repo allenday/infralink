@@ -220,6 +220,17 @@
       "title": "HealthEvaluator",
       "type": "string"
     },
+    "HostBaselineCapability": {
+      "enum": [
+        "self-deploy-authority",
+        "docker",
+        "host-metrics",
+        "container-metrics",
+        "log-forwarding"
+      ],
+      "title": "HostBaselineCapability",
+      "type": "string"
+    },
     "LogCapability": {
       "additionalProperties": false,
       "properties": {
@@ -910,6 +921,14 @@
     "PlannedHost": {
       "additionalProperties": false,
       "properties": {
+        "baseline_capabilities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HostBaselineCapability"
+          },
+          "title": "Baseline Capabilities",
+          "type": "array"
+        },
         "display_name": {
           "anyOf": [
             {
@@ -1203,6 +1222,14 @@
             "$ref": "#/$defs/MetricsCapability"
           },
           "title": "Metrics",
+          "type": "array"
+        },
+        "required_host_baseline_capabilities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HostBaselineCapability"
+          },
+          "title": "Required Host Baseline Capabilities",
           "type": "array"
         },
         "secret_slots": {

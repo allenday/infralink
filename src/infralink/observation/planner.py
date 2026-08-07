@@ -25,6 +25,7 @@ from infralink.observation.models import (
     EndpointProtocol,
     HealthCapability,
     Host,
+    HostBaselineCapability,
     LogCapability,
     LogicalSignal,
     MetricsCapability,
@@ -57,6 +58,7 @@ class SourceRef(PlanModel):
 class PlannedHost(PlanModel):
     id: str
     display_name: Annotated[str, Field(min_length=1)] | None = None
+    baseline_capabilities: tuple[HostBaselineCapability, ...] = ()
     source_refs: tuple[SourceRef, ...]
 
 
@@ -77,6 +79,7 @@ class PlannedServiceProfile(PlanModel):
     logs: tuple[LogCapability, ...]
     signals: tuple[LogicalSignal, ...]
     secret_slots: tuple[SecretSlot, ...]
+    required_host_baseline_capabilities: tuple[HostBaselineCapability, ...] = ()
     source_refs: tuple[SourceRef, ...]
 
 
@@ -442,26 +445,43 @@ def resolve_observation_documents(
                 datasource.id,
                 "Reference a declared observation backend.",
             )
-    planned_profiles = [
-        PlannedServiceProfile(
-            id=profile.id,
-            endpoints=tuple(sorted(profile.endpoints, key=lambda item: item.id)),
-            health=tuple(sorted(profile.health, key=lambda item: item.id)),
-            metrics=tuple(sorted(profile.metrics, key=lambda item: item.id)),
-            logs=tuple(sorted(profile.logs, key=lambda item: item.id)),
-            signals=tuple(sorted(profile.signals, key=lambda item: item.id)),
-            secret_slots=tuple(sorted(profile.secret_slots, key=lambda item: item.id)),
-            source_refs=(ref,),
+    planned_profiles: list[PlannedServiceProfile] = []
+    for profile, ref in profiles.values():
+        assert isinstance(profile, ServiceProfile)
+        profile_source_refs: tuple[SourceRef, ...] = (ref,)
+        if "required_host_baseline_capabilities" in profile.model_fields_set:
+            profile_source_refs += (_child(ref, "required_host_baseline_capabilities"),)
+        planned_profiles.append(
+            PlannedServiceProfile(
+                id=profile.id,
+                endpoints=tuple(sorted(profile.endpoints, key=lambda item: item.id)),
+                health=tuple(sorted(profile.health, key=lambda item: item.id)),
+                metrics=tuple(sorted(profile.metrics, key=lambda item: item.id)),
+                logs=tuple(sorted(profile.logs, key=lambda item: item.id)),
+                signals=tuple(sorted(profile.signals, key=lambda item: item.id)),
+                secret_slots=tuple(sorted(profile.secret_slots, key=lambda item: item.id)),
+                required_host_baseline_capabilities=tuple(
+                    sorted(profile.required_host_baseline_capabilities, key=lambda item: item.value)
+                ),
+                source_refs=profile_source_refs,
+            )
         )
-        for profile, ref in profiles.values()
-        if isinstance(profile, ServiceProfile)
-    ]
 
     planned_hosts: list[PlannedHost] = []
     for host, ref in hosts.values():
         assert isinstance(host, Host)
+        host_source_refs: tuple[SourceRef, ...] = (ref,)
+        if "baseline_capabilities" in host.model_fields_set:
+            host_source_refs += (_child(ref, "baseline_capabilities"),)
         planned_hosts.append(
-            PlannedHost(id=str(host.id), display_name=host.display_name, source_refs=(ref,))
+            PlannedHost(
+                id=str(host.id),
+                display_name=host.display_name,
+                baseline_capabilities=tuple(
+                    sorted(host.baseline_capabilities, key=lambda item: item.value)
+                ),
+                source_refs=host_source_refs,
+            )
         )
     host_ids = {item.id for item in planned_hosts}
     planned_services: list[PlannedService] = []
@@ -517,6 +537,24 @@ def resolve_observation_documents(
             continue
         profile = profile_entry[0]
         assert isinstance(profile, ServiceProfile)
+        host_entry = hosts[host_id]
+        host = host_entry[0]
+        assert isinstance(host, Host)
+        missing_capabilities = sorted(
+            set(profile.required_host_baseline_capabilities) - set(host.baseline_capabilities),
+            key=lambda item: item.value,
+        )
+        if missing_capabilities:
+            requirement_ref = _child(profile_entry[1], "required_host_baseline_capabilities")
+            for baseline_capability in missing_capabilities:
+                _finding(
+                    findings,
+                    "missing-required-host-baseline-capability",
+                    requirement_ref,
+                    f"{service_id}/{baseline_capability.value}",
+                    f"Declare {baseline_capability.value} in baseline_capabilities on host {host_id}.",
+                )
+            continue
         planned_services.append(
             PlannedService(
                 id=service_id,

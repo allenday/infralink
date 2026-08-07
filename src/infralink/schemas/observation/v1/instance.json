@@ -102,6 +102,13 @@
     "Host": {
       "additionalProperties": false,
       "properties": {
+        "baseline_capabilities": {
+          "items": {
+            "$ref": "#/$defs/HostBaselineCapability"
+          },
+          "title": "Baseline Capabilities",
+          "type": "array"
+        },
         "display_name": {
           "anyOf": [
             {
@@ -125,6 +132,17 @@
       ],
       "title": "Host",
       "type": "object"
+    },
+    "HostBaselineCapability": {
+      "enum": [
+        "self-deploy-authority",
+        "docker",
+        "host-metrics",
+        "container-metrics",
+        "log-forwarding"
+      ],
+      "title": "HostBaselineCapability",
+      "type": "string"
     },
     "ServiceInstance": {
       "additionalProperties": false,
