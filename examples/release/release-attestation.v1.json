@@ -14,7 +14,7 @@
   },
   "artifacts": [
     {
-      "path": "release/runtime.tar.gz",
+      "path": "release/runtime-archive",
       "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
   ],
