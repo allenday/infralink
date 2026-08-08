@@ -37,6 +37,7 @@ PORT_AUTHORITY_TOKEN = re.compile(
 URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
 PROTOCOL_RELATIVE_AUTHORITY = re.compile(r"//[^\s`\"'<>]+")
 SECRET_TEMPLATE = re.compile(r"\$\{secret:[^}\s]+\}")
+SSH_FINGERPRINT = re.compile(r"(?<![A-Za-z0-9+/])SHA256:[A-Za-z0-9+/]{43}(?![A-Za-z0-9+/])")
 PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 BRACKET_AUTHORITY_TOKEN = re.compile(r"\[[^\]\s`\"'<>]*\]|\[[^\s`\"'<>]+")
 UUID = re.compile(
@@ -95,6 +96,7 @@ SAFE_DOTTED_TOKENS = {
     "infralink.release-attestation.v1",
     "infralink.release-attestation.v2",
     "infralink.publisher-request.v2",
+    "infralink.publisher-request.v3",
     "infralink.release-candidate.v1",
     "agent-cli.response.v1",
     "infralink.observation",
@@ -378,6 +380,7 @@ def boundary_violations(
     violations = [] if _violations is None else _violations
     seen_findings = set() if _seen_findings is None else _seen_findings
     authority_spans: list[tuple[int, int]] = []
+    ssh_fingerprint_spans = [match.span() for match in SSH_FINGERPRINT.finditer(text)]
     bracket_spans: list[tuple[int, int]] = []
     balanced_bracket_spans: list[tuple[int, int]] = []
     generic_bracket_spans: list[tuple[int, int]] = []
@@ -414,6 +417,9 @@ def boundary_violations(
 
     def starts_in_authority_span(span: tuple[int, int]) -> bool:
         return any(start <= span[0] < end for start, end in authority_spans)
+
+    def inside_ssh_fingerprint(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] < end for start, end in ssh_fingerprint_spans)
 
     def inside_bracket_span(span: tuple[int, int]) -> bool:
         return any(start <= span[0] < end for start, end in bracket_spans)
@@ -561,7 +567,8 @@ def boundary_violations(
 
     for match in PORT_AUTHORITY_TOKEN.finditer(text):
         if (
-            not inside_bracket_span(match.span())
+            not inside_ssh_fingerprint(match.span())
+            and not inside_bracket_span(match.span())
             and not inside_balanced_bracket_span(match.span())
             and not inside_generic_bracket_span(match.span())
         ):
@@ -822,6 +829,12 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     punctuation: docs/reference.md...);!? Release v0.2.0...,"\']
     """
     assert boundary_violations(text) == []
+
+
+def test_boundary_detector_allows_canonical_public_ssh_fingerprints() -> None:
+    assert boundary_violations(
+        "fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ) == []
 
 
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
