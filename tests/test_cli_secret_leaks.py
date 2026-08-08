@@ -171,6 +171,40 @@ selection:
 """,
         encoding="utf-8",
     )
+    release_candidate = tmp_path / "release-candidate.json"
+    release_candidate.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-candidate.v1",
+                "release_identity": "releases/core-v2/42",
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "ci_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "576",
+                },
+                "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+                "consumers": ["citadel"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    release_attestation = tmp_path / "release-attestation.json"
+    release_attestation.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-attestation.v1",
+                "release_identity": "releases/core-v2/42",
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "publisher_receipt": {"provider": "woodpecker", "run": "600"},
+                "tag": "releases/core-v2/42",
+                "consumers": ["citadel"],
+            }
+        ),
+        encoding="utf-8",
+    )
     invocations: dict[tuple[str, ...], tuple[list[str], int, bool]] = {
         (): (source, 0, True),
         ("analyze",): (
@@ -294,6 +328,28 @@ selection:
                 "--admission",
                 str(release_admission),
             ],
+            0,
+            True,
+        ),
+        ("release", "validate-candidate"): (
+            ["release", "validate-candidate", "--candidate", str(release_candidate)],
+            0,
+            True,
+        ),
+        ("release", "render-publisher-request"): (
+            [
+                "release",
+                "render-publisher-request",
+                "--candidate",
+                str(release_candidate),
+                "--admission",
+                str(release_admission),
+            ],
+            1,
+            False,
+        ),
+        ("release", "inspect-attestation"): (
+            ["release", "inspect-attestation", "--attestation", str(release_attestation)],
             0,
             True,
         ),

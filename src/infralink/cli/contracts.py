@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePath
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Annotated, Any, Generic, Literal, TypeVar, cast
 
 from pydantic import (
     BaseModel,
@@ -248,6 +248,73 @@ class ReleaseInspectResult(ContractModel):
     publisher: ReleasePublisher
     provenance: ReleaseProvenance
     compatibility: ReleaseCompatibility
+
+
+class ReleaseCiReceipt(ContractModel):
+    provider: str = Field(min_length=1, max_length=128)
+    repository: str = Field(min_length=1, max_length=256)
+    run: str = Field(min_length=1, max_length=128)
+
+
+class ReleaseArtifactBinding(ContractModel):
+    path: str = Field(min_length=1, max_length=256)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+ReleaseConsumer = Annotated[str, Field(min_length=1, max_length=128)]
+
+
+class ReleaseCandidate(ContractModel):
+    identity: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
+    registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    ci_receipt: ReleaseCiReceipt
+    artifacts: list[ReleaseArtifactBinding] = Field(min_length=1, max_length=64)
+    consumers: list[ReleaseConsumer] = Field(min_length=1, max_length=64)
+
+
+class ReleaseCandidateResult(ContractModel):
+    candidate: ReleaseCandidate
+
+
+class PublisherRequest(ContractModel):
+    schema_version: Literal["infralink.publisher-request.v1"]
+    release_identity: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
+    channel: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    sequence: int = Field(ge=1)
+    registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    ci_receipt: ReleaseCiReceipt
+    artifacts: list[ReleaseArtifactBinding] = Field(min_length=1, max_length=64)
+    consumers: list[ReleaseConsumer] = Field(min_length=1, max_length=64)
+
+
+class PublisherRequestResult(ContractModel):
+    publisher_request: PublisherRequest
+
+
+class ReleasePublisherReceipt(ContractModel):
+    provider: str = Field(min_length=1, max_length=128)
+    run: str = Field(min_length=1, max_length=128)
+
+
+class ReleaseAttestation(ContractModel):
+    release_identity: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
+    registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    publisher_receipt: ReleasePublisherReceipt
+    tag: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
+    consumers: list[ReleaseConsumer] = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def tag_matches_release(self) -> ReleaseAttestation:
+        if self.tag != self.release_identity:
+            raise ValueError("tag must match release identity")
+        return self
+
+
+class ReleaseAttestationResult(ContractModel):
+    attestation: ReleaseAttestation
 
 
 class CommandDescriptor(ContractModel):
