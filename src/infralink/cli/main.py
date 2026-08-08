@@ -319,6 +319,29 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             "infralink release inspect --release-validation release-validation.json --admission release-admission.yml"
         ],
     },
+    ("release", "validate-candidate"): {
+        "description": "Validate a local immutable release candidate without publishing it.",
+        "arguments": [],
+        "options": [{"name": "candidate", "type": "path", "required": True}],
+        "examples": ["infralink release validate-candidate --candidate candidate.json"],
+    },
+    ("release", "render-publisher-request"): {
+        "description": "Render, but never invoke, an immutable trusted-publisher request.",
+        "arguments": [],
+        "options": [
+            {"name": "candidate", "type": "path", "required": True},
+            {"name": "admission", "type": "path", "required": True},
+        ],
+        "examples": [
+            "infralink release render-publisher-request --candidate candidate.json --admission admission.yml"
+        ],
+    },
+    ("release", "inspect-attestation"): {
+        "description": "Inspect a publisher completion record without contacting a provider.",
+        "arguments": [],
+        "options": [{"name": "attestation", "type": "path", "required": True}],
+        "examples": ["infralink release inspect-attestation --attestation attestation.json"],
+    },
 }
 
 

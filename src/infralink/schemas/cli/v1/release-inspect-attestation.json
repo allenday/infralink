@@ -1,0 +1,341 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "argv",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "CommandContext": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw": {
+          "title": "Raw",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw",
+        "parsed",
+        "resolved"
+      ],
+      "title": "CommandContext",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "Meta",
+      "type": "object"
+    },
+    "ReleaseAttestation": {
+      "additionalProperties": false,
+      "properties": {
+        "consumers": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Consumers",
+          "type": "array"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "publisher_receipt": {
+          "$ref": "#/$defs/ReleasePublisherReceipt"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "release_identity": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Release Identity",
+          "type": "string"
+        },
+        "tag": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Tag",
+          "type": "string"
+        }
+      },
+      "required": [
+        "release_identity",
+        "registry_commit",
+        "controller_commit",
+        "publisher_receipt",
+        "tag",
+        "consumers"
+      ],
+      "title": "ReleaseAttestation",
+      "type": "object"
+    },
+    "ReleaseAttestationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "attestation": {
+          "$ref": "#/$defs/ReleaseAttestation"
+        }
+      },
+      "required": [
+        "attestation"
+      ],
+      "title": "ReleaseAttestationResult",
+      "type": "object"
+    },
+    "ReleasePublisherReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "run": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "run"
+      ],
+      "title": "ReleasePublisherReceipt",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CommandContext"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseAttestationResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "infralink.cli/v1",
+      "default": "infralink.cli/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "next_actions"
+  ],
+  "title": "Envelope[ReleaseAttestationResult]",
+  "type": "object"
+}
