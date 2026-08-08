@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import PurePath
 from typing import Annotated, Literal
 
@@ -11,6 +13,8 @@ _CHANNEL = r"^[a-z0-9][a-z0-9-]{0,62}$"
 _IDENTITY = r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$"
 _COMMIT = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
+_SOURCE_IDENTITY = r"^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$"
+_OCI_IMAGE_DIGEST = r"^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$"
 
 
 class _Contract(BaseModel):
@@ -102,4 +106,96 @@ class ReleaseAttestationV1(_ReleaseEvidenceV1):
     def tag_matches_release(self) -> ReleaseAttestationV1:
         if self.tag.name != self.release.identity:
             raise ValueError("tag name must match release identity")
+        return self
+
+
+class ImmutableSourceReceiptV2(_Contract):
+    """A receipt whose source cannot be silently retargeted."""
+
+    provider: str = Field(min_length=1, max_length=128)
+    repository: str = Field(min_length=1, max_length=256)
+    run: str = Field(min_length=1, max_length=128)
+    source_identity: str = Field(pattern=_SOURCE_IDENTITY, max_length=512)
+    source_digest: str = Field(pattern=_SHA256)
+
+
+class ArtifactSourceBindingV2(ArtifactBindingV1):
+    """A release artifact and the immutable source from which it was obtained."""
+
+    source_identity: str = Field(pattern=_SOURCE_IDENTITY, max_length=512)
+    source_digest: str = Field(pattern=_SHA256)
+
+
+class PublisherIdentityV2(_Contract):
+    """The protected publisher identity and immutable runner image."""
+
+    identity: ConsumerId
+    image: str = Field(pattern=_OCI_IMAGE_DIGEST, max_length=512)
+
+
+class PublisherRequestV2(_Contract):
+    """Canonical input for one protected publisher invocation."""
+
+    schema_version: Literal["infralink.publisher-request.v2"]
+    release: ReleaseIdentityV1
+    registry_commit: str = Field(pattern=_COMMIT)
+    controller_commit: str = Field(pattern=_COMMIT)
+    ci_receipt: ImmutableSourceReceiptV2
+    artifacts: list[ArtifactSourceBindingV2] = Field(min_length=1, max_length=64)
+    publisher: PublisherIdentityV2
+    mode: Literal["dry-run", "publish"]
+    request_digest: str = Field(pattern=_SHA256)
+
+    @field_validator("artifacts")
+    @classmethod
+    def artifacts_have_unique_sources(
+        cls, value: list[ArtifactSourceBindingV2]
+    ) -> list[ArtifactSourceBindingV2]:
+        if len({artifact.path for artifact in value}) != len(value):
+            raise ValueError("artifact paths must be unique")
+        if len({artifact.source_identity for artifact in value}) != len(value):
+            raise ValueError("artifact source identities must be unique")
+        return value
+
+    def canonical_digest(self) -> str:
+        """Return the SHA-256 of the canonical request without its self-binding field."""
+        body = json.dumps(
+            self.model_dump(mode="json", exclude={"request_digest"}),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        return hashlib.sha256(body).hexdigest()
+
+    @model_validator(mode="after")
+    def request_digest_matches_canonical_payload(self) -> PublisherRequestV2:
+        if self.request_digest != self.canonical_digest():
+            raise ValueError("request_digest must match the canonical request payload")
+        return self
+
+
+class ReleaseAttestationV2(_Contract):
+    """Immutable publisher result bound to the exact canonical v2 request."""
+
+    schema_version: Literal["infralink.release-attestation.v2"]
+    request: PublisherRequestV2
+    request_digest: str = Field(pattern=_SHA256)
+    publisher_receipt: ImmutableSourceReceiptV2
+    result: Literal["dry-run", "published"]
+    tag: ReleaseTagV1 | None = None
+
+    @model_validator(mode="after")
+    def result_matches_request(self) -> ReleaseAttestationV2:
+        if self.request_digest != self.request.canonical_digest():
+            raise ValueError("request_digest must match the canonical publisher request")
+        expected_result = "dry-run" if self.request.mode == "dry-run" else "published"
+        if self.result != expected_result:
+            raise ValueError("attestation result must match the requested mode")
+        if self.result == "published":
+            if self.tag is None:
+                raise ValueError("published attestation requires a tag")
+            if self.tag.name != self.request.release.identity:
+                raise ValueError("tag name must match release identity")
+        elif self.tag is not None:
+            raise ValueError("dry-run attestation must not include a tag")
         return self
