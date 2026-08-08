@@ -454,6 +454,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         "docs": {"docs"},
         "resolve": {"resolve"},
         "secrets": {"secrets-audit", "secrets-inspect"},
+        "release": {"release-inspect"},
         "validate": {"validate", "observation-validate"},
         "capabilities": {"capabilities"},
         "explain": {"explain"},

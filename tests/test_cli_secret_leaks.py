@@ -146,6 +146,31 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
     ]
     monkeypatch.chdir(tmp_path)
     artifacts = Path("artifacts")
+    release_validation = tmp_path / "release-validation.json"
+    release_validation.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-validation.v1",
+                "release_identity": "releases/core-v2/42",
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "annotated": True,
+                "status": "active",
+            }
+        ),
+        encoding="utf-8",
+    )
+    release_admission = tmp_path / "release-admission.yml"
+    release_admission.write_text(
+        """schema_version: infralink.release-admission.v1
+selection:
+  mode: release-channel
+  channel: core-v2
+  recent_window: 20
+  maximum_candidates: 5
+""",
+        encoding="utf-8",
+    )
     invocations: dict[tuple[str, ...], tuple[list[str], int, bool]] = {
         (): (source, 0, True),
         ("analyze",): (
@@ -256,6 +281,18 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
                 str(EXAMPLES / "observation"),
                 "--as-of",
                 "2026-08-04T00:00:00Z",
+            ],
+            0,
+            True,
+        ),
+        ("release", "inspect"): (
+            [
+                "release",
+                "inspect",
+                "--release-validation",
+                str(release_validation),
+                "--admission",
+                str(release_admission),
             ],
             0,
             True,

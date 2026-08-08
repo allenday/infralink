@@ -199,6 +199,57 @@ class Artifact(ContractModel):
         return value
 
 
+class ReleaseFacts(ContractModel):
+    identity: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
+    registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    annotated: bool
+    status: Literal["active", "revoked"]
+
+
+class ReleaseSelection(ContractModel):
+    mode: Literal["release-channel", "raw-revision"]
+    channel: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    recent_window: int | None = Field(default=None, ge=1, le=256)
+    maximum_candidates: int | None = Field(default=None, ge=1, le=32)
+    registry_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+
+
+class ReleaseAdmission(ContractModel):
+    state: Literal["admitted", "not-admitted"]
+    selection: ReleaseSelection
+    reason: Literal["revoked"] | None = None
+
+    @model_validator(mode="after")
+    def require_reason_for_non_admission(self) -> ReleaseAdmission:
+        if (self.state == "not-admitted") != (self.reason is not None):
+            raise ValueError("non-admitted release requires a reason")
+        return self
+
+
+class ReleasePublisher(ContractModel):
+    state: Literal["unavailable", "eligible"]
+    provider: str | None = None
+
+
+class ReleaseProvenance(ContractModel):
+    validation_schema_version: Literal["infralink.release-validation.v1"]
+    source: Literal["release-validation"]
+
+
+class ReleaseCompatibility(ContractModel):
+    selection_mode: Literal["release-channel", "raw-revision"]
+    controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+
+
+class ReleaseInspectResult(ContractModel):
+    release: ReleaseFacts
+    admission: ReleaseAdmission
+    publisher: ReleasePublisher
+    provenance: ReleaseProvenance
+    compatibility: ReleaseCompatibility
+
+
 class CommandDescriptor(ContractModel):
     name: str
     description: str

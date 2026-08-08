@@ -40,6 +40,13 @@ from infralink.cli.contracts import (
     InfoResult,
     Page,
     PageInfo,
+    ReleaseAdmission,
+    ReleaseCompatibility,
+    ReleaseFacts,
+    ReleaseInspectResult,
+    ReleaseProvenance,
+    ReleasePublisher,
+    ReleaseSelection,
     ResolveResult,
     RootResult,
     SecretReferenceStatus,
@@ -75,6 +82,7 @@ SCHEMA_NAMES = (
     "docs",
     "secrets-inspect",
     "secrets-audit",
+    "release-inspect",
     "capabilities",
     "observation-validate",
     "explain",
@@ -425,9 +433,35 @@ def test_all_command_result_contracts_have_typed_minimum_shapes() -> None:
             references=page([secret()]),
             summary={"total": 1, "present": 1, "missing": 0, "accessible": 1, "denied": 0},
         ),
+        ReleaseInspectResult(
+            release=ReleaseFacts(
+                identity="releases/core-v2/42",
+                registry_commit="a" * 40,
+                controller_commit="b" * 40,
+                annotated=True,
+                status="active",
+            ),
+            admission=ReleaseAdmission(
+                state="admitted",
+                selection=ReleaseSelection(
+                    mode="release-channel",
+                    channel="core-v2",
+                    recent_window=20,
+                    maximum_candidates=5,
+                ),
+            ),
+            publisher=ReleasePublisher(state="unavailable"),
+            provenance=ReleaseProvenance(
+                validation_schema_version="infralink.release-validation.v1",
+                source="release-validation",
+            ),
+            compatibility=ReleaseCompatibility(
+                selection_mode="release-channel", controller_commit="b" * 40
+            ),
+        ),
     ]
 
-    assert len(results) == 19
+    assert len(results) == 20
 
 
 @pytest.mark.parametrize("name", SCHEMA_NAMES)
