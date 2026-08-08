@@ -1,0 +1,31 @@
+{
+  "schema_version": "infralink.release-attestation.v1",
+  "release": {
+    "identity": "releases/core-v2/42",
+    "channel": "core-v2",
+    "sequence": 42
+  },
+  "registry_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "controller_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "ci_receipt": {
+    "provider": "woodpecker",
+    "repository": "example/registry",
+    "run": "576"
+  },
+  "artifacts": [
+    {
+      "path": "release/runtime-archive",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "consumers": ["citadel", "watchtower"],
+  "publisher_receipt": {
+    "provider": "woodpecker",
+    "repository": "example/registry",
+    "run": "600"
+  },
+  "tag": {
+    "name": "releases/core-v2/42",
+    "object_sha1": "dddddddddddddddddddddddddddddddddddddddd"
+  }
+}

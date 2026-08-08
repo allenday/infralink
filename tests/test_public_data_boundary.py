@@ -92,6 +92,8 @@ SAFE_DOTTED_TOKENS = {
     "infralink-0.2.0-py3-none-any.whl",
     "infralink-0.2.0.tar.gz",
     "infralink.cli",
+    "infralink.release-attestation.v1",
+    "infralink.release-candidate.v1",
     "agent-cli.response.v1",
     "infralink.observation",
     "nginx.access",
@@ -810,7 +812,8 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     BWS_PROJECT_ID=<project-id>
     BWS_ORGANIZATION_ID=<organization-id>
     export BWS_ORGANIZATION_ID="<organization-uuid>"
-    prose: infralink.cli/v1, manifest.json, and resolver.get are identifiers.
+    prose: infralink.cli/v1, infralink.release-candidate.v1,
+    infralink.release-attestation.v1, manifest.json, and resolver.get are identifiers.
     files: registry.yml, edges.yml, PRD.md, and BACKLOG.md are public files.
     line_refs: README.md:12, manifest.json:12, and registry.yml:12 are public file references.
     path: docs/reference.md is an unambiguous public file path.

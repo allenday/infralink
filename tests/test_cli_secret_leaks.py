@@ -176,7 +176,11 @@ selection:
         json.dumps(
             {
                 "schema_version": "infralink.release-candidate.v1",
-                "release_identity": "releases/core-v2/42",
+                "release": {
+                    "identity": "releases/core-v2/42",
+                    "channel": "core-v2",
+                    "sequence": 42,
+                },
                 "registry_commit": "a" * 40,
                 "controller_commit": "b" * 40,
                 "ci_receipt": {
@@ -195,11 +199,25 @@ selection:
         json.dumps(
             {
                 "schema_version": "infralink.release-attestation.v1",
-                "release_identity": "releases/core-v2/42",
+                "release": {
+                    "identity": "releases/core-v2/42",
+                    "channel": "core-v2",
+                    "sequence": 42,
+                },
                 "registry_commit": "a" * 40,
                 "controller_commit": "b" * 40,
-                "publisher_receipt": {"provider": "woodpecker", "run": "600"},
-                "tag": "releases/core-v2/42",
+                "ci_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "576",
+                },
+                "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+                "publisher_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "600",
+                },
+                "tag": {"name": "releases/core-v2/42", "object_sha1": "d" * 40},
                 "consumers": ["citadel"],
             }
         ),
