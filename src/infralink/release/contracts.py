@@ -15,7 +15,7 @@ _COMMIT = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _SOURCE_IDENTITY = r"^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$"
 _OCI_IMAGE_DIGEST = r"^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$"
-_SSH_FINGERPRINT = r"^SHA256:[A-Za-z0-9+/]{43}=$"
+_SSH_FINGERPRINT = r"^SHA256:[A-Za-z0-9+/]{43}$"
 
 
 class DuplicateJsonKeyError(ValueError):

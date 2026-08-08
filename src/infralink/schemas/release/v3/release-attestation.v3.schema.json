@@ -265,7 +265,7 @@
       "description": "Public SSH signer identity named by a release manifest.",
       "properties": {
         "fingerprint": {
-          "pattern": "^SHA256:[A-Za-z0-9+/]{43}=$",
+          "pattern": "^SHA256:[A-Za-z0-9+/]{43}$",
           "title": "Fingerprint",
           "type": "string"
         },

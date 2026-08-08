@@ -52,7 +52,7 @@ def _v3_request() -> dict[str, object]:
     request["schema_version"] = "infralink.publisher-request.v3"
     signer = {
         "principal": "infralink-release-publisher",
-        "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     }
     request["tag_signer_policy"] = {
         "selector": {
@@ -192,6 +192,37 @@ def test_v3_request_binds_manifest_signer_to_an_immutable_tag_policy() -> None:
     assert request.tag_signer_policy.selector.commit == "a" * 40
     assert request.tag_signer_policy.selector.sha256 == "b" * 64
     assert request.tag_signer_policy.signer == request.manifest_signer
+
+
+def test_v3_request_accepts_the_canonical_unpadded_ssh_fingerprint() -> None:
+    request = PublisherRequestV3.model_validate(_v3_request())
+
+    assert request.manifest_signer.fingerprint == (
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    )
+
+
+@pytest.mark.parametrize(
+    "fingerprint",
+    [
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ],
+)
+def test_v3_request_rejects_noncanonical_ssh_fingerprint(fingerprint: str) -> None:
+    request = _v3_request()
+    policy = request["tag_signer_policy"]
+    assert isinstance(policy, dict)
+    policy_signer = policy["signer"]
+    assert isinstance(policy_signer, dict)
+    policy_signer["fingerprint"] = fingerprint
+    manifest_signer = request["manifest_signer"]
+    assert isinstance(manifest_signer, dict)
+    manifest_signer["fingerprint"] = fingerprint
+    _bind_request_digest(request)
+
+    with pytest.raises(ValidationError, match="fingerprint"):
+        PublisherRequestV3.model_validate(request)
 
 
 def test_v3_published_schema_and_strict_parser_accept_the_public_fixture() -> None:

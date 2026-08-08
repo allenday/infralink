@@ -36,12 +36,12 @@
     },
     "signer": {
       "principal": "infralink-release-publisher",
-      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     }
   },
   "manifest_signer": {
     "principal": "infralink-release-publisher",
-    "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
   },
-  "request_digest": "46e2030b8d42e4f61ee788f543621c5b45700aff056f7bf564d72c3460b1c844"
+  "request_digest": "cb430f4d36f7acb1538863d7c297856194d9fa7057544eeb78747034125e7165"
 }
