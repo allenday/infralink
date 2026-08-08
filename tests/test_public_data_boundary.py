@@ -37,7 +37,7 @@ PORT_AUTHORITY_TOKEN = re.compile(
 URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s`\"'<>]+", re.IGNORECASE)
 PROTOCOL_RELATIVE_AUTHORITY = re.compile(r"//[^\s`\"'<>]+")
 SECRET_TEMPLATE = re.compile(r"\$\{secret:[^}\s]+\}")
-SSH_FINGERPRINT = re.compile(r"(?<![A-Za-z0-9+/])SHA256:[A-Za-z0-9+/]{43}(?![A-Za-z0-9+/])")
+SSH_FINGERPRINT = re.compile(r"(?<![A-Za-z0-9+/])SHA256:[A-Za-z0-9+/]{43}(?![A-Za-z0-9+/=])")
 PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 BRACKET_AUTHORITY_TOKEN = re.compile(r"\[[^\]\s`\"'<>]*\]|\[[^\s`\"'<>]+")
 UUID = re.compile(
@@ -835,6 +835,12 @@ def test_boundary_detector_allows_canonical_public_ssh_fingerprints() -> None:
     assert boundary_violations(
         "fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     ) == []
+
+
+def test_boundary_detector_rejects_padded_ssh_fingerprints() -> None:
+    assert boundary_violations(
+        "fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    ) == ["invalid endpoint authority"]
 
 
 def test_boundary_detector_reports_atomic_authority_findings() -> None:
