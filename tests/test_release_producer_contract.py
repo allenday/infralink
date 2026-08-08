@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,11 +10,17 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from infralink.cli.main import cli
-from infralink.release.contracts import ReleaseAttestationV1, ReleaseCandidateV1
+from infralink.release.contracts import (
+    PublisherRequestV2,
+    ReleaseAttestationV1,
+    ReleaseAttestationV2,
+    ReleaseCandidateV1,
+)
 
 ROOT = Path(__file__).parents[1]
 FIXTURES = ROOT / "examples" / "release"
 SCHEMAS = ROOT / "src" / "infralink" / "schemas" / "release" / "v1"
+V2_SCHEMAS = ROOT / "src" / "infralink" / "schemas" / "release" / "v2"
 
 
 def _fixture(name: str) -> dict[str, object]:
@@ -117,3 +124,88 @@ def test_merged_release_cli_accepts_public_producer_fixtures() -> None:
 
     assert candidate_result.exit_code == 0, candidate_result.output
     assert attestation_result.exit_code == 0, attestation_result.output
+
+
+def test_v2_request_fixture_has_canonical_digest_and_immutable_sources() -> None:
+    request = PublisherRequestV2.model_validate(_fixture("publisher-request.v2.json"))
+
+    assert request.request_digest == request.canonical_digest()
+    assert request.ci_receipt.source_identity == "woodpecker://example.com/registry/pipelines/576"
+    assert request.artifacts[0].source_digest == "e" * 64
+    assert request.publisher.image.endswith("@sha256:" + "f" * 64)
+    assert request.mode == "dry-run"
+
+
+def test_v2_attestation_fixture_binds_the_canonical_request_digest() -> None:
+    attestation = ReleaseAttestationV2.model_validate(_fixture("release-attestation.v2.json"))
+
+    assert attestation.request_digest == attestation.request.canonical_digest()
+    assert attestation.result == "dry-run"
+    assert attestation.tag is None
+
+
+@pytest.mark.parametrize(
+    "fixture_name, model, schema_name",
+    [
+        ("publisher-request.v2.json", PublisherRequestV2, "publisher-request.v2.schema.json"),
+        ("release-attestation.v2.json", ReleaseAttestationV2, "release-attestation.v2.schema.json"),
+    ],
+)
+def test_published_v2_schema_accepts_public_fixture(
+    fixture_name: str,
+    model: type[PublisherRequestV2] | type[ReleaseAttestationV2],
+    schema_name: str,
+) -> None:
+    fixture = _fixture(fixture_name)
+    schema = json.loads((V2_SCHEMAS / schema_name).read_text(encoding="utf-8"))
+
+    Draft202012Validator(schema).validate(fixture)
+    assert model.model_validate(fixture)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("request_digest", "0" * 64),
+        ("registry_commit", "main"),
+        ("publisher", {"identity": "publisher", "image": "publisher:latest"}),
+    ],
+)
+def test_v2_request_rejects_noncanonical_mutable_or_unpinned_input(
+    field: str, value: object
+) -> None:
+    request = _fixture("publisher-request.v2.json")
+    request[field] = value
+
+    with pytest.raises(ValidationError):
+        PublisherRequestV2.model_validate(request)
+
+
+def test_v2_request_rejects_unknown_and_secret_bearing_source_fields() -> None:
+    request = _fixture("publisher-request.v2.json")
+    receipt = request["ci_receipt"]
+    assert isinstance(receipt, dict)
+    receipt["token"] = "not-a-secret"
+
+    with pytest.raises(ValidationError):
+        PublisherRequestV2.model_validate(request)
+
+
+def test_v2_attestation_requires_a_tag_only_when_published() -> None:
+    attestation = _fixture("release-attestation.v2.json")
+    request = attestation["request"]
+    assert isinstance(request, dict)
+    request["mode"] = "publish"
+    request_without_digest = {
+        key: value for key, value in request.items() if key != "request_digest"
+    }
+    request["request_digest"] = hashlib.sha256(
+        json.dumps(
+            request_without_digest, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+        ).encode("ascii")
+    ).hexdigest()
+    attestation["request_digest"] = request["request_digest"]
+    attestation["result"] = "published"
+
+    with pytest.raises(ValidationError, match="published attestation requires a tag"):
+        ReleaseAttestationV2.model_validate(attestation)

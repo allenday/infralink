@@ -93,6 +93,8 @@ SAFE_DOTTED_TOKENS = {
     "infralink-0.2.0.tar.gz",
     "infralink.cli",
     "infralink.release-attestation.v1",
+    "infralink.release-attestation.v2",
+    "infralink.publisher-request.v2",
     "infralink.release-candidate.v1",
     "agent-cli.response.v1",
     "infralink.observation",

@@ -1,0 +1,31 @@
+{
+  "schema_version": "infralink.publisher-request.v2",
+  "release": {
+    "identity": "releases/core-v2/42",
+    "channel": "core-v2",
+    "sequence": 42
+  },
+  "registry_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "controller_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "ci_receipt": {
+    "provider": "woodpecker",
+    "repository": "example/registry",
+    "run": "576",
+    "source_identity": "woodpecker://example.com/registry/pipelines/576",
+    "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "artifacts": [
+    {
+      "path": "release/runtime-archive",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "source_identity": "woodpecker://example.com/registry/artifacts/runtime-archive",
+      "source_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "publisher": {
+    "identity": "infralink-release-publisher-woodpecker",
+    "image": "registry.example.com/infralink/publisher@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "mode": "dry-run",
+  "request_digest": "18352c07018a14bb764fffc9914ffe2ee051e90dd3bedbd0d57f6bad2440e784"
+}
