@@ -832,9 +832,9 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
 
 
 def test_boundary_detector_allows_canonical_public_ssh_fingerprints() -> None:
-    assert boundary_violations(
-        "fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    ) == []
+    assert (
+        boundary_violations("fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") == []
+    )
 
 
 def test_boundary_detector_rejects_padded_ssh_fingerprints() -> None:
