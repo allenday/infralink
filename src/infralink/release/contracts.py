@@ -17,6 +17,24 @@ _SOURCE_IDENTITY = r"^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$"
 _OCI_IMAGE_DIGEST = r"^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$"
 
 
+class DuplicateJsonKeyError(ValueError):
+    """Raised when a strict v2 contract document repeats an object member."""
+
+
+def _reject_duplicate_object_members(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, member in pairs:
+        if key in value:
+            raise DuplicateJsonKeyError(f"duplicate JSON object key: {key!r}")
+        value[key] = member
+    return value
+
+
+def _load_strict_v2_json(document: str | bytes | bytearray) -> object:
+    """Decode a v2 contract document without silently resolving duplicate keys."""
+    return json.loads(document, object_pairs_hook=_reject_duplicate_object_members)
+
+
 class _Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -199,3 +217,13 @@ class ReleaseAttestationV2(_Contract):
         elif self.tag is not None:
             raise ValueError("dry-run attestation must not include a tag")
         return self
+
+
+def parse_publisher_request_v2_json(document: str | bytes | bytearray) -> PublisherRequestV2:
+    """Parse one publisher request through the strict v2 JSON boundary."""
+    return PublisherRequestV2.model_validate(_load_strict_v2_json(document))
+
+
+def parse_release_attestation_v2_json(document: str | bytes | bytearray) -> ReleaseAttestationV2:
+    """Parse one publisher attestation through the strict v2 JSON boundary."""
+    return ReleaseAttestationV2.model_validate(_load_strict_v2_json(document))

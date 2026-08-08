@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -15,12 +16,15 @@ from infralink.release.contracts import (
     ReleaseAttestationV1,
     ReleaseAttestationV2,
     ReleaseCandidateV1,
+    parse_publisher_request_v2_json,
+    parse_release_attestation_v2_json,
 )
 
 ROOT = Path(__file__).parents[1]
 FIXTURES = ROOT / "examples" / "release"
 SCHEMAS = ROOT / "src" / "infralink" / "schemas" / "release" / "v1"
 V2_SCHEMAS = ROOT / "src" / "infralink" / "schemas" / "release" / "v2"
+V2JsonParser = Callable[[str], PublisherRequestV2 | ReleaseAttestationV2]
 
 
 def _fixture(name: str) -> dict[str, object]:
@@ -142,6 +146,54 @@ def test_v2_attestation_fixture_binds_the_canonical_request_digest() -> None:
     assert attestation.request_digest == attestation.request.canonical_digest()
     assert attestation.result == "dry-run"
     assert attestation.tag is None
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "parser"),
+    [
+        ("publisher-request.v2.json", parse_publisher_request_v2_json),
+        ("release-attestation.v2.json", parse_release_attestation_v2_json),
+    ],
+)
+def test_v2_json_parsers_accept_public_fixtures(fixture_name: str, parser: V2JsonParser) -> None:
+    assert parser((FIXTURES / fixture_name).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "parser", "duplicate_member"),
+    [
+        (
+            "publisher-request.v2.json",
+            parse_publisher_request_v2_json,
+            '  "schema_version": "infralink.publisher-request.v2",\n',
+        ),
+        (
+            "publisher-request.v2.json",
+            parse_publisher_request_v2_json,
+            '    "identity": "infralink-release-publisher-woodpecker",\n',
+        ),
+        (
+            "release-attestation.v2.json",
+            parse_release_attestation_v2_json,
+            '  "schema_version": "infralink.release-attestation.v2",\n',
+        ),
+        (
+            "release-attestation.v2.json",
+            parse_release_attestation_v2_json,
+            '      "identity": "infralink-release-publisher-woodpecker",\n',
+        ),
+    ],
+)
+def test_v2_json_parsers_reject_duplicate_object_members(
+    fixture_name: str,
+    parser: V2JsonParser,
+    duplicate_member: str,
+) -> None:
+    document = (FIXTURES / fixture_name).read_text(encoding="utf-8")
+    duplicate_document = document.replace(duplicate_member, duplicate_member * 2, 1)
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        parser(duplicate_document)
 
 
 @pytest.mark.parametrize(
