@@ -15,6 +15,7 @@ _COMMIT = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _SOURCE_IDENTITY = r"^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$"
 _OCI_IMAGE_DIGEST = r"^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$"
+_SSH_FINGERPRINT = r"^SHA256:[A-Za-z0-9+/]{43}=$"
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -151,6 +152,27 @@ class PublisherIdentityV2(_Contract):
     image: str = Field(pattern=_OCI_IMAGE_DIGEST, max_length=512)
 
 
+class ReleaseManifestSignerV1(_Contract):
+    """Public SSH signer identity named by a release manifest."""
+
+    principal: ConsumerId
+    fingerprint: str = Field(pattern=_SSH_FINGERPRINT)
+
+
+class ImmutablePolicySelectorV1(ArtifactBindingV1):
+    """Exact registry blob containing a public tag-signer policy."""
+
+    repository: str = Field(pattern=_SOURCE_IDENTITY, max_length=512)
+    commit: str = Field(pattern=_COMMIT)
+
+
+class PublisherTagSignerPolicyV1(_Contract):
+    """Immutable policy location and the one public signer it authorizes."""
+
+    selector: ImmutablePolicySelectorV1
+    signer: ReleaseManifestSignerV1
+
+
 class PublisherRequestV2(_Contract):
     """Canonical input for one protected publisher invocation."""
 
@@ -192,6 +214,20 @@ class PublisherRequestV2(_Contract):
         return self
 
 
+class PublisherRequestV3(PublisherRequestV2):
+    """V2 request facts plus immutable tag-signer policy provenance."""
+
+    schema_version: Literal["infralink.publisher-request.v3"]
+    tag_signer_policy: PublisherTagSignerPolicyV1
+    manifest_signer: ReleaseManifestSignerV1
+
+    @model_validator(mode="after")
+    def manifest_signer_matches_policy(self) -> PublisherRequestV3:
+        if self.manifest_signer != self.tag_signer_policy.signer:
+            raise ValueError("manifest signer must match tag signer policy")
+        return self
+
+
 class ReleaseAttestationV2(_Contract):
     """Immutable publisher result bound to the exact canonical v2 request."""
 
@@ -219,6 +255,13 @@ class ReleaseAttestationV2(_Contract):
         return self
 
 
+class ReleaseAttestationV3(ReleaseAttestationV2):
+    """Immutable publisher result bound to one canonical v3 request."""
+
+    schema_version: Literal["infralink.release-attestation.v3"]
+    request: PublisherRequestV3
+
+
 def parse_publisher_request_v2_json(document: str | bytes | bytearray) -> PublisherRequestV2:
     """Parse one publisher request through the strict v2 JSON boundary."""
     return PublisherRequestV2.model_validate(_load_strict_v2_json(document))
@@ -227,3 +270,13 @@ def parse_publisher_request_v2_json(document: str | bytes | bytearray) -> Publis
 def parse_release_attestation_v2_json(document: str | bytes | bytearray) -> ReleaseAttestationV2:
     """Parse one publisher attestation through the strict v2 JSON boundary."""
     return ReleaseAttestationV2.model_validate(_load_strict_v2_json(document))
+
+
+def parse_publisher_request_v3_json(document: str | bytes | bytearray) -> PublisherRequestV3:
+    """Parse one publisher request through the strict v3 JSON boundary."""
+    return PublisherRequestV3.model_validate(_load_strict_v2_json(document))
+
+
+def parse_release_attestation_v3_json(document: str | bytes | bytearray) -> ReleaseAttestationV3:
+    """Parse one publisher attestation through the strict v3 JSON boundary."""
+    return ReleaseAttestationV3.model_validate(_load_strict_v2_json(document))

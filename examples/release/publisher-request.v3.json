@@ -1,0 +1,47 @@
+{
+  "schema_version": "infralink.publisher-request.v3",
+  "release": {
+    "identity": "releases/core-v2/42",
+    "channel": "core-v2",
+    "sequence": 42
+  },
+  "registry_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "controller_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "ci_receipt": {
+    "provider": "woodpecker",
+    "repository": "example/registry",
+    "run": "576",
+    "source_identity": "woodpecker://example.com/registry/pipelines/576",
+    "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "artifacts": [
+    {
+      "path": "release/runtime-archive",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "source_identity": "woodpecker://example.com/registry/artifacts/runtime-archive",
+      "source_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "publisher": {
+    "identity": "infralink-release-publisher-woodpecker",
+    "image": "registry.example.com/infralink/publisher@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "mode": "dry-run",
+  "tag_signer_policy": {
+    "selector": {
+      "repository": "gitea://gitea.i.cyberstorm.dev/cyberstorm/infralink-release-publisher",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "release-publisher/allowed-signers.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "signer": {
+      "principal": "infralink-release-publisher",
+      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  },
+  "manifest_signer": {
+    "principal": "infralink-release-publisher",
+    "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  },
+  "request_digest": "46e2030b8d42e4f61ee788f543621c5b45700aff056f7bf564d72c3460b1c844"
+}

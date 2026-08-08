@@ -8,8 +8,10 @@ from typing import Any
 
 from infralink.release.contracts import (
     PublisherRequestV2,
+    PublisherRequestV3,
     ReleaseAttestationV1,
     ReleaseAttestationV2,
+    ReleaseAttestationV3,
     ReleaseCandidateV1,
 )
 
@@ -23,6 +25,10 @@ V2_MODELS: dict[str, Any] = {
     "publisher-request.v2.schema.json": PublisherRequestV2,
     "release-attestation.v2.schema.json": ReleaseAttestationV2,
 }
+V3_MODELS: dict[str, Any] = {
+    "publisher-request.v3.schema.json": PublisherRequestV3,
+    "release-attestation.v3.schema.json": ReleaseAttestationV3,
+}
 
 
 def render_schemas(models: dict[str, Any] = V1_MODELS) -> dict[str, str]:
@@ -35,7 +41,7 @@ def render_schemas(models: dict[str, Any] = V1_MODELS) -> dict[str, str]:
 
 
 def write_schemas(output_root: Path = OUTPUT_ROOT) -> None:
-    for version, models in (("v1", V1_MODELS), ("v2", V2_MODELS)):
+    for version, models in (("v1", V1_MODELS), ("v2", V2_MODELS), ("v3", V3_MODELS)):
         output = output_root / version
         output.mkdir(parents=True, exist_ok=True)
         rendered = render_schemas(models)
