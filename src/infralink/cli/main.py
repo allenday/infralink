@@ -1393,7 +1393,7 @@ def service_show(
 ) -> None:
     from infralink.cli.queries import show_service
 
-    collections = ("hosts", "ports", "protocols")
+    collections = ("hosts", "ports", "protocols", "edges")
     selected = _active_collection(collection, cursor, collections)
     identifiers = {"service_id": service_id}
     if app_id is not None:
@@ -1428,6 +1428,20 @@ def service_show(
         limit=limit,
         fingerprint=fingerprint,
     )
+    health_edges = [edge.id for edge in result.edges.items]
+    actions = []
+    if health_edges:
+        actions.append(
+            action(
+                "check",
+                [
+                    *_root_source_argv(ctx),
+                    "check",
+                    *[argument for edge_id in health_edges for argument in ("--edge", edge_id)],
+                ],
+                "Run direct health checks for these related edges",
+            )
+        )
     _emit_query_result(
         ctx=ctx,
         path=["service", "show"],
@@ -1439,6 +1453,7 @@ def service_show(
         ],
         result=result,
         limit=limit,
+        extra_actions=actions,
     )
 
 
@@ -1494,6 +1509,13 @@ def edge_show(
         command_argv=["edge", "show", edge_id],
         result=result,
         limit=limit,
+        extra_actions=[
+            action(
+                "check",
+                [*_root_source_argv(ctx), "check", "--edge", edge_id],
+                "Run a direct health check for this edge",
+            )
+        ],
     )
 
 

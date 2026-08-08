@@ -426,6 +426,7 @@ class ServiceShowResult(ContractModel):
     hosts: Page[str]
     ports: Page[int]
     protocols: Page[str]
+    edges: Page[EdgeSummary]
 
 
 class EdgeListResult(ContractModel):

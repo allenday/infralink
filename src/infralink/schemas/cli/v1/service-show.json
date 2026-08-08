@@ -104,6 +104,68 @@
       "title": "CommandContext",
       "type": "object"
     },
+    "EdgeSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "additionalProperties": true,
+          "title": "From",
+          "type": "object"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "protocol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Protocol"
+        },
+        "secret_ref_count": {
+          "title": "Secret Ref Count",
+          "type": "integer"
+        },
+        "secret_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Secret Refs",
+          "type": "array"
+        },
+        "secret_refs_truncated": {
+          "title": "Secret Refs Truncated",
+          "type": "boolean"
+        },
+        "to": {
+          "additionalProperties": true,
+          "title": "To",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "from",
+        "to",
+        "protocol",
+        "secret_ref_count",
+        "secret_refs",
+        "secret_refs_truncated"
+      ],
+      "title": "EdgeSummary",
+      "type": "object"
+    },
     "ErrorDetail": {
       "additionalProperties": false,
       "properties": {
@@ -187,6 +249,27 @@
       "title": "PageInfo",
       "type": "object"
     },
+    "Page_EdgeSummary_": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/EdgeSummary"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "page": {
+          "$ref": "#/$defs/PageInfo"
+        }
+      },
+      "required": [
+        "items",
+        "page"
+      ],
+      "title": "Page[EdgeSummary]",
+      "type": "object"
+    },
     "Page_int_": {
       "additionalProperties": false,
       "properties": {
@@ -232,6 +315,9 @@
     "ServiceShowResult": {
       "additionalProperties": false,
       "properties": {
+        "edges": {
+          "$ref": "#/$defs/Page_EdgeSummary_"
+        },
         "hosts": {
           "$ref": "#/$defs/Page_str_"
         },
@@ -249,7 +335,8 @@
         "service",
         "hosts",
         "ports",
-        "protocols"
+        "protocols",
+        "edges"
       ],
       "title": "ServiceShowResult",
       "type": "object"
