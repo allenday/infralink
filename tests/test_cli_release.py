@@ -104,6 +104,18 @@ def _attestation(path: Path, **overrides: object) -> Path:
     return path
 
 
+def _publisher_request_v2(path: Path) -> Path:
+    source = Path(__file__).resolve().parents[1] / "examples/release/publisher-request.v2.json"
+    path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
+
+
+def _attestation_v2(path: Path) -> Path:
+    source = Path(__file__).resolve().parents[1] / "examples/release/release-attestation.v2.json"
+    path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
+
+
 def _payload(result) -> dict[str, object]:
     assert result.stderr == ""
     assert result.output.count("\n") == 1
@@ -206,6 +218,56 @@ def test_release_render_publisher_request_binds_only_immutable_candidate_inputs(
     }
 
 
+def test_release_render_publisher_request_accepts_the_registry_rendered_v2_request(
+    tmp_path: Path,
+) -> None:
+    request = _publisher_request_v2(tmp_path / "publisher-request.v2.json")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "release",
+            "render-publisher-request",
+            "--publisher-request",
+            str(request),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = _payload(result)
+    assert_schema(payload, "release-render-publisher-request")
+    rendered = payload["result"]["publisher_request"]
+    assert rendered["schema_version"] == "infralink.publisher-request.v2"
+    assert (
+        rendered["request_digest"]
+        == "18352c07018a14bb764fffc9914ffe2ee051e90dd3bedbd0d57f6bad2440e784"
+    )
+    assert rendered["ci_receipt"]["source_identity"].startswith("woodpecker://")
+    assert [item["rel"] for item in payload["next_actions"]] == ["inspect-attestation"]
+
+
+def test_release_render_publisher_request_rejects_noncanonical_v2_request_digest(
+    tmp_path: Path,
+) -> None:
+    request = _publisher_request_v2(tmp_path / "publisher-request.v2.json")
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    payload["request_digest"] = "0" * 64
+    request.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "release",
+            "render-publisher-request",
+            "--publisher-request",
+            str(request),
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert _payload(result)["error"]["code"] == "release_publisher_request_invalid"
+
+
 def test_release_render_publisher_request_is_clear_no_go_when_publisher_is_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -251,6 +313,23 @@ def test_release_inspect_attestation_reports_consumer_shadow_actions(tmp_path: P
     )
     assert payload["result"]["attestation"]["consumers"] == ["citadel", "watchtower"]
     assert payload["next_actions"] == []
+
+
+def test_release_inspect_attestation_reads_the_strict_v2_completion_record(tmp_path: Path) -> None:
+    attestation = _attestation_v2(tmp_path / "release-attestation.v2.json")
+
+    result = CliRunner().invoke(
+        cli, ["release", "inspect-attestation", "--attestation", str(attestation)]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = _payload(result)
+    assert_schema(payload, "release-inspect-attestation")
+    output = payload["result"]["attestation"]
+    assert output["schema_version"] == "infralink.release-attestation.v2"
+    assert output["request"]["schema_version"] == "infralink.publisher-request.v2"
+    assert output["result"] == "dry-run"
+    assert output["tag"] is None
 
 
 def test_release_validate_candidate_rejects_mutable_branch_authority(tmp_path: Path) -> None:

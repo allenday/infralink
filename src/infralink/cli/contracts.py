@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from infralink.release.contracts import PublisherRequestV2, ReleaseAttestationV2
+
 T = TypeVar("T")
 
 
@@ -290,7 +292,7 @@ class PublisherRequest(ContractModel):
 
 
 class PublisherRequestResult(ContractModel):
-    publisher_request: PublisherRequest
+    publisher_request: PublisherRequest | PublisherRequestV2
 
 
 class ReleasePublisherReceipt(ContractModel):
@@ -318,7 +320,7 @@ class ReleaseAttestation(ContractModel):
 
 
 class ReleaseAttestationResult(ContractModel):
-    attestation: ReleaseAttestation
+    attestation: ReleaseAttestation | ReleaseAttestationV2
 
 
 class CommandDescriptor(ContractModel):

@@ -51,8 +51,12 @@ from infralink.cli.output import ok_envelope
 from infralink.release.contracts import (
     ArtifactBindingV1,
     CiReceiptV1,
+    PublisherRequestV2,
     ReleaseAttestationV1,
+    ReleaseAttestationV2,
     ReleaseCandidateV1,
+    parse_publisher_request_v2_json,
+    parse_release_attestation_v2_json,
 )
 
 _IDENTITY = re.compile(r"^releases/([a-z0-9][a-z0-9-]{0,62})/([1-9][0-9]*)$")
@@ -185,6 +189,7 @@ def _invalid(kind: str, message: str, details: dict[str, Any]) -> CliFailure:
         "validation": ErrorCode.RELEASE_VALIDATION_INVALID,
         "admission": ErrorCode.RELEASE_ADMISSION_REJECTED,
         "candidate": ErrorCode.RELEASE_CANDIDATE_INVALID,
+        "publisher-request": ErrorCode.RELEASE_PUBLISHER_REQUEST_INVALID,
         "attestation": ErrorCode.RELEASE_ATTESTATION_INVALID,
     }[kind]
     return CliFailure(
@@ -242,7 +247,38 @@ def _parse_candidate(path: Path) -> _CandidateDocument | _LegacyCandidateDocumen
             ) from error
 
 
-def _parse_attestation(path: Path) -> _AttestationDocument | _LegacyAttestationDocument:
+def _parse_publisher_request_v2(path: Path) -> PublisherRequestV2:
+    try:
+        return parse_publisher_request_v2_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, ValidationError) as error:
+        raise _invalid(
+            "publisher-request",
+            "does not match infralink.publisher-request.v2",
+            {"path": str(path)},
+        ) from error
+
+
+def _parse_attestation(
+    path: Path,
+) -> _AttestationDocument | _LegacyAttestationDocument | ReleaseAttestationV2:
+    try:
+        raw = path.read_text(encoding="utf-8")
+        discriminator = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        raw = None
+        discriminator = None
+    if isinstance(discriminator, dict) and discriminator.get("schema_version") == (
+        "infralink.release-attestation.v2"
+    ):
+        try:
+            assert raw is not None
+            return parse_release_attestation_v2_json(raw)
+        except (ValueError, ValidationError) as error:
+            raise _invalid(
+                "attestation",
+                "does not match infralink.release-attestation.v2",
+                {"path": str(path)},
+            ) from error
     try:
         return _AttestationDocument.model_validate(_load(path, kind="attestation"))
     except (ValidationError, TypeError) as error:
@@ -411,14 +447,55 @@ def validate_candidate(candidate: Path) -> None:
 
 
 @release.command(name="render-publisher-request")
-@click.option(
-    "--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True
-)
-@click.option(
-    "--admission", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True
-)
-def render_publisher_request(candidate: Path, admission: Path) -> None:
-    """Render, but never invoke, an immutable trusted-publisher request."""
+@click.option("--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--admission", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--publisher-request", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def render_publisher_request(
+    candidate: Path | None, admission: Path | None, publisher_request: Path | None
+) -> None:
+    """Inspect a registry-rendered v2 request, or render legacy v1 evidence only."""
+    if publisher_request is not None:
+        if candidate is not None or admission is not None:
+            raise _invalid(
+                "publisher-request",
+                "must be supplied without legacy candidate or admission inputs",
+                {"path": str(publisher_request)},
+            )
+        _emit(
+            ok_envelope(
+                _context_for(path=["release", "render-publisher-request"]),
+                PublisherRequestResult(
+                    publisher_request=_parse_publisher_request_v2(publisher_request)
+                ),
+                [
+                    action(
+                        "inspect-attestation",
+                        [
+                            "infralink",
+                            "release",
+                            "inspect-attestation",
+                            "--attestation",
+                            "{attestation}",
+                        ],
+                        "Inspect the immutable publisher attestation after the trusted publisher completes",
+                        bindings={
+                            "attestation": Binding(
+                                type="string",
+                                required=True,
+                                source="trusted publisher completion record path",
+                            )
+                        },
+                    )
+                ],
+            )
+        )
+        return
+    if candidate is None or admission is None:
+        raise _invalid(
+            "publisher-request",
+            "requires --publisher-request or both legacy --candidate and --admission inputs",
+            {},
+        )
     candidate_document = _parse_candidate(candidate)
     try:
         admission_document = _AdmissionDocument.model_validate(_load(admission, kind="admission"))
@@ -499,7 +576,9 @@ def render_publisher_request(candidate: Path, admission: Path) -> None:
 def inspect_attestation(attestation: Path) -> None:
     """Inspect a publisher completion record without contacting a provider."""
     value = _parse_attestation(attestation)
-    if isinstance(value, _LegacyAttestationDocument):
+    if isinstance(value, ReleaseAttestationV2):
+        output: ReleaseAttestation | ReleaseAttestationV2 = value
+    elif isinstance(value, _LegacyAttestationDocument):
         output = ReleaseAttestation(
             release_identity=value.release_identity,
             registry_commit=value.registry_commit,
