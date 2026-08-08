@@ -387,6 +387,7 @@ def test_all_command_result_contracts_have_typed_minimum_shapes() -> None:
             hosts=page(["host-1"]),
             ports=page([443]),
             protocols=page(["https"]),
+            edges=page([edge()]),
         ),
         EdgeListResult(items=[edge()], page=PageInfo(limit=100, returned=1, total=1)),
         EdgeShowResult(edge=edge(), secret_refs=page(["secret://api"])),

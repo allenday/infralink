@@ -161,6 +161,28 @@ def test_check_empty_filters_are_healthy_typed_result() -> None:
     _schema_validate(payload)
 
 
+def test_failed_check_advertises_edge_inspection_and_resolution_repairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edge_id = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
+    monkeypatch.setattr(
+        "infralink.cli.check.check_edge_health",
+        lambda edge, resolver, timeout: _health(
+            edge.id,
+            healthy=False,
+            error_code="timeout",
+        ),
+    )
+
+    result = _invoke("--edge", edge_id)
+    payload = json.loads(result.output)
+    actions = {item["rel"]: item["argv"] for item in payload["next_actions"]}
+
+    assert result.exit_code == 1
+    assert actions["show"][-3:] == ["edge", "show", edge_id]
+    assert actions["resolve"][-2:] == ["resolve", edge_id]
+
+
 def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

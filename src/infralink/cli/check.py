@@ -6,6 +6,7 @@ import json
 
 import click
 
+from infralink.cli.actions import action
 from infralink.cli.contracts import CheckCommandResult, CheckResult, CheckSummary
 from infralink.cli.main import (
     Context,
@@ -14,6 +15,7 @@ from infralink.cli.main import (
     _emit_query_result,
     _page_offset,
     _page_options,
+    _root_source_argv,
     _topology_fingerprint,
     pass_context,
 )
@@ -165,6 +167,21 @@ def check(
         limit=limit,
         fingerprint=fingerprint,
     )
+    failed = next((item for item in command_result.checks.items if not item.healthy), None)
+    repairs = []
+    if failed is not None:
+        repairs = [
+            action(
+                "show",
+                [*_root_source_argv(ctx), "edge", "show", failed.edge_id],
+                "Inspect the failed edge",
+            ),
+            action(
+                "resolve",
+                [*_root_source_argv(ctx), "resolve", failed.edge_id],
+                "Resolve the failed edge target",
+            ),
+        ]
     command_argv = ["check"]
     for edge_id in edge_ids:
         command_argv.extend(["--edge", edge_id])
@@ -181,5 +198,6 @@ def check(
         command_argv=command_argv,
         result=command_result,
         limit=limit,
+        extra_actions=repairs,
     )
     return 0 if command_result.healthy else 1

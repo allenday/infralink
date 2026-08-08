@@ -203,6 +203,7 @@ def test_detail_queries_return_complete_typed_pages(registry: Registry, edges: E
     assert host.services.page.total == 2
     assert service.service.id == "api"
     assert service.hosts.items == [HOST_B, HOST_C, HOST_D]
+    assert [item.id for item in service.edges.items] == [EDGE_A, EDGE_B, EDGE_C, EDGE_D]
     assert edge.edge.id == EDGE_A
     assert edge.secret_refs.items == ["safe-ref-name"]
     assert app.app.edge_count == 3
@@ -350,6 +351,54 @@ def test_cli_edge_detail_matches_existing_schema(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     Draft202012Validator(schema).validate(payload)
+
+
+def test_cli_inspection_advertises_scoped_direct_health_actions(tmp_path: Path) -> None:
+    registry_path, edges_path = _write_cli_inputs(tmp_path, with_edge=True)
+
+    edge_payload = _payload(_invoke(registry_path, edges_path, "edge", "show", EDGE_A))
+    service_payload = _payload(
+        _invoke(registry_path, edges_path, "service", "show", "service-0001")
+    )
+
+    edge_action = next(
+        item
+        for item in edge_payload["next_actions"]
+        if item["rel"] == "check" and item["argv"][-2:] == ["--edge", EDGE_A]
+    )
+    service_action = next(
+        item for item in service_payload["next_actions"] if item["rel"] == "check"
+    )
+    assert edge_action["argv"] == [
+        "infralink",
+        "--registry",
+        str(registry_path),
+        "--edges",
+        str(edges_path),
+        "check",
+        "--edge",
+        EDGE_A,
+    ]
+    assert service_payload["result"]["edges"]["items"] == [
+        {
+            "id": EDGE_A,
+            "type": "api",
+            "from": {
+                "hosts": ["00000000-0000-4000-8000-000000000000"],
+                "service": "service-0000",
+            },
+            "to": {
+                "host": "00000000-0000-4000-8000-000000000001",
+                "service": "service-0001",
+                "port": 443,
+            },
+            "protocol": "https",
+            "secret_ref_count": 0,
+            "secret_refs": [],
+            "secret_refs_truncated": False,
+        }
+    ]
+    assert service_action["argv"] == edge_action["argv"]
 
 
 def test_cli_cursor_resumes_without_duplicates_and_exposes_exact_binding(

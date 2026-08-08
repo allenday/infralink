@@ -274,12 +274,14 @@ def show_service(
 ) -> ServiceShowResult:
     if app_id is None:
         identities = _service_identities(registry, edges)
+        related_edge_set = list(edges)
     else:
         application = registry.applications.get_application(app_id)
         if application is None:
             raise entity_not_found("app", app_id)
         app_edges = _app_edges(application, registry, edges)
         identities = _app_service_identities(application, registry, app_edges)
+        related_edge_set = app_edges
     identity = identities.get(service_id)
     if identity is None:
         raise entity_not_found("service", service_id)
@@ -287,6 +289,14 @@ def show_service(
     hosts = sorted(identity.hosts)
     ports = sorted(identity.ports)
     protocols = sorted(identity.protocols)
+    related_edges = sorted(
+        (
+            edge
+            for edge in related_edge_set
+            if edge.source_service == service_id or edge.target_service == service_id
+        ),
+        key=lambda edge: edge.id,
+    )
     cursors = next_cursors or {}
     return ServiceShowResult(
         service=service_summary(service_id, identity),
@@ -307,6 +317,12 @@ def show_service(
             limit=limit,
             offset=offset if selected == "protocols" else 0,
             next_cursor=cursors.get("protocols", next_cursor if selected == "protocols" else None),
+        ),
+        edges=page_items(
+            [edge_summary(edge) for edge in related_edges],
+            limit=limit,
+            offset=offset if selected == "edges" else 0,
+            next_cursor=cursors.get("edges", next_cursor if selected == "edges" else None),
         ),
     )
 
