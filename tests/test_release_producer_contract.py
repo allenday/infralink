@@ -198,9 +198,7 @@ def test_v3_published_schema_and_strict_parser_accept_the_public_fixture() -> No
     fixture_path = FIXTURES / "publisher-request.v3.json"
     fixture = _fixture(fixture_path.name)
     schema = json.loads(
-        (V2_SCHEMAS.parent / "v3" / "publisher-request.v3.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (V2_SCHEMAS.parent / "v3" / "publisher-request.v3.schema.json").read_text(encoding="utf-8")
     )
 
     Draft202012Validator(schema).validate(fixture)
@@ -217,9 +215,7 @@ def test_v3_attestation_carries_the_bound_v3_request() -> None:
     parsed = ReleaseAttestationV3.model_validate(attestation)
 
     assert parsed.request.manifest_signer == parsed.request.tag_signer_policy.signer
-    assert parse_release_attestation_v3_json(
-        json.dumps(attestation, separators=(",", ":"))
-    )
+    assert parse_release_attestation_v3_json(json.dumps(attestation, separators=(",", ":")))
 
 
 @pytest.mark.parametrize(
