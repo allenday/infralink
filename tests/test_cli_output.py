@@ -61,6 +61,8 @@ def test_error_codes_are_stable_strings() -> None:
         "PROVIDER_AUTHENTICATION_FAILED": "provider_authentication_failed",
         "PROVIDER_AUTHORIZATION_FAILED": "provider_authorization_failed",
         "PROVIDER_TIMEOUT": "provider_timeout",
+        "RELEASE_VALIDATION_INVALID": "release_validation_invalid",
+        "RELEASE_ADMISSION_REJECTED": "release_admission_rejected",
         "INTERNAL_ERROR": "internal_error",
     }
     assert isinstance(ErrorCode.USAGE_ERROR, str)

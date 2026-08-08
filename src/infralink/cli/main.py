@@ -185,6 +185,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "description": "Explain an observation diagnostic code.",
         "usage": "infralink explain ERROR_CODE",
     },
+    "release": {
+        "description": "Inspect validated immutable registry releases.",
+        "usage": "infralink release inspect --release-validation PATH --admission PATH",
+    },
 }
 
 
@@ -295,6 +299,25 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "arguments": [],
         "options": [],
         "examples": ["infralink secrets audit"],
+    },
+    ("release",): {
+        "description": "Inspect validated immutable registry releases.",
+        "arguments": [],
+        "options": [],
+        "examples": [
+            "infralink release inspect --release-validation release-validation.json --admission release-admission.yml"
+        ],
+    },
+    ("release", "inspect"): {
+        "description": "Inspect a validated release against bounded local admission policy.",
+        "arguments": [],
+        "options": [
+            {"name": "release_validation", "type": "path", "required": True},
+            {"name": "admission", "type": "path", "required": True},
+        ],
+        "examples": [
+            "infralink release inspect --release-validation release-validation.json --admission release-admission.yml"
+        ],
     },
 }
 
@@ -639,6 +662,10 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.secrets import secrets
 
         return secrets
+    if name == "release":
+        from infralink.cli.release import release
+
+        return release
     return None
 
 

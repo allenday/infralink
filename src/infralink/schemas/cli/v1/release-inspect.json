@@ -1,0 +1,508 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "argv",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "CommandContext": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw": {
+          "title": "Raw",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw",
+        "parsed",
+        "resolved"
+      ],
+      "title": "CommandContext",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "Meta",
+      "type": "object"
+    },
+    "ReleaseAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "const": "revoked",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "selection": {
+          "$ref": "#/$defs/ReleaseSelection"
+        },
+        "state": {
+          "enum": [
+            "admitted",
+            "not-admitted"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "selection"
+      ],
+      "title": "ReleaseAdmission",
+      "type": "object"
+    },
+    "ReleaseCompatibility": {
+      "additionalProperties": false,
+      "properties": {
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "selection_mode": {
+          "enum": [
+            "release-channel",
+            "raw-revision"
+          ],
+          "title": "Selection Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "selection_mode",
+        "controller_commit"
+      ],
+      "title": "ReleaseCompatibility",
+      "type": "object"
+    },
+    "ReleaseFacts": {
+      "additionalProperties": false,
+      "properties": {
+        "annotated": {
+          "title": "Annotated",
+          "type": "boolean"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "identity": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Identity",
+          "type": "string"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "registry_commit",
+        "controller_commit",
+        "annotated",
+        "status"
+      ],
+      "title": "ReleaseFacts",
+      "type": "object"
+    },
+    "ReleaseInspectResult": {
+      "additionalProperties": false,
+      "properties": {
+        "admission": {
+          "$ref": "#/$defs/ReleaseAdmission"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/ReleaseCompatibility"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ReleaseProvenance"
+        },
+        "publisher": {
+          "$ref": "#/$defs/ReleasePublisher"
+        },
+        "release": {
+          "$ref": "#/$defs/ReleaseFacts"
+        }
+      },
+      "required": [
+        "release",
+        "admission",
+        "publisher",
+        "provenance",
+        "compatibility"
+      ],
+      "title": "ReleaseInspectResult",
+      "type": "object"
+    },
+    "ReleaseProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "const": "release-validation",
+          "title": "Source",
+          "type": "string"
+        },
+        "validation_schema_version": {
+          "const": "infralink.release-validation.v1",
+          "title": "Validation Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "validation_schema_version",
+        "source"
+      ],
+      "title": "ReleaseProvenance",
+      "type": "object"
+    },
+    "ReleasePublisher": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "state": {
+          "enum": [
+            "unavailable",
+            "eligible"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "ReleasePublisher",
+      "type": "object"
+    },
+    "ReleaseSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Channel"
+        },
+        "maximum_candidates": {
+          "anyOf": [
+            {
+              "maximum": 32,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum Candidates"
+        },
+        "mode": {
+          "enum": [
+            "release-channel",
+            "raw-revision"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "recent_window": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recent Window"
+        },
+        "registry_commit": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Commit"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "ReleaseSelection",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CommandContext"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseInspectResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "infralink.cli/v1",
+      "default": "infralink.cli/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "next_actions"
+  ],
+  "title": "Envelope[ReleaseInspectResult]",
+  "type": "object"
+}
