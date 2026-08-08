@@ -326,14 +326,16 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink release validate-candidate --candidate candidate.json"],
     },
     ("release", "render-publisher-request"): {
-        "description": "Render, but never invoke, an immutable trusted-publisher request.",
+        "description": "Inspect a registry-rendered v2 publisher request without invoking it.",
         "arguments": [],
         "options": [
-            {"name": "candidate", "type": "path", "required": True},
-            {"name": "admission", "type": "path", "required": True},
+            {"name": "publisher_request", "type": "path", "required": False},
+            {"name": "candidate", "type": "path", "required": False},
+            {"name": "admission", "type": "path", "required": False},
         ],
         "examples": [
-            "infralink release render-publisher-request --candidate candidate.json --admission admission.yml"
+            "infralink release render-publisher-request --publisher-request publisher-request.v2.json",
+            "infralink release render-publisher-request --candidate candidate.json --admission admission.yml",
         ],
     },
     ("release", "inspect-attestation"): {

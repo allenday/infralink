@@ -49,6 +49,42 @@
       "title": "Action",
       "type": "object"
     },
+    "ArtifactSourceBindingV2": {
+      "additionalProperties": false,
+      "description": "A release artifact and the immutable source from which it was obtained.",
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "source_identity": {
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$",
+          "title": "Source Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "source_identity",
+        "source_digest"
+      ],
+      "title": "ArtifactSourceBindingV2",
+      "type": "object"
+    },
     "Binding": {
       "additionalProperties": false,
       "properties": {
@@ -128,6 +164,50 @@
       "title": "ErrorDetail",
       "type": "object"
     },
+    "ImmutableSourceReceiptV2": {
+      "additionalProperties": false,
+      "description": "A receipt whose source cannot be silently retargeted.",
+      "properties": {
+        "provider": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "run": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        },
+        "source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "source_identity": {
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$",
+          "title": "Source Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "repository",
+        "run",
+        "source_identity",
+        "source_digest"
+      ],
+      "title": "ImmutableSourceReceiptV2",
+      "type": "object"
+    },
     "Meta": {
       "additionalProperties": false,
       "properties": {
@@ -138,6 +218,31 @@
         }
       },
       "title": "Meta",
+      "type": "object"
+    },
+    "PublisherIdentityV2": {
+      "additionalProperties": false,
+      "description": "The protected publisher identity and immutable runner image.",
+      "properties": {
+        "identity": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Identity",
+          "type": "string"
+        },
+        "image": {
+          "maxLength": 512,
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$",
+          "title": "Image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "image"
+      ],
+      "title": "PublisherIdentityV2",
       "type": "object"
     },
     "PublisherRequest": {
@@ -215,13 +320,86 @@
       "additionalProperties": false,
       "properties": {
         "publisher_request": {
-          "$ref": "#/$defs/PublisherRequest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublisherRequest"
+            },
+            {
+              "$ref": "#/$defs/PublisherRequestV2"
+            }
+          ],
+          "title": "Publisher Request"
         }
       },
       "required": [
         "publisher_request"
       ],
       "title": "PublisherRequestResult",
+      "type": "object"
+    },
+    "PublisherRequestV2": {
+      "additionalProperties": false,
+      "description": "Canonical input for one protected publisher invocation.",
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSourceBindingV2"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "ci_receipt": {
+          "$ref": "#/$defs/ImmutableSourceReceiptV2"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "dry-run",
+            "publish"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "publisher": {
+          "$ref": "#/$defs/PublisherIdentityV2"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "release": {
+          "$ref": "#/$defs/ReleaseIdentityV1"
+        },
+        "request_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Digest",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "infralink.publisher-request.v2",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "release",
+        "registry_commit",
+        "controller_commit",
+        "ci_receipt",
+        "artifacts",
+        "publisher",
+        "mode",
+        "request_digest"
+      ],
+      "title": "PublisherRequestV2",
       "type": "object"
     },
     "ReleaseArtifactBinding": {
@@ -274,6 +452,34 @@
         "run"
       ],
       "title": "ReleaseCiReceipt",
+      "type": "object"
+    },
+    "ReleaseIdentityV1": {
+      "additionalProperties": false,
+      "description": "Immutable release identity, expressed redundantly for simple CI consumers.",
+      "properties": {
+        "channel": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Channel",
+          "type": "string"
+        },
+        "identity": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Identity",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "identity",
+        "channel",
+        "sequence"
+      ],
+      "title": "ReleaseIdentityV1",
       "type": "object"
     }
   },
