@@ -15,6 +15,7 @@ _COMMIT = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _SOURCE_IDENTITY = r"^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$"
 _OCI_IMAGE_DIGEST = r"^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$"
+_SSH_FINGERPRINT = r"^SHA256:[A-Za-z0-9+/]{43}$"
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -151,6 +152,27 @@ class PublisherIdentityV2(_Contract):
     image: str = Field(pattern=_OCI_IMAGE_DIGEST, max_length=512)
 
 
+class ReleaseManifestSignerV1(_Contract):
+    """Public SSH signer identity named by a release manifest."""
+
+    principal: ConsumerId
+    fingerprint: str = Field(pattern=_SSH_FINGERPRINT)
+
+
+class ImmutablePolicySelectorV1(ArtifactBindingV1):
+    """Exact registry blob containing a public tag-signer policy."""
+
+    repository: str = Field(pattern=_SOURCE_IDENTITY, max_length=512)
+    commit: str = Field(pattern=_COMMIT)
+
+
+class PublisherTagSignerPolicyV1(_Contract):
+    """Immutable policy location and the one public signer it authorizes."""
+
+    selector: ImmutablePolicySelectorV1
+    signer: ReleaseManifestSignerV1
+
+
 class PublisherRequestV2(_Contract):
     """Canonical input for one protected publisher invocation."""
 
@@ -192,6 +214,55 @@ class PublisherRequestV2(_Contract):
         return self
 
 
+class PublisherRequestV3(_Contract):
+    """V2 request facts plus immutable tag-signer policy provenance."""
+
+    schema_version: Literal["infralink.publisher-request.v3"]
+    release: ReleaseIdentityV1
+    registry_commit: str = Field(pattern=_COMMIT)
+    controller_commit: str = Field(pattern=_COMMIT)
+    ci_receipt: ImmutableSourceReceiptV2
+    artifacts: list[ArtifactSourceBindingV2] = Field(min_length=1, max_length=64)
+    publisher: PublisherIdentityV2
+    mode: Literal["dry-run", "publish"]
+    request_digest: str = Field(pattern=_SHA256)
+    tag_signer_policy: PublisherTagSignerPolicyV1
+    manifest_signer: ReleaseManifestSignerV1
+
+    @field_validator("artifacts")
+    @classmethod
+    def artifacts_have_unique_sources(
+        cls, value: list[ArtifactSourceBindingV2]
+    ) -> list[ArtifactSourceBindingV2]:
+        if len({artifact.path for artifact in value}) != len(value):
+            raise ValueError("artifact paths must be unique")
+        if len({artifact.source_identity for artifact in value}) != len(value):
+            raise ValueError("artifact source identities must be unique")
+        return value
+
+    def canonical_digest(self) -> str:
+        """Return the SHA-256 of the canonical request without its self-binding field."""
+        body = json.dumps(
+            self.model_dump(mode="json", exclude={"request_digest"}),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        return hashlib.sha256(body).hexdigest()
+
+    @model_validator(mode="after")
+    def request_digest_matches_canonical_payload(self) -> PublisherRequestV3:
+        if self.request_digest != self.canonical_digest():
+            raise ValueError("request_digest must match the canonical request payload")
+        return self
+
+    @model_validator(mode="after")
+    def manifest_signer_matches_policy(self) -> PublisherRequestV3:
+        if self.manifest_signer != self.tag_signer_policy.signer:
+            raise ValueError("manifest signer must match tag signer policy")
+        return self
+
+
 class ReleaseAttestationV2(_Contract):
     """Immutable publisher result bound to the exact canonical v2 request."""
 
@@ -219,6 +290,33 @@ class ReleaseAttestationV2(_Contract):
         return self
 
 
+class ReleaseAttestationV3(_Contract):
+    """Immutable publisher result bound to one canonical v3 request."""
+
+    schema_version: Literal["infralink.release-attestation.v3"]
+    request: PublisherRequestV3
+    request_digest: str = Field(pattern=_SHA256)
+    publisher_receipt: ImmutableSourceReceiptV2
+    result: Literal["dry-run", "published"]
+    tag: ReleaseTagV1 | None = None
+
+    @model_validator(mode="after")
+    def result_matches_request(self) -> ReleaseAttestationV3:
+        if self.request_digest != self.request.canonical_digest():
+            raise ValueError("request_digest must match the canonical publisher request")
+        expected_result = "dry-run" if self.request.mode == "dry-run" else "published"
+        if self.result != expected_result:
+            raise ValueError("attestation result must match the requested mode")
+        if self.result == "published":
+            if self.tag is None:
+                raise ValueError("published attestation requires a tag")
+            if self.tag.name != self.request.release.identity:
+                raise ValueError("tag name must match release identity")
+        elif self.tag is not None:
+            raise ValueError("dry-run attestation must not include a tag")
+        return self
+
+
 def parse_publisher_request_v2_json(document: str | bytes | bytearray) -> PublisherRequestV2:
     """Parse one publisher request through the strict v2 JSON boundary."""
     return PublisherRequestV2.model_validate(_load_strict_v2_json(document))
@@ -227,3 +325,13 @@ def parse_publisher_request_v2_json(document: str | bytes | bytearray) -> Publis
 def parse_release_attestation_v2_json(document: str | bytes | bytearray) -> ReleaseAttestationV2:
     """Parse one publisher attestation through the strict v2 JSON boundary."""
     return ReleaseAttestationV2.model_validate(_load_strict_v2_json(document))
+
+
+def parse_publisher_request_v3_json(document: str | bytes | bytearray) -> PublisherRequestV3:
+    """Parse one publisher request through the strict v3 JSON boundary."""
+    return PublisherRequestV3.model_validate(_load_strict_v2_json(document))
+
+
+def parse_release_attestation_v3_json(document: str | bytes | bytearray) -> ReleaseAttestationV3:
+    """Parse one publisher attestation through the strict v3 JSON boundary."""
+    return ReleaseAttestationV3.model_validate(_load_strict_v2_json(document))

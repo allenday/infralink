@@ -13,11 +13,15 @@ from pydantic import ValidationError
 from infralink.cli.main import cli
 from infralink.release.contracts import (
     PublisherRequestV2,
+    PublisherRequestV3,
     ReleaseAttestationV1,
     ReleaseAttestationV2,
+    ReleaseAttestationV3,
     ReleaseCandidateV1,
     parse_publisher_request_v2_json,
+    parse_publisher_request_v3_json,
     parse_release_attestation_v2_json,
+    parse_release_attestation_v3_json,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -25,10 +29,43 @@ FIXTURES = ROOT / "examples" / "release"
 SCHEMAS = ROOT / "src" / "infralink" / "schemas" / "release" / "v1"
 V2_SCHEMAS = ROOT / "src" / "infralink" / "schemas" / "release" / "v2"
 V2JsonParser = Callable[[str], PublisherRequestV2 | ReleaseAttestationV2]
+V3JsonParser = Callable[[str], PublisherRequestV3 | ReleaseAttestationV3]
 
 
 def _fixture(name: str) -> dict[str, object]:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _bind_request_digest(request: dict[str, object]) -> None:
+    request_without_digest = {
+        key: value for key, value in request.items() if key != "request_digest"
+    }
+    request["request_digest"] = hashlib.sha256(
+        json.dumps(
+            request_without_digest, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+        ).encode("ascii")
+    ).hexdigest()
+
+
+def _v3_request() -> dict[str, object]:
+    request = _fixture("publisher-request.v2.json")
+    request["schema_version"] = "infralink.publisher-request.v3"
+    signer = {
+        "principal": "infralink-release-publisher",
+        "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    }
+    request["tag_signer_policy"] = {
+        "selector": {
+            "repository": "gitea://gitea.i.cyberstorm.dev/cyberstorm/infralink-release-publisher",
+            "commit": "a" * 40,
+            "path": "release-publisher/allowed-signers.json",
+            "sha256": "b" * 64,
+        },
+        "signer": signer,
+    }
+    request["manifest_signer"] = dict(signer)
+    _bind_request_digest(request)
+    return request
 
 
 def test_public_candidate_fixture_has_explicit_immutable_release_bindings() -> None:
@@ -146,6 +183,118 @@ def test_v2_attestation_fixture_binds_the_canonical_request_digest() -> None:
     assert attestation.request_digest == attestation.request.canonical_digest()
     assert attestation.result == "dry-run"
     assert attestation.tag is None
+
+
+def test_v3_request_binds_manifest_signer_to_an_immutable_tag_policy() -> None:
+    request = PublisherRequestV3.model_validate(_v3_request())
+
+    assert request.request_digest == request.canonical_digest()
+    assert request.tag_signer_policy.selector.commit == "a" * 40
+    assert request.tag_signer_policy.selector.sha256 == "b" * 64
+    assert request.tag_signer_policy.signer == request.manifest_signer
+
+
+def test_v3_request_accepts_the_canonical_unpadded_ssh_fingerprint() -> None:
+    request = PublisherRequestV3.model_validate(_v3_request())
+
+    assert request.manifest_signer.fingerprint == (
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    )
+
+
+@pytest.mark.parametrize(
+    "fingerprint",
+    [
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ],
+)
+def test_v3_request_rejects_noncanonical_ssh_fingerprint(fingerprint: str) -> None:
+    request = _v3_request()
+    policy = request["tag_signer_policy"]
+    assert isinstance(policy, dict)
+    policy_signer = policy["signer"]
+    assert isinstance(policy_signer, dict)
+    policy_signer["fingerprint"] = fingerprint
+    manifest_signer = request["manifest_signer"]
+    assert isinstance(manifest_signer, dict)
+    manifest_signer["fingerprint"] = fingerprint
+    _bind_request_digest(request)
+
+    with pytest.raises(ValidationError, match="fingerprint"):
+        PublisherRequestV3.model_validate(request)
+
+
+def test_v3_published_schema_and_strict_parser_accept_the_public_fixture() -> None:
+    fixture_path = FIXTURES / "publisher-request.v3.json"
+    fixture = _fixture(fixture_path.name)
+    schema = json.loads(
+        (V2_SCHEMAS.parent / "v3" / "publisher-request.v3.schema.json").read_text(encoding="utf-8")
+    )
+
+    Draft202012Validator(schema).validate(fixture)
+    assert parse_publisher_request_v3_json(fixture_path.read_text(encoding="utf-8"))
+
+
+def test_v3_attestation_carries_the_bound_v3_request() -> None:
+    attestation = _fixture("release-attestation.v2.json")
+    request = _v3_request()
+    attestation["schema_version"] = "infralink.release-attestation.v3"
+    attestation["request"] = request
+    attestation["request_digest"] = request["request_digest"]
+
+    parsed = ReleaseAttestationV3.model_validate(attestation)
+
+    assert parsed.request.manifest_signer == parsed.request.tag_signer_policy.signer
+    assert parse_release_attestation_v3_json(json.dumps(attestation, separators=(",", ":")))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("commit", "main", "commit"),
+        ("path", "../allowed-signers.json", "safe and relative"),
+        ("sha256", "0" * 63, "sha256"),
+    ],
+)
+def test_v3_request_rejects_mutable_or_unsafe_signer_policy_selector(
+    field: str, value: str, match: str
+) -> None:
+    request = _v3_request()
+    policy = request["tag_signer_policy"]
+    assert isinstance(policy, dict)
+    selector = policy["selector"]
+    assert isinstance(selector, dict)
+    selector[field] = value
+
+    with pytest.raises(ValidationError, match=match):
+        PublisherRequestV3.model_validate(request)
+
+
+def test_v3_request_rejects_a_manifest_signer_that_differs_from_policy() -> None:
+    request = _v3_request()
+    manifest_signer = request["manifest_signer"]
+    assert isinstance(manifest_signer, dict)
+    manifest_signer["principal"] = "another-publisher"
+    _bind_request_digest(request)
+
+    with pytest.raises(ValidationError, match="manifest signer must match tag signer policy"):
+        PublisherRequestV3.model_validate(request)
+
+
+def test_v3_request_rejects_a_missing_tag_signer_policy_binding() -> None:
+    request = _v3_request()
+    request.pop("tag_signer_policy")
+    _bind_request_digest(request)
+
+    with pytest.raises(ValidationError, match="tag_signer_policy"):
+        PublisherRequestV3.model_validate(request)
+
+
+def test_v2_request_remains_compatible_without_signer_policy_binding() -> None:
+    request = PublisherRequestV2.model_validate(_fixture("publisher-request.v2.json"))
+
+    assert request.schema_version == "infralink.publisher-request.v2"
 
 
 @pytest.mark.parametrize(

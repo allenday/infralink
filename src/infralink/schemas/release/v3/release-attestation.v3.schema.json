@@ -1,0 +1,358 @@
+{
+  "$defs": {
+    "ArtifactSourceBindingV2": {
+      "additionalProperties": false,
+      "description": "A release artifact and the immutable source from which it was obtained.",
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "source_identity": {
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$",
+          "title": "Source Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "source_identity",
+        "source_digest"
+      ],
+      "title": "ArtifactSourceBindingV2",
+      "type": "object"
+    },
+    "ImmutablePolicySelectorV1": {
+      "additionalProperties": false,
+      "description": "Exact registry blob containing a public tag-signer policy.",
+      "properties": {
+        "commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Commit",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$",
+          "title": "Repository",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "repository",
+        "commit"
+      ],
+      "title": "ImmutablePolicySelectorV1",
+      "type": "object"
+    },
+    "ImmutableSourceReceiptV2": {
+      "additionalProperties": false,
+      "description": "A receipt whose source cannot be silently retargeted.",
+      "properties": {
+        "provider": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "run": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        },
+        "source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "source_identity": {
+          "maxLength": 512,
+          "pattern": "^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$",
+          "title": "Source Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "repository",
+        "run",
+        "source_identity",
+        "source_digest"
+      ],
+      "title": "ImmutableSourceReceiptV2",
+      "type": "object"
+    },
+    "PublisherIdentityV2": {
+      "additionalProperties": false,
+      "description": "The protected publisher identity and immutable runner image.",
+      "properties": {
+        "identity": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Identity",
+          "type": "string"
+        },
+        "image": {
+          "maxLength": 512,
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$",
+          "title": "Image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "image"
+      ],
+      "title": "PublisherIdentityV2",
+      "type": "object"
+    },
+    "PublisherRequestV3": {
+      "additionalProperties": false,
+      "description": "V2 request facts plus immutable tag-signer policy provenance.",
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSourceBindingV2"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "ci_receipt": {
+          "$ref": "#/$defs/ImmutableSourceReceiptV2"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "manifest_signer": {
+          "$ref": "#/$defs/ReleaseManifestSignerV1"
+        },
+        "mode": {
+          "enum": [
+            "dry-run",
+            "publish"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "publisher": {
+          "$ref": "#/$defs/PublisherIdentityV2"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "release": {
+          "$ref": "#/$defs/ReleaseIdentityV1"
+        },
+        "request_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Digest",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "infralink.publisher-request.v3",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tag_signer_policy": {
+          "$ref": "#/$defs/PublisherTagSignerPolicyV1"
+        }
+      },
+      "required": [
+        "schema_version",
+        "release",
+        "registry_commit",
+        "controller_commit",
+        "ci_receipt",
+        "artifacts",
+        "publisher",
+        "mode",
+        "request_digest",
+        "tag_signer_policy",
+        "manifest_signer"
+      ],
+      "title": "PublisherRequestV3",
+      "type": "object"
+    },
+    "PublisherTagSignerPolicyV1": {
+      "additionalProperties": false,
+      "description": "Immutable policy location and the one public signer it authorizes.",
+      "properties": {
+        "selector": {
+          "$ref": "#/$defs/ImmutablePolicySelectorV1"
+        },
+        "signer": {
+          "$ref": "#/$defs/ReleaseManifestSignerV1"
+        }
+      },
+      "required": [
+        "selector",
+        "signer"
+      ],
+      "title": "PublisherTagSignerPolicyV1",
+      "type": "object"
+    },
+    "ReleaseIdentityV1": {
+      "additionalProperties": false,
+      "description": "Immutable release identity, expressed redundantly for simple CI consumers.",
+      "properties": {
+        "channel": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Channel",
+          "type": "string"
+        },
+        "identity": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Identity",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "identity",
+        "channel",
+        "sequence"
+      ],
+      "title": "ReleaseIdentityV1",
+      "type": "object"
+    },
+    "ReleaseManifestSignerV1": {
+      "additionalProperties": false,
+      "description": "Public SSH signer identity named by a release manifest.",
+      "properties": {
+        "fingerprint": {
+          "pattern": "^SHA256:[A-Za-z0-9+/]{43}$",
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "principal": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Principal",
+          "type": "string"
+        }
+      },
+      "required": [
+        "principal",
+        "fingerprint"
+      ],
+      "title": "ReleaseManifestSignerV1",
+      "type": "object"
+    },
+    "ReleaseTagV1": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "object_sha1": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Object Sha1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "object_sha1"
+      ],
+      "title": "ReleaseTagV1",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable publisher result bound to one canonical v3 request.",
+  "properties": {
+    "publisher_receipt": {
+      "$ref": "#/$defs/ImmutableSourceReceiptV2"
+    },
+    "request": {
+      "$ref": "#/$defs/PublisherRequestV3"
+    },
+    "request_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Digest",
+      "type": "string"
+    },
+    "result": {
+      "enum": [
+        "dry-run",
+        "published"
+      ],
+      "title": "Result",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "infralink.release-attestation.v3",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tag": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseTagV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema_version",
+    "request",
+    "request_digest",
+    "publisher_receipt",
+    "result"
+  ],
+  "title": "ReleaseAttestationV3",
+  "type": "object"
+}
