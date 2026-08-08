@@ -183,6 +183,32 @@ def test_failed_check_advertises_edge_inspection_and_resolution_repairs(
     assert actions["resolve"][-2:] == ["resolve", edge_id]
 
 
+def test_failed_check_repair_actions_survive_a_healthy_first_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edge_ids = sorted(
+        item["id"] for item in yaml.safe_load((EXAMPLES / "edges.yml").read_text())["edges"]
+    )
+    failed_id = edge_ids[1]
+    monkeypatch.setattr(
+        "infralink.cli.check.check_edge_health",
+        lambda edge, resolver, timeout: _health(
+            edge.id,
+            healthy=edge.id != failed_id,
+            error_code=None if edge.id != failed_id else "timeout",
+        ),
+    )
+
+    result = _invoke("--limit", "1")
+    payload = json.loads(result.output)
+    actions = {item["rel"]: item["argv"] for item in payload["next_actions"]}
+
+    assert result.exit_code == 1
+    assert payload["result"]["checks"]["items"][0]["healthy"] is True
+    assert actions["show"][-3:] == ["edge", "show", failed_id]
+    assert actions["resolve"][-2:] == ["resolve", failed_id]
+
+
 def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

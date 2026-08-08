@@ -167,7 +167,7 @@ def check(
         limit=limit,
         fingerprint=fingerprint,
     )
-    failed = next((item for item in command_result.checks.items if not item.healthy), None)
+    failed = next((item for item in checks if not item.healthy), None)
     repairs = []
     if failed is not None:
         repairs = [
