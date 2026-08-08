@@ -150,7 +150,7 @@ export BWS_ORGANIZATION_ID="<organization-uuid>"
 infralink --registry registry.yml --edges edges.yml secrets audit --provider bws
 ```
 
-Production `v0.2.0` accepts Bitwarden's hosted endpoints only. Endpoint override
+Production `v0.3.0` accepts Bitwarden's hosted endpoints only. Endpoint override
 environment variables are rejected; custom endpoints remain deferred. Audit is
 read-only, is restricted to references declared by topology, and does not fetch
 secret values.
@@ -159,9 +159,9 @@ secret values.
 
 The manual Woodpecker release step runs only for `main` on Python 3.12 after
 all three parallel Python-version quality gates. It requires release version
-`0.2.0` and the pipeline commit to equal the current `main` commit, then
+`0.3.0` and the pipeline commit to equal the current `main` commit, then
 rebuilds and publishes exactly the wheel, sdist, `SHA256SUMS`, and
-`SHA256SUMS.sigstore.json` to GitHub Release `v0.2.0`. Existing tags or releases
+`SHA256SUMS.sigstore.json` to GitHub Release `v0.3.0`. Existing tags or releases
 stop the process for operator inspection.
 
 Consumers verify the Cosign bundle and `SHA256SUMS` before installing the

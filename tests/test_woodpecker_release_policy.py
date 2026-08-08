@@ -69,9 +69,9 @@ def test_release_validates_identity_and_absent_remote_state_before_building() ->
         "$${CI_COMMIT_SHA}",
         "git fetch --no-tags origin main",
         "git rev-parse FETCH_HEAD",
-        "scripts/release_v0_2.py validate",
-        "git ls-remote --exit-code --tags origin refs/tags/v0.2.0",
-        "repos/$${CI_REPO}/releases/tags/v0.2.0",
+        "scripts/release_v0_3.py validate",
+        "git ls-remote --exit-code --tags origin refs/tags/v0.3.0",
+        "repos/$${CI_REPO}/releases/tags/v0.3.0",
     ):
         assert required in text
     assert all(
@@ -83,9 +83,9 @@ def test_release_validates_identity_and_absent_remote_state_before_building() ->
 
 def test_release_uses_checksum_pinned_tools_and_exact_assets() -> None:
     commands = "\n".join(load_woodpecker()["steps"]["release"]["commands"])
-    release_surface = commands + (PROJECT_ROOT / "scripts" / "release_v0_2.py").read_text()
+    release_surface = commands + (PROJECT_ROOT / "scripts" / "release_v0_3.py").read_text()
 
-    assert "scripts/release_v0_2.py platform" in commands
+    assert "scripts/release_v0_3.py platform" in commands
     assert '--platform "$${CI_SYSTEM_PLATFORM}"' in commands
     assert ". /tmp/infralink-toolchain" in commands
     assert "GH_VERSION=2.76.2" in commands
@@ -98,14 +98,14 @@ def test_release_uses_checksum_pinned_tools_and_exact_assets() -> None:
     assert "cosign-linux-amd64" not in commands
     assert commands.count("sha256sum --check -") >= 2
     assert "python -m twine check" in commands
-    assert "scripts/release_v0_2.py checksums" in commands
+    assert "scripts/release_v0_3.py checksums" in commands
     assert "--key env://COSIGN_PRIVATE_KEY" in commands
     assert "--bundle dist/SHA256SUMS.sigstore.json" in commands
     assert "COSIGN_PASSWORD=" in commands
-    assert "gh release create v0.2.0" in commands
+    assert "gh release create v0.3.0" in commands
     assets = (
-        "dist/infralink-0.2.0-py3-none-any.whl",
-        "dist/infralink-0.2.0.tar.gz",
+        "dist/infralink-0.3.0-py3-none-any.whl",
+        "dist/infralink-0.3.0.tar.gz",
         "dist/SHA256SUMS",
         "dist/SHA256SUMS.sigstore.json",
     )
