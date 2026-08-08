@@ -19,6 +19,7 @@ EXPECTED_COMMANDS = [
     "python -m mypy src scripts",
     "python -m pytest",
     "python scripts/generate_cli_schemas.py",
+    "python scripts/generate_release_schemas.py",
     "git diff --exit-code",
     'test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"',
     "python -m build",

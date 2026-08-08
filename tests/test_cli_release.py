@@ -50,7 +50,11 @@ def _admission(path: Path, payload: dict[str, object] | None = None) -> Path:
 def _candidate(path: Path, **overrides: object) -> Path:
     payload: dict[str, object] = {
         "schema_version": "infralink.release-candidate.v1",
-        "release_identity": "releases/core-v2/42",
+        "release": {
+            "identity": "releases/core-v2/42",
+            "channel": "core-v2",
+            "sequence": 42,
+        },
         "registry_commit": REGISTRY_COMMIT,
         "controller_commit": CONTROLLER_COMMIT,
         "ci_receipt": {
@@ -74,11 +78,25 @@ def _candidate(path: Path, **overrides: object) -> Path:
 def _attestation(path: Path, **overrides: object) -> Path:
     payload: dict[str, object] = {
         "schema_version": "infralink.release-attestation.v1",
-        "release_identity": "releases/core-v2/42",
+        "release": {
+            "identity": "releases/core-v2/42",
+            "channel": "core-v2",
+            "sequence": 42,
+        },
         "registry_commit": REGISTRY_COMMIT,
         "controller_commit": CONTROLLER_COMMIT,
-        "publisher_receipt": {"provider": "woodpecker", "run": "600"},
-        "tag": "releases/core-v2/42",
+        "ci_receipt": {
+            "provider": "woodpecker",
+            "repository": "relaxgg/infra-registry",
+            "run": "576",
+        },
+        "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+        "publisher_receipt": {
+            "provider": "woodpecker",
+            "repository": "relaxgg/infra-registry",
+            "run": "600",
+        },
+        "tag": {"name": "releases/core-v2/42", "object_sha1": "d" * 40},
         "consumers": ["citadel", "watchtower"],
     }
     payload.update(overrides)
@@ -223,6 +241,14 @@ def test_release_inspect_attestation_reports_consumer_shadow_actions(tmp_path: P
     payload = _payload(result)
     assert_schema(payload, "release-inspect-attestation")
     assert payload["result"]["attestation"]["tag"] == "releases/core-v2/42"
+    assert payload["result"]["attestation"]["tag_object_sha1"] == "d" * 40
+    assert payload["result"]["attestation"]["ci_receipt"]["run"] == "576"
+    assert payload["result"]["attestation"]["artifacts"] == [
+        {"path": "release/runtime.tar.gz", "sha256": "c" * 64}
+    ]
+    assert payload["result"]["attestation"]["publisher_receipt"]["repository"] == (
+        "relaxgg/infra-registry"
+    )
     assert payload["result"]["attestation"]["consumers"] == ["citadel", "watchtower"]
     assert payload["next_actions"] == []
 
@@ -237,6 +263,61 @@ def test_release_validate_candidate_rejects_mutable_branch_authority(tmp_path: P
     assert result.exit_code == 3
     payload = _payload(result)
     assert payload["error"]["code"] == "release_candidate_invalid"
+
+
+def test_release_reads_the_already_published_flat_v1_candidate_shape(tmp_path: Path) -> None:
+    candidate = tmp_path / "legacy-candidate.json"
+    candidate.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-candidate.v1",
+                "release_identity": "releases/core-v2/42",
+                "registry_commit": REGISTRY_COMMIT,
+                "controller_commit": CONTROLLER_COMMIT,
+                "ci_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "576",
+                },
+                "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+                "consumers": ["CITADEL", "c" * 64],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli, ["release", "validate-candidate", "--candidate", str(candidate)]
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_release_reads_the_already_published_flat_v1_attestation_shape(tmp_path: Path) -> None:
+    attestation = tmp_path / "legacy-attestation.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-attestation.v1",
+                "release_identity": "releases/core-v2/42",
+                "registry_commit": REGISTRY_COMMIT,
+                "controller_commit": CONTROLLER_COMMIT,
+                "publisher_receipt": {"provider": "woodpecker", "run": "600"},
+                "tag": "releases/core-v2/42",
+                "consumers": ["CITADEL", "c" * 64],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli, ["release", "inspect-attestation", "--attestation", str(attestation)]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = _payload(result)
+    assert payload["result"]["attestation"]["tag_object_sha1"] is None
+    assert payload["result"]["attestation"]["publisher_receipt"]["repository"] is None
 
 
 def test_release_validate_candidate_bounds_each_consumer_name(tmp_path: Path) -> None:

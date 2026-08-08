@@ -295,6 +295,7 @@ class PublisherRequestResult(ContractModel):
 
 class ReleasePublisherReceipt(ContractModel):
     provider: str = Field(min_length=1, max_length=128)
+    repository: str | None = Field(default=None, min_length=1, max_length=256)
     run: str = Field(min_length=1, max_length=128)
 
 
@@ -302,8 +303,11 @@ class ReleaseAttestation(ContractModel):
     release_identity: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
     registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    ci_receipt: ReleaseCiReceipt | None = None
+    artifacts: list[ReleaseArtifactBinding] = Field(default_factory=list, max_length=64)
     publisher_receipt: ReleasePublisherReceipt
     tag: str = Field(pattern=r"^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$")
+    tag_object_sha1: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     consumers: list[ReleaseConsumer] = Field(min_length=1, max_length=64)
 
     @model_validator(mode="after")

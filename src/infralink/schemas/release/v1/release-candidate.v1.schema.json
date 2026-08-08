@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "ArtifactBindingV1": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "ArtifactBindingV1",
+      "type": "object"
+    },
+    "CiReceiptV1": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "run": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "repository",
+        "run"
+      ],
+      "title": "CiReceiptV1",
+      "type": "object"
+    },
+    "ReleaseIdentityV1": {
+      "additionalProperties": false,
+      "description": "Immutable release identity, expressed redundantly for simple CI consumers.",
+      "properties": {
+        "channel": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Channel",
+          "type": "string"
+        },
+        "identity": {
+          "pattern": "^releases/[a-z0-9][a-z0-9-]{0,62}/[1-9][0-9]*$",
+          "title": "Identity",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "identity",
+        "channel",
+        "sequence"
+      ],
+      "title": "ReleaseIdentityV1",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable CI output used to render a trusted publisher request.",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactBindingV1"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "ci_receipt": {
+      "$ref": "#/$defs/CiReceiptV1"
+    },
+    "consumers": {
+      "items": {
+        "maxLength": 63,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Consumers",
+      "type": "array"
+    },
+    "controller_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Controller Commit",
+      "type": "string"
+    },
+    "registry_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Registry Commit",
+      "type": "string"
+    },
+    "release": {
+      "$ref": "#/$defs/ReleaseIdentityV1"
+    },
+    "schema_version": {
+      "const": "infralink.release-candidate.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "release",
+    "registry_commit",
+    "controller_commit",
+    "ci_receipt",
+    "artifacts",
+    "consumers",
+    "schema_version"
+  ],
+  "title": "ReleaseCandidateV1",
+  "type": "object"
+}

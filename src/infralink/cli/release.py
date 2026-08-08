@@ -48,6 +48,12 @@ from infralink.cli.contracts import (
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.main import _context_for, _emit
 from infralink.cli.output import ok_envelope
+from infralink.release.contracts import (
+    ArtifactBindingV1,
+    CiReceiptV1,
+    ReleaseAttestationV1,
+    ReleaseCandidateV1,
+)
 
 _IDENTITY = re.compile(r"^releases/([a-z0-9][a-z0-9-]{0,62})/([1-9][0-9]*)$")
 
@@ -125,47 +131,42 @@ class _AdmissionDocument(_StrictModel):
     publisher: _Publisher = _Publisher(state="unavailable")
 
 
-class _CiReceipt(_StrictModel):
-    provider: str = Field(min_length=1, max_length=128)
-    repository: str = Field(min_length=1, max_length=256)
-    run: str = Field(min_length=1, max_length=128)
+_CandidateDocument = ReleaseCandidateV1
+_AttestationDocument = ReleaseAttestationV1
 
 
-class _ArtifactBinding(_StrictModel):
-    path: str = Field(min_length=1, max_length=256)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+class _LegacyCandidateDocument(_StrictModel):
+    """Temporary reader compatibility for #37's already-published v1 shape."""
 
-
-class _CandidateDocument(_StrictModel):
     schema_version: Literal["infralink.release-candidate.v1"]
     release_identity: str = Field(pattern=_IDENTITY.pattern)
     registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
-    ci_receipt: _CiReceipt
-    artifacts: list[_ArtifactBinding] = Field(min_length=1, max_length=64)
+    ci_receipt: CiReceiptV1
+    artifacts: list[ArtifactBindingV1] = Field(min_length=1, max_length=64)
     consumers: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
         min_length=1, max_length=64
     )
 
 
-class _PublisherReceipt(_StrictModel):
+class _LegacyPublisherReceipt(_StrictModel):
     provider: str = Field(min_length=1, max_length=128)
     run: str = Field(min_length=1, max_length=128)
 
 
-class _AttestationDocument(_StrictModel):
+class _LegacyAttestationDocument(_StrictModel):
     schema_version: Literal["infralink.release-attestation.v1"]
     release_identity: str = Field(pattern=_IDENTITY.pattern)
     registry_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     controller_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
-    publisher_receipt: _PublisherReceipt
+    publisher_receipt: _LegacyPublisherReceipt
     tag: str = Field(pattern=_IDENTITY.pattern)
     consumers: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
         min_length=1, max_length=64
     )
 
     @model_validator(mode="after")
-    def tag_matches_release(self) -> _AttestationDocument:
+    def tag_matches_release(self) -> _LegacyAttestationDocument:
         if self.tag != self.release_identity:
             raise ValueError("tag must match release identity")
         return self
@@ -226,26 +227,33 @@ def _parse_inputs(
     return validation, admission
 
 
-def _parse_candidate(path: Path) -> _CandidateDocument:
+def _parse_candidate(path: Path) -> _CandidateDocument | _LegacyCandidateDocument:
     try:
         return _CandidateDocument.model_validate(_load(path, kind="candidate"))
     except (ValidationError, TypeError) as error:
-        raise _invalid(
-            "candidate",
-            "does not match infralink.release-candidate.v1",
-            {"path": str(path)},
-        ) from error
+        try:
+            legacy = _LegacyCandidateDocument.model_validate(_load(path, kind="candidate"))
+            return legacy
+        except (ValidationError, TypeError):
+            raise _invalid(
+                "candidate",
+                "does not match infralink.release-candidate.v1",
+                {"path": str(path)},
+            ) from error
 
 
-def _parse_attestation(path: Path) -> _AttestationDocument:
+def _parse_attestation(path: Path) -> _AttestationDocument | _LegacyAttestationDocument:
     try:
         return _AttestationDocument.model_validate(_load(path, kind="attestation"))
     except (ValidationError, TypeError) as error:
-        raise _invalid(
-            "attestation",
-            "does not match infralink.release-attestation.v1",
-            {"path": str(path)},
-        ) from error
+        try:
+            return _LegacyAttestationDocument.model_validate(_load(path, kind="attestation"))
+        except (ValidationError, TypeError):
+            raise _invalid(
+                "attestation",
+                "does not match infralink.release-attestation.v1",
+                {"path": str(path)},
+            ) from error
 
 
 def _admission_for(
@@ -288,9 +296,17 @@ def _publisher(value: _Publisher) -> ReleasePublisher:
     return ReleasePublisher(state=value.state, provider=value.provider)
 
 
-def _candidate_output(candidate: _CandidateDocument) -> ReleaseCandidate:
+def _candidate_identity(candidate: _CandidateDocument | _LegacyCandidateDocument) -> str:
+    return (
+        candidate.release.identity
+        if isinstance(candidate, _CandidateDocument)
+        else candidate.release_identity
+    )
+
+
+def _candidate_output(candidate: _CandidateDocument | _LegacyCandidateDocument) -> ReleaseCandidate:
     return ReleaseCandidate(
-        identity=candidate.release_identity,
+        identity=_candidate_identity(candidate),
         registry_commit=candidate.registry_commit,
         controller_commit=candidate.controller_commit,
         ci_receipt=ReleaseCiReceipt(**candidate.ci_receipt.model_dump()),
@@ -412,7 +428,7 @@ def render_publisher_request(candidate: Path, admission: Path) -> None:
         ) from error
     validation = _ValidationRecord(
         schema_version="infralink.release-validation.v1",
-        release_identity=candidate_document.release_identity,
+        release_identity=_candidate_identity(candidate_document),
         registry_commit=candidate_document.registry_commit,
         controller_commit=candidate_document.controller_commit,
         annotated=True,
@@ -433,11 +449,11 @@ def render_publisher_request(candidate: Path, admission: Path) -> None:
                 )
             ],
         )
-    match = _IDENTITY.fullmatch(candidate_document.release_identity)
+    match = _IDENTITY.fullmatch(_candidate_identity(candidate_document))
     assert match is not None
     request = PublisherRequest(
         schema_version="infralink.publisher-request.v1",
-        release_identity=candidate_document.release_identity,
+        release_identity=_candidate_identity(candidate_document),
         channel=match.group(1),
         sequence=int(match.group(2)),
         registry_commit=candidate_document.registry_commit,
@@ -483,14 +499,31 @@ def render_publisher_request(candidate: Path, admission: Path) -> None:
 def inspect_attestation(attestation: Path) -> None:
     """Inspect a publisher completion record without contacting a provider."""
     value = _parse_attestation(attestation)
-    output = ReleaseAttestation(
-        release_identity=value.release_identity,
-        registry_commit=value.registry_commit,
-        controller_commit=value.controller_commit,
-        publisher_receipt=ReleasePublisherReceipt(**value.publisher_receipt.model_dump()),
-        tag=value.tag,
-        consumers=value.consumers,
-    )
+    if isinstance(value, _LegacyAttestationDocument):
+        output = ReleaseAttestation(
+            release_identity=value.release_identity,
+            registry_commit=value.registry_commit,
+            controller_commit=value.controller_commit,
+            publisher_receipt=ReleasePublisherReceipt(
+                provider=value.publisher_receipt.provider,
+                repository=None,
+                run=value.publisher_receipt.run,
+            ),
+            tag=value.tag,
+            consumers=value.consumers,
+        )
+    else:
+        output = ReleaseAttestation(
+            release_identity=value.release.identity,
+            registry_commit=value.registry_commit,
+            controller_commit=value.controller_commit,
+            ci_receipt=ReleaseCiReceipt(**value.ci_receipt.model_dump()),
+            artifacts=[ReleaseArtifactBinding(**item.model_dump()) for item in value.artifacts],
+            publisher_receipt=ReleasePublisherReceipt(**value.publisher_receipt.model_dump()),
+            tag=value.tag.name,
+            tag_object_sha1=value.tag.object_sha1,
+            consumers=value.consumers,
+        )
     _emit(
         ok_envelope(
             _context_for(path=["release", "inspect-attestation"]),
