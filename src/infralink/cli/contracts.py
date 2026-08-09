@@ -474,6 +474,37 @@ class CheckCommandResult(ContractModel):
     summary: CheckSummary
 
 
+class DoctorTarget(ContractModel):
+    type: Literal["global", "host", "service", "edge", "profile"]
+    id: str | None = None
+    canonical_name: str | None = None
+
+
+class DoctorEvidence(ContractModel):
+    id: str
+    adapter: str | None = None
+    signal_refs: list[str]
+    status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
+    reason: str | None = None
+
+
+class DoctorCoverage(ContractModel):
+    required: int = Field(ge=0)
+    bound: int = Field(ge=0)
+    unbound: int = Field(ge=0)
+    unsupported: int = Field(ge=0)
+    valid: bool
+
+
+class DoctorResult(ContractModel):
+    target: DoctorTarget
+    declared: dict[str, Any]
+    evidence: list[DoctorEvidence]
+    coverage: DoctorCoverage | None = None
+    status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
+    reason: str | None = None
+
+
 class AppListResult(ContractModel):
     items: list[str]
 
