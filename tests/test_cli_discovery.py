@@ -34,7 +34,7 @@ def assert_schema(payload: dict, name: str) -> None:
 
 def test_root_discovers_commands_as_json() -> None:
     payload = payload_for()
-    assert payload["result"]["version"] == "0.3.0"
+    assert payload["result"]["version"] == "0.4.0"
     assert {"help", "version", "hosts", "services", "edges-list"} <= {
         item["name"] for item in payload["result"]["commands"]
     }
@@ -110,14 +110,14 @@ def test_host_detail_help_is_live_and_command_is_registered() -> None:
 def test_version_is_json() -> None:
     payload = payload_for("version")
     assert payload["result"] == {
-        "version": "0.3.0",
+        "version": "0.4.0",
         "cli_schema_version": "infralink.cli/v1",
     }
 
 
 def test_click_version_alias_is_json() -> None:
     payload = payload_for("--version")
-    assert payload["result"]["version"] == "0.3.0"
+    assert payload["result"]["version"] == "0.4.0"
     assert payload["command"]["raw"] == "infralink --version"
 
 
@@ -395,7 +395,7 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
     following = invoke("--version")
     assert following.exit_code == 0
     assert following.output.count("\n") == 1
-    assert json.loads(following.output)["result"]["version"] == "0.3.0"
+    assert json.loads(following.output)["result"]["version"] == "0.4.0"
 
 
 def raise_system_exit(code: object) -> None:

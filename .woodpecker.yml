@@ -82,23 +82,24 @@ steps:
       - git fetch --no-tags origin main
       - MAIN_SHA=$$(git rev-parse FETCH_HEAD)
       - PACKAGE_VERSION=$$(python -c 'from infralink.__about__ import __version__; print(__version__)')
+      - RELEASE_TAG="v$${RELEASE_VERSION:?}"
       - >-
-        python scripts/release_v0_3.py validate
+        python scripts/release.py validate
         --requested-version "$${RELEASE_VERSION:?}"
         --package-version "$${PACKAGE_VERSION}"
         --pipeline-sha "$${CI_COMMIT_SHA}"
         --main-sha "$${MAIN_SHA}"
       - |-
         set +e
-        git ls-remote --exit-code --tags origin refs/tags/v0.3.0 >/tmp/infralink-tag
+        git ls-remote --exit-code --tags origin "refs/tags/$${RELEASE_TAG}" >/tmp/infralink-tag
         tag_status=$$?
         set -e
         if [ "$${tag_status}" -eq 0 ]; then
-          echo "tag v0.3.0 already exists" >&2
+          echo "tag $${RELEASE_TAG} already exists" >&2
           exit 1
         fi
         test "$${tag_status}" -eq 2
-      - python scripts/release_v0_3.py platform --platform "$${CI_SYSTEM_PLATFORM}" --output /tmp/infralink-toolchain
+      - python scripts/release.py platform --platform "$${CI_SYSTEM_PLATFORM}" --output /tmp/infralink-toolchain
       - . /tmp/infralink-toolchain
       - GH_VERSION=2.76.2
       - curl --fail --location --silent --show-error --output /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v$${GH_VERSION}/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}.tar.gz"
@@ -107,11 +108,11 @@ steps:
       - install "/tmp/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}/bin/gh" /usr/local/bin/gh
       - |-
         set +e
-        release_response=$$(gh api --include "repos/$${CI_REPO}/releases/tags/v0.3.0" 2>&1)
+        release_response=$$(gh api --include "repos/$${CI_REPO}/releases/tags/$${RELEASE_TAG}" 2>&1)
         release_status=$$?
         set -e
         if [ "$${release_status}" -eq 0 ]; then
-          echo "release v0.3.0 already exists" >&2
+          echo "release $${RELEASE_TAG} already exists" >&2
           exit 1
         fi
         printf '%s\n' "$${release_response}" | grep -Eq '^HTTP/[^ ]+ 404 '
@@ -122,15 +123,12 @@ steps:
       - rm -rf dist
       - python -m build
       - python -m twine check dist/*
-      - python scripts/release_v0_3.py checksums --dist dist
+      - python scripts/release.py checksums --version "$${RELEASE_VERSION}" --dist dist
       - COSIGN_PASSWORD= cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
-      - python scripts/release_v0_3.py assets --dist dist
       - >-
-        gh release create v0.3.0
+        set -- $$(python scripts/release.py assets --version "$${RELEASE_VERSION}" --dist dist)
+        && gh release create "$${RELEASE_TAG}"
         --target "$${CI_COMMIT_SHA}"
-        --title "Infralink v0.3.0"
-        --notes-file docs/releases/v0.3.0.md
-        dist/infralink-0.3.0-py3-none-any.whl
-        dist/infralink-0.3.0.tar.gz
-        dist/SHA256SUMS
-        dist/SHA256SUMS.sigstore.json
+        --title "Infralink $${RELEASE_TAG}"
+        --notes-file "docs/releases/$${RELEASE_TAG}.md"
+        "$@"

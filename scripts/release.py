@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and assemble the fixed Infralink v0.3.0 release asset set."""
+"""Validate and assemble an Infralink release asset set."""
 
 from __future__ import annotations
 
@@ -8,13 +8,7 @@ import hashlib
 import re
 from pathlib import Path
 
-VERSION = "0.3.0"
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
-PACKAGE_ASSETS = (
-    "infralink-0.3.0-py3-none-any.whl",
-    "infralink-0.3.0.tar.gz",
-)
-RELEASE_ASSETS = (*PACKAGE_ASSETS, "SHA256SUMS", "SHA256SUMS.sigstore.json")
 RELEASE_TOOLCHAINS = {
     "linux/amd64": (
         "amd64",
@@ -30,14 +24,29 @@ RELEASE_TOOLCHAINS = {
 
 
 class ReleaseError(ValueError):
-    """The fixed release contract was not satisfied."""
+    """The release contract was not satisfied."""
+
+
+def release_tag(version: str) -> str:
+    return f"v{version}"
+
+
+def package_assets(version: str) -> tuple[str, str]:
+    return (
+        f"infralink-{version}-py3-none-any.whl",
+        f"infralink-{version}.tar.gz",
+    )
+
+
+def release_assets_names(version: str) -> tuple[str, str, str, str]:
+    return (*package_assets(version), "SHA256SUMS", "SHA256SUMS.sigstore.json")
 
 
 def validate_release_inputs(
     *, requested_version: str, package_version: str, pipeline_sha: str, main_sha: str
 ) -> None:
-    if requested_version != VERSION or package_version != VERSION:
-        raise ReleaseError("release version does not match package version 0.3.0")
+    if not requested_version or requested_version != package_version:
+        raise ReleaseError("requested release version does not match package version")
     if (
         SHA_PATTERN.fullmatch(pipeline_sha) is None
         or SHA_PATTERN.fullmatch(main_sha) is None
@@ -80,12 +89,13 @@ def _files(root: Path) -> dict[str, Path]:
         raise ReleaseError("cannot inspect release asset directory") from None
 
 
-def write_checksums(root: Path) -> Path:
+def write_checksums(root: Path, *, version: str) -> Path:
     files = _files(root)
-    if set(files) != set(PACKAGE_ASSETS):
+    expected_assets = package_assets(version)
+    if set(files) != set(expected_assets):
         raise ReleaseError("invalid package asset set")
     output = root / "SHA256SUMS"
-    content = "".join(f"{sha256(files[name])}  {name}\n" for name in PACKAGE_ASSETS)
+    content = "".join(f"{sha256(files[name])}  {name}\n" for name in expected_assets)
     try:
         output.write_text(content, encoding="ascii", newline="\n")
     except OSError:
@@ -93,11 +103,12 @@ def write_checksums(root: Path) -> Path:
     return output
 
 
-def release_assets(root: Path) -> list[Path]:
+def release_assets(root: Path, *, version: str) -> list[Path]:
     files = _files(root)
-    if set(files) != set(RELEASE_ASSETS):
+    expected_assets = release_assets_names(version)
+    if set(files) != set(expected_assets):
         raise ReleaseError("invalid release asset set")
-    return [files[name] for name in RELEASE_ASSETS]
+    return [files[name] for name in expected_assets]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -113,8 +124,10 @@ def _parser() -> argparse.ArgumentParser:
     platform.add_argument("--output", required=True, type=Path)
     checksums = commands.add_parser("checksums")
     checksums.add_argument("--dist", required=True, type=Path)
+    checksums.add_argument("--version", required=True)
     assets = commands.add_parser("assets")
     assets.add_argument("--dist", required=True, type=Path)
+    assets.add_argument("--version", required=True)
     return parser
 
 
@@ -131,9 +144,9 @@ def main() -> int:
         elif args.command == "platform":
             write_toolchain_environment(args.platform, args.output)
         elif args.command == "checksums":
-            write_checksums(args.dist)
+            write_checksums(args.dist, version=args.version)
         else:
-            for asset in release_assets(args.dist):
+            for asset in release_assets(args.dist, version=args.version):
                 print(asset)
     except ReleaseError as exc:
         raise SystemExit(str(exc)) from None
