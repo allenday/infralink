@@ -32,6 +32,20 @@ class HostStatus(str, Enum):
     MAINTENANCE = "maintenance"
 
 
+class HostBootstrapExecutorSchema(StrictModel):
+    """Immutable Bastion-side executor reference for explicit host bootstrap."""
+
+    repository: str = Field(pattern=r"^https://[^/@:?#\s]+/[^?#\s]+\.git$")
+    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    manifest: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_./-]*\.json$")
+    bws_machine_token_ref: str = Field(
+        pattern=r"^(?:[A-Za-z0-9]|_[A-Za-z0-9])[A-Za-z0-9._-]*(?:/(?:[A-Za-z0-9]|_[A-Za-z0-9])[A-Za-z0-9._-]*)*$"
+    )
+    infra_read_deploy_key_ref: str = Field(
+        pattern=r"^(?:[A-Za-z0-9]|_[A-Za-z0-9])[A-Za-z0-9._-]*(?:/(?:[A-Za-z0-9]|_[A-Za-z0-9])[A-Za-z0-9._-]*)*$"
+    )
+
+
 class NetworkConfig(StrictModel):
     """Network configuration for a host."""
 
@@ -311,6 +325,7 @@ class HostSchema(NodeSchema):
     bws_project: str | None = None
     bws_machine_account: str | None = None
     bws_extra_projects: list[str] = Field(default_factory=list)
+    bootstrap_executor: HostBootstrapExecutorSchema | None = None
 
     # Provider-specific metadata (hcloud_project, robot_id, etc.)
     provider_metadata: dict[str, Any] = Field(default_factory=dict)

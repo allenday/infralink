@@ -115,6 +115,13 @@ class Host:
         return tuple(self._schema.bws_extra_projects)
 
     @property
+    def bootstrap_executor(self) -> dict[str, str] | None:
+        """Declared immutable executor for an explicit host baseline apply."""
+        if self._schema.bootstrap_executor is None:
+            return None
+        return self._schema.bootstrap_executor.model_dump()
+
+    @property
     def managed_services(self) -> dict[str, Any]:
         """Managed service configurations (in legacy docker-compose.yml.j2)."""
         # Prefer managed_services, fall back to services for backward compat
