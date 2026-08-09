@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from infralink.cli.contracts import HostBootstrapAction, HostReadinessCheck, HostReadinessResult
 from infralink.host_readiness import HostReadinessEvaluator, HostReadinessProbe
@@ -39,9 +39,23 @@ def evaluate_host_readiness(
         transport_name = "root_ssh"
     readiness = HostReadinessEvaluator().evaluate(canonical_name=canonical_name, probe=probe)
     return HostReadinessResult(
-        transport=transport_name,
+        transport=cast(Literal["root_ssh", "declaration_only"], transport_name),
         ready=readiness.ready,
         checks=[HostReadinessCheck(**check.__dict__) for check in readiness.checks],
         actions=[HostBootstrapAction(**action.__dict__) for action in readiness.actions],
-        runtime_mode=probe.self_deploy_mode,
+        runtime_mode=(
+            cast(Literal["legacy_pull", "v2_reconcile"], probe.self_deploy_mode)
+            if probe.self_deploy_mode in {"legacy_pull", "v2_reconcile"}
+            else None
+        ),
+        registry_layout=(
+            cast(
+                Literal["v2_managed", "legacy_nested", "missing", "unsafe"],
+                probe.registry_layout,
+            )
+            if probe.registry_layout in {"v2_managed", "legacy_nested", "missing", "unsafe"}
+            else "unsafe"
+        ),
+        self_deploy_reconcile_result=probe.self_deploy_reconcile_result,
+        self_deploy_reconcile_exit_status=probe.self_deploy_reconcile_exit_status,
     )

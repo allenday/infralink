@@ -532,6 +532,9 @@ class HostReadinessResult(ContractModel):
     checks: list[HostReadinessCheck]
     actions: list[HostBootstrapAction]
     runtime_mode: Literal["legacy_pull", "v2_reconcile"] | None = None
+    registry_layout: Literal["v2_managed", "legacy_nested", "missing", "unsafe"] | None = None
+    self_deploy_reconcile_result: str | None = None
+    self_deploy_reconcile_exit_status: int | None = None
 
 
 class DoctorResult(ContractModel):

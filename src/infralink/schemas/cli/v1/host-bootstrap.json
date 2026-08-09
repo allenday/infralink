@@ -269,6 +269,24 @@
           "title": "Ready",
           "type": "boolean"
         },
+        "registry_layout": {
+          "anyOf": [
+            {
+              "enum": [
+                "v2_managed",
+                "legacy_nested",
+                "missing",
+                "unsafe"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Layout"
+        },
         "runtime_mode": {
           "anyOf": [
             {
@@ -284,6 +302,30 @@
           ],
           "default": null,
           "title": "Runtime Mode"
+        },
+        "self_deploy_reconcile_exit_status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Exit Status"
+        },
+        "self_deploy_reconcile_result": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Result"
         },
         "transport": {
           "enum": [

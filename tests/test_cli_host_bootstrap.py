@@ -54,6 +54,7 @@ def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) 
     assert result.exit_code == 0
     assert payload["result"]["readiness"]["ready"] is False
     assert [item["check_id"] for item in payload["result"]["readiness"]["actions"]] == [
+        "registry_layout",
         "devops_account",
         "devops_authorized_access",
         "docker",

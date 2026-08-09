@@ -28,6 +28,9 @@ class HostReadinessProbe:
     error: str | None
     self_deploy_mode: str | None = None
     self_deploy_dependencies: bool = False
+    registry_layout: str | None = None
+    self_deploy_reconcile_result: str | None = None
+    self_deploy_reconcile_exit_status: int | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,12 @@ class HostReadiness:
 
 
 BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
+    BaselineRequirement(
+        "registry_layout",
+        "V2 registry checkout uses the canonical non-nested layout.",
+        "migrate_v2_registry_layout",
+        "Migrate the host registry checkout to the V2-owned root.",
+    ),
     BaselineRequirement(
         "ssh_reachable",
         "Root SSH is reachable.",
@@ -120,6 +129,12 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
         "enable_self_deploy_timer",
         "Enable and start the self-deploy timer.",
     ),
+    BaselineRequirement(
+        "self_deploy_reconcile",
+        "Latest V2 self-deploy reconciliation completed successfully.",
+        "inspect_self_deploy_reconcile",
+        "Inspect and repair the latest self-deploy reconciliation failure.",
+    ),
 )
 
 
@@ -127,7 +142,12 @@ class HostReadinessEvaluator:
     """Evaluate the explicit bootstrap baseline from one read-only probe."""
 
     def evaluate(self, *, canonical_name: str, probe: HostReadinessProbe) -> HostReadiness:
+        reconcile_passed, reconcile_detail = _reconcile_outcome(probe)
         outcomes: dict[str, tuple[bool, str | None]] = {
+            "registry_layout": (
+                probe.reachable and probe.registry_layout == "v2_managed",
+                None if probe.registry_layout == "v2_managed" else probe.registry_layout or "missing",
+            ),
             "ssh_reachable": (probe.reachable, probe.error),
             "host_identity": (
                 probe.reachable and probe.hostname == canonical_name,
@@ -167,6 +187,7 @@ class HostReadinessEvaluator:
                 and probe.self_deploy_timer_active,
                 "self_deploy_timer_inactive",
             ),
+            "self_deploy_reconcile": (reconcile_passed, reconcile_detail),
         }
         checks = [
             ReadinessCheck(
@@ -190,3 +211,24 @@ class HostReadinessEvaluator:
         return HostReadiness(
             ready=all(check.passed for check in checks), checks=checks, actions=actions
         )
+
+
+def _reconcile_outcome(probe: HostReadinessProbe) -> tuple[bool, str | None]:
+    """Require a successful latest run for V2 without penalizing legacy hosts twice."""
+    if not probe.reachable:
+        return False, "self_deploy_reconcile_unavailable"
+    if probe.self_deploy_mode != "v2_reconcile":
+        return True, None
+    if (
+        probe.self_deploy_reconcile_result == "success"
+        and probe.self_deploy_reconcile_exit_status == 0
+    ):
+        return True, None
+    if probe.self_deploy_reconcile_result:
+        suffix = (
+            f":{probe.self_deploy_reconcile_exit_status}"
+            if probe.self_deploy_reconcile_exit_status is not None
+            else ""
+        )
+        return False, f"{probe.self_deploy_reconcile_result}{suffix}"
+    return False, "self_deploy_reconcile_result_unknown"

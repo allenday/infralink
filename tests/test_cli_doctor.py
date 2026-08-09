@@ -410,7 +410,11 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
     assert result.exit_code == 1
     assert payload["result"]["readiness"]["ready"] is False
     assert payload["result"]["readiness"]["transport"] == "root_ssh"
-    assert payload["result"]["readiness"]["checks"][0] == {
+    assert next(
+        check
+        for check in payload["result"]["readiness"]["checks"]
+        if check["id"] == "ssh_reachable"
+    ) == {
         "id": "ssh_reachable",
         "required": True,
         "passed": True,
@@ -420,6 +424,58 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
     plan_action = next(item for item in payload["next_actions"] if item["rel"] == "bootstrap-plan")
     assert shlex.split(plan_action["command"])[-4:] == ["host", "bootstrap", HOST_ID, "--plan"]
     assert plan_action["safe"] is True
+
+
+def test_doctor_host_fails_closed_when_latest_v2_reconcile_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from infralink.host_readiness import HostReadinessProbe
+
+    monkeypatch.setattr(
+        "infralink.cli.doctor.SshReadinessTransport.probe",
+        lambda self, address: HostReadinessProbe(
+            reachable=True,
+            hostname="database.example.com",
+            machine_id="machine-id",
+            commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+            devops_account=True,
+            devops_authorized_access=True,
+            bws_config=True,
+            self_deploy_dependencies=True,
+            self_deploy_runtime=True,
+            self_deploy_timer_enabled=True,
+            self_deploy_timer_active=True,
+            error=None,
+            self_deploy_mode="v2_reconcile",
+            registry_layout="v2_managed",
+            self_deploy_reconcile_result="exit-code",
+            self_deploy_reconcile_exit_status=1,
+        ),
+    )
+    plan, bindings = _observation_inputs(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": True}]}],
+    )
+
+    result = _invoke(
+        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
+        "--gatus-url", "http://gatus.test", "host", "database.example.com",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unhealthy"
+    assert payload["result"]["reason"] == "host_readiness_incomplete"
+    assert payload["result"]["readiness"]["self_deploy_reconcile_result"] == "exit-code"
+    assert payload["result"]["readiness"]["self_deploy_reconcile_exit_status"] == 1
+    check = next(
+        check
+        for check in payload["result"]["readiness"]["checks"]
+        if check["id"] == "self_deploy_reconcile"
+    )
+    assert check["passed"] is False
+    assert check["detail"] == "exit-code:1"
 
 
 def test_doctor_keeps_zero_service_provisioning_host_out_of_unhealthy_state() -> None:

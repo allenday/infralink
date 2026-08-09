@@ -33,6 +33,25 @@ else
     printf 'self_deploy_timer_enabled=0\\nself_deploy_timer_active=0\\n'
   fi
 fi
+if systemctl cat self-deploy-v2-reconcile.service >/dev/null 2>&1; then
+  reconcile_result="$(systemctl show self-deploy-v2-reconcile.service -p Result --value 2>/dev/null || true)"
+  reconcile_exit_status="$(systemctl show self-deploy-v2-reconcile.service -p ExecMainStatus --value 2>/dev/null || true)"
+  printf 'self_deploy_reconcile_result=%s\n' "$reconcile_result"
+  printf 'self_deploy_reconcile_exit_status=%s\n' "$reconcile_exit_status"
+else
+  printf 'self_deploy_reconcile_result=\nself_deploy_reconcile_exit_status=\n'
+fi
+if test -L /var/lib/infralink/registry || test -L /opt/infra/registry; then
+  printf 'registry_layout=unsafe\n'
+elif test -d /var/lib/infralink/registry/.git && ! test -e /opt/infra/registry; then
+  printf 'registry_layout=v2_managed\n'
+elif test -d /opt/infra/registry/.git && ! test -e /var/lib/infralink/registry; then
+  printf 'registry_layout=legacy_nested\n'
+elif ! test -e /var/lib/infralink/registry && ! test -e /opt/infra/registry; then
+  printf 'registry_layout=missing\n'
+else
+  printf 'registry_layout=unsafe\n'
+fi
 """
 
 
@@ -85,6 +104,11 @@ class SshReadinessTransport:
             self_deploy_timer_active=values.get("self_deploy_timer_active") == "1",
             error=None,
             self_deploy_mode=values.get("self_deploy_mode") or None,
+            registry_layout=values.get("registry_layout") or "unsafe",
+            self_deploy_reconcile_result=values.get("self_deploy_reconcile_result") or None,
+            self_deploy_reconcile_exit_status=_optional_int(
+                values.get("self_deploy_reconcile_exit_status")
+            ),
         )
 
 
@@ -95,6 +119,13 @@ def _parse_probe(stdout: str) -> dict[str, str]:
         if separator and key:
             values[key] = value
     return values
+
+
+def _optional_int(value: str | None) -> int | None:
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
 
 
 def _unreachable(error: str) -> HostReadinessProbe:
