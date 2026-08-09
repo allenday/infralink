@@ -104,3 +104,11 @@ self_deploy_timer_active=0
     argv, kwargs = calls[0]
     assert argv[0][:4] == ["ssh", "-o", "BatchMode=yes", "-o"]
     assert kwargs["shell"] is False
+
+
+def test_ssh_transport_requires_a_nonempty_bws_token_in_etc_environment() -> None:
+    from infralink.host_transport import _REMOTE_PROBE
+
+    assert "grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/environment" in _REMOTE_PROBE
+    assert "bws.json" not in _REMOTE_PROBE
+    assert "bws.conf" not in _REMOTE_PROBE
