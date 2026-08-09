@@ -17,6 +17,43 @@ from infralink.host_readiness import HostReadinessProbe
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_cli_readiness_enforces_declared_v2_registry_layout_migration() -> None:
+    probe = HostReadinessProbe(
+        reachable=True,
+        hostname="database.example.com",
+        machine_id="machine-id",
+        commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+        devops_account=True,
+        devops_authorized_access=True,
+        bws_config=True,
+        self_deploy_dependencies=True,
+        self_deploy_runtime=True,
+        self_deploy_timer_enabled=True,
+        self_deploy_timer_active=True,
+        error=None,
+        self_deploy_mode="legacy_pull",
+        registry_layout="legacy_nested",
+    )
+    host = type(
+        "Host",
+        (),
+        {
+            "canonical_name": "database.example.com",
+            "tailscale_ip": "192.0.2.10",
+            "public_ip": None,
+            "self_deploy_v2_registry_layout_enabled": True,
+        },
+    )()
+    transport = type("Transport", (), {"probe": lambda _self, _address: probe})()
+
+    readiness = evaluate_readiness(host, transport)
+
+    layout = next(check for check in readiness.checks if check.id == "registry_layout")
+    assert readiness.requires_v2_registry_layout is True
+    assert layout.passed is False
+    assert layout.detail == "legacy_nested"
+
+
 def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) -> None:
     monkeypatch.setattr(
         "infralink.cli.main.SshReadinessTransport.probe",
