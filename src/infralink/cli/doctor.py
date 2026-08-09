@@ -33,6 +33,15 @@ def _doctor_prefix(
     ]
 
 
+def _verbose_doctor_prefix(
+    ctx: Context,
+    observation_plan: Path | None,
+    adapter_bindings: Path | None,
+) -> list[str]:
+    prefix = _doctor_prefix(ctx, observation_plan, adapter_bindings)
+    return [prefix[0], "--verbose", *prefix[1:]]
+
+
 def _missing(
     ctx: Context,
     kind: DoctorKind,
@@ -146,7 +155,7 @@ def _target(
             raise _missing(ctx, "host", target_ref, observation_plan, adapter_bindings)
         return (
             DoctorTarget(type="host", id=host.uuid, canonical_name=host.canonical_name),
-            {"status": host.status.value, "services": sorted(host.service_names)},
+            {"status": host.status.value, "service_count": len(host.service_names)},
             host.uuid,
         )
     if target_type == "edge":
@@ -200,7 +209,7 @@ def _target(
         for host in ctx.registry
         if target_ref in set(host.service_names) | set(host.roles)
     )
-    return DoctorTarget(type="service", id=target_ref), {"host_ids": hosts}, target_ref
+    return DoctorTarget(type="service", id=target_ref), {"host_count": len(hosts)}, target_ref
 
 
 def _observer_dependency_id(edge: Any, plan: dict[str, Any] | None) -> str | None:
@@ -298,6 +307,17 @@ def _coverage(
     )
 
 
+def _display_evidence(ctx: Context, evidence: list[DoctorEvidence]) -> list[DoctorEvidence]:
+    """Keep normal observer absence summarized by coverage; verbose expands it."""
+    if ctx.verbose:
+        return evidence
+    return [
+        item
+        for item in evidence
+        if item.status != "unknown" or item.reason != "no_live_observation_evidence"
+    ]
+
+
 def _emit_result(
     ctx: Context,
     result: DoctorResult,
@@ -362,7 +382,7 @@ def doctor(
                 "service_count": len(list_services(ctx.registry, ctx.edges).items),
                 "edge_count": len(ctx.edges),
             },
-            evidence=evidence,
+            evidence=_display_evidence(ctx, evidence),
             coverage=coverage,
             status="unknown",
             reason=(
@@ -436,53 +456,21 @@ def doctor(
     result = DoctorResult(
         target=target,
         declared=declared,
-        evidence=evidence,
+        evidence=_display_evidence(ctx, evidence),
         coverage=coverage,
         status="unknown",
         reason=reason,
     )
-    show_action = (
-        [
-            action(
-                "show",
-                [*_root_source_argv(ctx), target_type, "show", target.id],
-                f"Show {target_type}",
-            )
-        ]
-        if target_type != "profile"
-        and not (target_type == "edge" and ctx.edges.get(target_ref) is None)
-        else []
-    )
     actions = [
-        *show_action,
-        *(
-            []
-            if show_action
-            else [
-                action(
-                    "help",
-                    [*_root_source_argv(ctx), "help", "doctor"],
-                    "Show doctor usage",
-                )
-            ]
-        ),
         action(
-            "doctor",
+            "verbose",
             [
-                *_root_source_argv(ctx),
-                "doctor",
-                "--observation-plan",
-                str(observation_plan),
-                *(
-                    ["--adapter-bindings", str(adapter_bindings)]
-                    if adapter_bindings is not None
-                    else []
-                ),
+                *_verbose_doctor_prefix(ctx, observation_plan, adapter_bindings),
                 target_type,
                 target_id,
-                "--validate",
+                *(["--validate"] if declaration_only else []),
             ],
-            "Validate declared observer coverage",
+            "Show complete declared observer evidence",
         ),
     ]
     _emit_result(

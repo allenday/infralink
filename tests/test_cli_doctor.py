@@ -88,7 +88,7 @@ def test_doctor_is_discoverable_and_global_doctor_is_declaration_only() -> None:
     assert payload["result"]["evidence"] == []
 
 
-def test_doctor_validate_host_uses_declared_gatus_coverage_without_network_calls(
+def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network_calls(
     tmp_path: Path, monkeypatch
 ) -> None:
     plan, bindings = _observation_inputs(tmp_path)
@@ -121,15 +121,7 @@ def test_doctor_validate_host_uses_declared_gatus_coverage_without_network_calls
         "unsupported": 0,
         "valid": True,
     }
-    assert payload["result"]["evidence"] == [
-        {
-            "id": OBSERVATION_ID,
-            "adapter": "gatus",
-            "signal_refs": [f"dependency/{OBSERVATION_ID}/health/reachable"],
-            "status": "unknown",
-            "reason": "no_live_observation_evidence",
-        }
-    ]
+    assert payload["result"]["evidence"] == []
     assert payload["result"]["status"] == "unknown"
     assert payload["result"]["reason"] == "no_live_observation_evidence"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/doctor.json").read_text())
@@ -154,14 +146,46 @@ def test_normal_doctor_never_claims_health_without_a_declared_live_observer(
     assert result.exit_code == 0
     assert payload["result"]["status"] == "unknown"
     assert payload["result"]["reason"] == "no_live_observation_evidence"
-    assert payload["result"]["evidence"][0]["id"] == OBSERVATION_ID
     assert payload["result"]["reason"] == "no_live_observation_evidence"
-    assert payload["result"]["evidence"][0]["adapter"] == "gatus"
-    prefix = ["infralink", "--output", "json", *_sources()]
+    assert payload["result"]["evidence"] == []
+    prefix = ["infralink", "--verbose", "--output", "json", *_sources()]
     assert all(action["argv"][: len(prefix)] == prefix for action in payload["next_actions"])
-    show = next(action for action in payload["next_actions"] if action["rel"] == "show")
-    assert show["argv"][-3:] == ["edge", "show", EDGE_ID]
-    assert CliRunner().invoke(cli, show["argv"][1:]).exit_code == 0
+    verbose = next(action for action in payload["next_actions"] if action["rel"] == "verbose")
+    assert "--verbose" in verbose["argv"]
+    assert CliRunner().invoke(cli, verbose["argv"][1:]).exit_code == 0
+
+
+def test_verbose_doctor_includes_all_declared_evidence(tmp_path: Path) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--verbose",
+            *_sources(),
+            "doctor",
+            "--observation-plan",
+            str(plan),
+            "--adapter-bindings",
+            str(bindings),
+            "edge",
+            EDGE_ID,
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["evidence"] == [
+        {
+            "id": OBSERVATION_ID,
+            "adapter": "gatus",
+            "signal_refs": [f"dependency/{OBSERVATION_ID}/health/reachable"],
+            "status": "unknown",
+            "reason": "no_live_observation_evidence",
+        }
+    ]
+    assert payload["meta"]["truncated"] is False
 
 
 def test_doctor_profile_resolves_declared_observation_profile_not_service_or_role_name(
@@ -256,7 +280,7 @@ def test_global_doctor_uses_supplied_observation_inputs(tmp_path: Path) -> None:
         "unsupported": 0,
         "valid": True,
     }
-    assert payload["result"]["evidence"][0]["id"] == OBSERVATION_ID
+    assert payload["result"]["evidence"] == []
 
 
 def test_declared_dependency_edge_never_advertises_an_invalid_topology_show_action(
@@ -275,7 +299,7 @@ def test_declared_dependency_edge_never_advertises_an_invalid_topology_show_acti
 
     assert result.exit_code == 0
     assert payload["result"]["target"]["id"] == OBSERVATION_ID
-    assert "show" not in {action["rel"] for action in payload["next_actions"]}
+    assert {action["rel"] for action in payload["next_actions"]} == {"verbose"}
 
 
 def test_doctor_unknown_host_returns_a_bounded_canonical_discovery_action() -> None:
