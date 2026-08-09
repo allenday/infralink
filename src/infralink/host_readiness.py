@@ -26,6 +26,7 @@ class HostReadinessProbe:
     self_deploy_timer_enabled: bool
     self_deploy_timer_active: bool
     error: str | None
+    self_deploy_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,7 +142,12 @@ class HostReadinessEvaluator:
             "bws_cli": (probe.reachable and probe.commands.get("bws", False), "bws_cli_missing"),
             "bws_config": (probe.reachable and probe.bws_config, "bws_config_missing"),
             "self_deploy_runtime": (
-                probe.reachable and probe.self_deploy_runtime,
+                probe.reachable
+                and probe.self_deploy_runtime
+                and (
+                    probe.self_deploy_mode is None
+                    or probe.self_deploy_mode in {"legacy_pull", "v2_reconcile"}
+                ),
                 "self_deploy_runtime_missing",
             ),
             "self_deploy_timer": (

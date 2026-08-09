@@ -269,6 +269,22 @@
           "title": "Ready",
           "type": "boolean"
         },
+        "runtime_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "legacy_pull",
+                "v2_reconcile"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Mode"
+        },
         "transport": {
           "enum": [
             "root_ssh",

@@ -531,6 +531,7 @@ class HostReadinessResult(ContractModel):
     ready: bool
     checks: list[HostReadinessCheck]
     actions: list[HostBootstrapAction]
+    runtime_mode: Literal["legacy_pull", "v2_reconcile"] | None = None
 
 
 class DoctorResult(ContractModel):

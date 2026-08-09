@@ -14,13 +14,23 @@ for command in git docker tailscale jq bws; do
 done
 if id devops >/dev/null 2>&1; then printf 'devops_account=1\\n'; else printf 'devops_account=0\\n'; fi
 if test -s /home/devops/.ssh/authorized_keys; then printf 'devops_authorized_access=1\\n'; else printf 'devops_authorized_access=0\\n'; fi
-if test -f /root/.config/Bitwarden\\ Secrets\\ Manager/bws.json || test -f /home/devops/.config/Bitwarden\\ Secrets\\ Manager/bws.json; then printf 'bws_config=1\\n'; else printf 'bws_config=0\\n'; fi
-if test -d /var/lib/self-deploy-v2/runtime; then printf 'self_deploy_runtime=1\\n'; else printf 'self_deploy_runtime=0\\n'; fi
+if test -f /root/.config/Bitwarden\\ Secrets\\ Manager/bws.json || test -f /home/devops/.config/Bitwarden\\ Secrets\\ Manager/bws.json || test -s /etc/environment.d/bws.conf; then printf 'bws_config=1\\n'; else printf 'bws_config=0\\n'; fi
+if test -d /var/lib/self-deploy-v2/runtime && systemctl cat self-deploy-v2-reconcile.timer >/dev/null 2>&1; then
+  printf 'self_deploy_runtime=1\\nself_deploy_mode=v2_reconcile\\n'
+elif test -x /opt/infra/scripts/self-deploy.sh && test -f /etc/cron.d/self-deploy; then
+  printf 'self_deploy_runtime=1\\nself_deploy_mode=legacy_pull\\n'
+else
+  printf 'self_deploy_runtime=0\\nself_deploy_mode=\\n'
+fi
 if systemctl cat self-deploy-v2-reconcile.timer >/dev/null 2>&1; then
   if systemctl is-enabled self-deploy-v2-reconcile.timer >/dev/null 2>&1; then printf 'self_deploy_timer_enabled=1\\n'; else printf 'self_deploy_timer_enabled=0\\n'; fi
   if systemctl is-active self-deploy-v2-reconcile.timer >/dev/null 2>&1; then printf 'self_deploy_timer_active=1\\n'; else printf 'self_deploy_timer_active=0\\n'; fi
 else
-  printf 'self_deploy_timer_enabled=0\\nself_deploy_timer_active=0\\n'
+  if test -f /etc/cron.d/self-deploy; then
+    printf 'self_deploy_timer_enabled=1\\nself_deploy_timer_active=1\\n'
+  else
+    printf 'self_deploy_timer_enabled=0\\nself_deploy_timer_active=0\\n'
+  fi
 fi
 """
 
@@ -72,6 +82,7 @@ class SshReadinessTransport:
             self_deploy_timer_enabled=values.get("self_deploy_timer_enabled") == "1",
             self_deploy_timer_active=values.get("self_deploy_timer_active") == "1",
             error=None,
+            self_deploy_mode=values.get("self_deploy_mode") or None,
         )
 
 

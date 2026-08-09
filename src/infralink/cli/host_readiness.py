@@ -43,4 +43,5 @@ def evaluate_host_readiness(
         ready=readiness.ready,
         checks=[HostReadinessCheck(**check.__dict__) for check in readiness.checks],
         actions=[HostBootstrapAction(**action.__dict__) for action in readiness.actions],
+        runtime_mode=probe.self_deploy_mode,
     )
