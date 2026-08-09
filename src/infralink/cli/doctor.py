@@ -474,6 +474,18 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
 def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
     if readiness is None:
         return result
+    if (
+        result.declared.get("status") == "provisioning"
+        and result.declared.get("service_count") == 0
+        and readiness.ready
+    ):
+        return result.model_copy(
+            update={
+                "readiness": readiness,
+                "status": "provisioning",
+                "reason": "host_provisioning_ready",
+            }
+        )
     if not readiness.ready:
         if (
             result.declared.get("status") == "provisioning"

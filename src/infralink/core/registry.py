@@ -127,6 +127,11 @@ class Host:
         return bool(self._schema.model_extra.get("self_deploy_v2_registry_layout_enabled"))
 
     @property
+    def self_deploy_v2_reconcile_enabled(self) -> bool:
+        """Whether this host declares V2 reconciliation as an active requirement."""
+        return bool(self._schema.model_extra.get("self_deploy_v2_reconcile_enabled", True))
+
+    @property
     def managed_services(self) -> dict[str, Any]:
         """Managed service configurations (in legacy docker-compose.yml.j2)."""
         # Prefer managed_services, fall back to services for backward compat

@@ -145,7 +145,13 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
 class HostReadinessEvaluator:
     """Evaluate the explicit bootstrap baseline from one read-only probe."""
 
-    def evaluate(self, *, canonical_name: str, probe: HostReadinessProbe) -> HostReadiness:
+    def evaluate(
+        self,
+        *,
+        canonical_name: str,
+        probe: HostReadinessProbe,
+        require_reconcile: bool = True,
+    ) -> HostReadiness:
         reconcile_passed, reconcile_detail = _reconcile_outcome(probe)
         outcomes: dict[str, tuple[bool, str | None]] = {
             "registry_layout": (
@@ -209,10 +215,21 @@ class HostReadinessEvaluator:
         checks = [
             ReadinessCheck(
                 id=requirement.id,
-                required=True,
-                passed=outcomes[requirement.id][0],
+                required=require_reconcile
+                or requirement.id
+                not in {"self_deploy_timer", "self_deploy_reconcile"},
+                passed=outcomes[requirement.id][0]
+                if require_reconcile
+                or requirement.id not in {"self_deploy_timer", "self_deploy_reconcile"}
+                else True,
                 description=requirement.description,
-                detail=None if outcomes[requirement.id][0] else outcomes[requirement.id][1],
+                detail=None
+                if (
+                    not require_reconcile
+                    and requirement.id in {"self_deploy_timer", "self_deploy_reconcile"}
+                )
+                or outcomes[requirement.id][0]
+                else outcomes[requirement.id][1],
             )
             for requirement in BASELINE_REQUIREMENTS
         ]
@@ -223,10 +240,13 @@ class HostReadinessEvaluator:
                 description=requirement.action_description,
             )
             for requirement in BASELINE_REQUIREMENTS
-            if not outcomes[requirement.id][0]
+            if next(check for check in checks if check.id == requirement.id).required
+            and not outcomes[requirement.id][0]
         ]
         return HostReadiness(
-            ready=all(check.passed for check in checks), checks=checks, actions=actions
+            ready=all(not check.required or check.passed for check in checks),
+            checks=checks,
+            actions=actions,
         )
 
 

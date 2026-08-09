@@ -501,6 +501,29 @@ def test_doctor_keeps_zero_service_provisioning_host_out_of_unhealthy_state() ->
     assert updated.readiness == readiness
 
 
+def test_doctor_reports_ready_zero_service_provisioning_host_as_provisioning() -> None:
+    from infralink.cli.contracts import DoctorResult, DoctorTarget, HostReadinessResult
+    from infralink.cli.doctor import _apply_host_readiness
+
+    result = DoctorResult(
+        target=DoctorTarget(type="host", id=HOST_ID, canonical_name="database.example.com"),
+        declared={"status": "provisioning", "service_count": 0},
+        evidence=[],
+        evidence_summary=[],
+        status="unknown",
+        reason="no_live_observation_evidence",
+    )
+    readiness = HostReadinessResult(
+        transport="root_ssh", ready=True, checks=[], actions=[]
+    )
+
+    updated = _apply_host_readiness(result, readiness)
+
+    assert updated.status == "provisioning"
+    assert updated.reason == "host_provisioning_ready"
+    assert updated.readiness == readiness
+
+
 def test_doctor_fails_provisioning_host_when_its_manifest_is_not_tracked() -> None:
     from infralink.cli.contracts import DoctorResult, DoctorTarget
     from infralink.cli.doctor import _apply_host_manifest_git_state

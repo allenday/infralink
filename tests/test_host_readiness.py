@@ -117,6 +117,35 @@ def test_v2_reconcile_success_satisfies_readiness() -> None:
     assert reconcile.passed is True
 
 
+def test_provisioning_host_without_declared_reconcile_does_not_require_timer_or_run() -> None:
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relaxgg-db-es1",
+        require_reconcile=False,
+        probe=_probe(
+            commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+            devops_account=True,
+            devops_authorized_access=True,
+            bws_config=True,
+            self_deploy_dependencies=True,
+            self_deploy_runtime=True,
+            self_deploy_mode="v2_reconcile",
+            self_deploy_timer_enabled=False,
+            self_deploy_timer_active=False,
+            self_deploy_reconcile_result="exit-code",
+            self_deploy_reconcile_exit_status=1,
+        ),
+    )
+
+    timer = next(check for check in readiness.checks if check.id == "self_deploy_timer")
+    reconcile = next(check for check in readiness.checks if check.id == "self_deploy_reconcile")
+    assert readiness.ready is True
+    assert timer.required is False
+    assert timer.passed is True
+    assert reconcile.required is False
+    assert reconcile.passed is True
+    assert not any(action.check_id in {"self_deploy_timer", "self_deploy_reconcile"} for action in readiness.actions)
+
+
 def test_v2_reconcile_never_started_fails_closed_despite_systemd_defaults() -> None:
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name="relaxgg-db-es1",

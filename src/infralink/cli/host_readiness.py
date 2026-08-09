@@ -41,8 +41,15 @@ def evaluate_host_readiness(
     requires_v2_registry_layout = bool(
         getattr(host, "self_deploy_v2_registry_layout_enabled", False)
     )
+    require_reconcile = bool(
+        getattr(host, "self_deploy_v2_reconcile_enabled", True)
+    )
     probe = replace(probe, requires_v2_registry_layout=requires_v2_registry_layout)
-    readiness = HostReadinessEvaluator().evaluate(canonical_name=canonical_name, probe=probe)
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name=canonical_name,
+        probe=probe,
+        require_reconcile=require_reconcile,
+    )
     return HostReadinessResult(
         transport=cast(Literal["root_ssh", "declaration_only"], transport_name),
         ready=readiness.ready,
