@@ -443,3 +443,34 @@ def test_doctor_keeps_zero_service_provisioning_host_out_of_unhealthy_state() ->
     assert updated.status == "provisioning"
     assert updated.reason == "host_provisioning_incomplete"
     assert updated.readiness == readiness
+
+
+def test_doctor_fails_provisioning_host_when_its_manifest_is_not_tracked() -> None:
+    from infralink.cli.contracts import DoctorResult, DoctorTarget
+    from infralink.cli.doctor import _apply_host_manifest_git_state
+    from infralink.host_registry_state import HostManifestGitState
+
+    result = DoctorResult(
+        target=DoctorTarget(type="host", id=HOST_ID, canonical_name="database.example.com"),
+        declared={"status": "provisioning", "service_count": 0},
+        evidence=[],
+        evidence_summary=[],
+        status="unknown",
+        reason="no_live_observation_evidence",
+    )
+    state = HostManifestGitState(
+        "local_uncommitted",
+        "registry_manifest_untracked",
+        Path("/registry/hosts") / HOST_ID / "manifest.yml",
+        Path("/registry"),
+    )
+
+    updated = _apply_host_manifest_git_state(result, state)
+
+    assert updated.status == "provisioning"
+    assert updated.reason == "registry_manifest_untracked"
+    assert updated.declared["registry_manifest"] == {
+        "state": "local_uncommitted",
+        "manifest_path": str(state.manifest_path),
+        "git_worktree": str(state.git_worktree),
+    }

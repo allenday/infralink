@@ -78,6 +78,8 @@ def test_host_create_write_materializes_a_valid_directory_manifest(tmp_path: Pat
     payload = yaml.safe_load(result.output)
     assert result.exit_code == 0
     assert payload["result"]["mode"] == "written"
+    assert payload["result"]["write_state"] == "local_uncommitted"
+    assert payload["result"]["git_worktree"] == str(tmp_path)
     manifest_path = Path(payload["result"]["manifest_path"])
     assert manifest_path == registry_root / payload["result"]["host_id"] / "manifest.yml"
     assert (
@@ -91,6 +93,13 @@ def test_host_create_write_materializes_a_valid_directory_manifest(tmp_path: Pat
         "field": "tailscale_name",
         "value": "new-node.internal",
         "reason": "input is a DNS hostname and maps to tailscale_name",
+    }
+    git_status = next(item for item in payload["next_actions"] if item["rel"] == "git-status")
+    assert git_status == {
+        "rel": "git-status",
+        "command": f"git -C {tmp_path} status --short",
+        "description": "Inspect the uncommitted registry change",
+        "safe": True,
     }
 
 

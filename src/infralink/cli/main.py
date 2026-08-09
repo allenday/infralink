@@ -1567,11 +1567,21 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     }
     actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
     if manifest_path is not None:
+        git_worktree = ctx.registry_path.parent
+        result["write_state"] = "local_uncommitted"
+        result["git_worktree"] = str(git_worktree)
         actions.append(
             action(
                 "show",
                 [*_root_source_argv(ctx), "host", "show", host_id],
                 "Show the created host",
+            )
+        )
+        actions.append(
+            action(
+                "git-status",
+                ["git", "-C", str(git_worktree), "status", "--short"],
+                "Inspect the uncommitted registry change",
             )
         )
     _emit(ok_envelope(_context_for(path=["host", "create"]), result, actions))

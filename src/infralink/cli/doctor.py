@@ -25,6 +25,7 @@ from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, pass_context
 from infralink.cli.output import ok_envelope
 from infralink.host_transport import SshReadinessTransport
+from infralink.host_registry_state import HostManifestGitState, inspect_host_manifest
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
@@ -497,6 +498,35 @@ def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
     return result.model_copy(update={"readiness": readiness})
 
 
+def _host_manifest_git_state(ctx: Context, host_id: str) -> HostManifestGitState | None:
+    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+        return None
+    return inspect_host_manifest(ctx.registry_path, host_id)
+
+
+def _apply_host_manifest_git_state(
+    result: DoctorResult, state: HostManifestGitState | None
+) -> DoctorResult:
+    if state is None:
+        return result
+    declared = {
+        **result.declared,
+        "registry_manifest": {
+            "state": state.state,
+            "manifest_path": str(state.manifest_path),
+            "git_worktree": str(state.git_worktree),
+        },
+    }
+    if state.state != "local_uncommitted":
+        return result.model_copy(update={"declared": declared})
+    lifecycle = result.declared.get("status")
+    service_count = result.declared.get("service_count")
+    status = "provisioning" if lifecycle == "provisioning" and service_count == 0 else "unhealthy"
+    return result.model_copy(
+        update={"declared": declared, "status": status, "reason": state.reason}
+    )
+
+
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
     return action(
         "bootstrap-plan",
@@ -645,6 +675,16 @@ def doctor(
     result = _apply_host_readiness(result, readiness)
     if readiness is not None and not readiness.ready:
         actions.append(_bootstrap_plan_action(ctx, target.id))
+    manifest_state = _host_manifest_git_state(ctx, target.id) if target_type == "host" else None
+    result = _apply_host_manifest_git_state(result, manifest_state)
+    if manifest_state is not None and manifest_state.state == "local_uncommitted":
+        actions.append(
+            action(
+                "git-status",
+                ["git", "-C", str(manifest_state.git_worktree), "status", "--short"],
+                "Inspect the uncommitted registry change",
+            )
+        )
     _emit_result(
         ctx,
         result,
