@@ -10,7 +10,7 @@ from infralink.cli.contracts import ContractModel, DoctorTarget
 
 
 class OperationSummary(ContractModel):
-    id: str = Field(pattern=r"^op_[A-Za-z0-9_-]{8,128}$")
+    id: str = Field(pattern=r"^woodpecker/[1-9][0-9]*/[1-9][0-9]*$")
     state: Literal["queued", "applying", "converged", "failed"]
 
 

@@ -39,7 +39,11 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.host_readiness import evaluate_host_readiness
-from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult, OperationSummary
+from infralink.cli.operation_contracts import (
+    HostApplyResult,
+    OperationStatusResult,
+    OperationSummary,
+)
 from infralink.cli.output import (
     command_context,
     error_envelope,
@@ -288,13 +292,13 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "description": "Inspect durable host apply operations.",
         "arguments": [],
         "options": [],
-        "examples": ["infralink operation status op_01J00000000000000000000000"],
+        "examples": ["infralink operation status woodpecker/30/42"],
     },
     ("operation", "status"): {
         "description": "Get the current state of one durable host apply operation.",
         "arguments": [{"name": "operation_id", "type": "string", "required": True}],
         "options": [],
-        "examples": ["infralink operation status op_01J00000000000000000000000"],
+        "examples": ["infralink operation status woodpecker/30/42"],
     },
     ("edge",): {
         "description": "Inspect edges.",

@@ -1,4 +1,4 @@
-"""Provider-neutral control-plane operation client for host apply."""
+"""Woodpecker-backed durable host apply operations."""
 
 from __future__ import annotations
 
@@ -17,10 +17,14 @@ import yaml
 
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 
-_OPERATION_ID = re.compile(r"^op_[A-Za-z0-9_-]{8,128}$")
+_OPERATION_ID = re.compile(r"^woodpecker/(?P<repository>[1-9][0-9]*)/(?P<number>[1-9][0-9]*)$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 _CHANNEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-_CONTROL_PLANE_URL = "INFRALINK_CONTROL_PLANE_URL"
+_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_WOODPECKER_URL = "INFRALINK_WOODPECKER_URL"
+_WOODPECKER_REPOSITORY_ID = "INFRALINK_WOODPECKER_REPOSITORY_ID"
+_WOODPECKER_BRANCH = "INFRALINK_WOODPECKER_BRANCH"
+_WOODPECKER_TOKEN_ENV = "INFRALINK_WOODPECKER_TOKEN_ENV"
 
 
 @dataclass(frozen=True)
@@ -45,44 +49,90 @@ class OperationRecord:
     state: str
     target: dict[str, str] | None = None
 
-    @classmethod
-    def from_payload(cls, value: object) -> OperationRecord:
-        if not isinstance(value, dict):
-            raise _provider_failure("Control plane returned an invalid operation record")
-        operation_id = value.get("id")
-        state = value.get("state")
-        if not isinstance(operation_id, str) or not _OPERATION_ID.fullmatch(operation_id):
-            raise _provider_failure("Control plane returned an invalid operation ID")
-        if state not in {"queued", "applying", "converged", "failed"}:
-            raise _provider_failure("Control plane returned an invalid operation state")
-        target = value.get("target")
-        if target is not None and (
-            not isinstance(target, dict)
-            or target.get("type") != "host"
-            or not isinstance(target.get("id"), str)
-            or not isinstance(target.get("canonical_name"), str)
-        ):
-            raise _provider_failure("Control plane returned an invalid operation target")
-        return cls(id=operation_id, state=state, target=target)
-
-
 class OperationProvider(Protocol):
     def submit(self, request: ApplyRequest) -> OperationRecord: ...
 
     def status(self, operation_id: str) -> OperationRecord: ...
 
 
-class HttpOperationProvider:
-    """Minimal HTTP adapter; provider implementation owns operation durability."""
+class WoodpeckerOperationProvider:
+    """Use a Woodpecker pipeline as the durable apply-operation record."""
 
-    def __init__(self, base_url: str) -> None:
-        self._base_url = base_url.rstrip("/")
+    def __init__(self, *, url: str, repository_id: int, branch: str, token: str) -> None:
+        self._url = url.rstrip("/")
+        self._repository_id = repository_id
+        self._branch = branch
+        self._token = token
 
     def submit(self, request: ApplyRequest) -> OperationRecord:
-        return OperationRecord.from_payload(self._request("POST", "/operations", request.as_payload()))
+        payload = {
+            "branch": self._branch,
+            "variables": {
+                "INFRALINK_APPLY_HOST_UUID": request.host_uuid,
+                "INFRALINK_APPLY_REGISTRY_REVISION": request.registry_revision,
+                "INFRALINK_APPLY_SELECTOR": request.selector,
+            },
+        }
+        pipeline = self._request("POST", "/pipelines", payload)
+        return self._record_from_pipeline(pipeline)
 
     def status(self, operation_id: str) -> OperationRecord:
-        if not _OPERATION_ID.fullmatch(operation_id):
+        repository_id, number = self._parse_operation_id(operation_id)
+        if repository_id != self._repository_id:
+            raise CliFailure(
+                code=ErrorCode.USAGE_ERROR,
+                message="Operation belongs to a different Woodpecker repository",
+                exit_code=ExitCode.USAGE_ERROR,
+                fix="Use an operation ID returned by this control host",
+                details={"operation_id": operation_id},
+            )
+        pipeline = self._request("GET", f"/pipelines/{number}")
+        return self._record_from_pipeline(pipeline, expected_number=number)
+
+    def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> object:
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request = Request(
+            f"{self._url}/api/repos/{self._repository_id}{path}",
+            data=data,
+            method=method,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._token}",
+            },
+        )
+        try:
+            with urlopen(request, timeout=15) as response:  # noqa: S310 - configured control host
+                return json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, ValueError):
+            raise _provider_failure("Woodpecker operation is unavailable") from None
+
+    def _record_from_pipeline(self, value: object, *, expected_number: int | None = None) -> OperationRecord:
+        if not isinstance(value, dict):
+            raise _provider_failure("Woodpecker returned an invalid pipeline record")
+        number = value.get("number")
+        status = value.get("status")
+        if not isinstance(number, int) or number < 1 or (expected_number is not None and number != expected_number):
+            raise _provider_failure("Woodpecker returned an invalid pipeline number")
+        if not isinstance(status, str):
+            raise _provider_failure("Woodpecker returned an invalid pipeline status")
+        state = {
+            "pending": "queued",
+            "running": "applying",
+            "blocked": "applying",
+            "success": "converged",
+            "failure": "failed",
+            "error": "failed",
+            "killed": "failed",
+        }.get(status)
+        if state is None:
+            raise _provider_failure("Woodpecker returned an unsupported pipeline status")
+        return OperationRecord(id=f"woodpecker/{self._repository_id}/{number}", state=state)
+
+    @staticmethod
+    def _parse_operation_id(operation_id: str) -> tuple[int, int]:
+        match = _OPERATION_ID.fullmatch(operation_id)
+        if match is None:
             raise CliFailure(
                 code=ErrorCode.USAGE_ERROR,
                 message="Operation ID is invalid",
@@ -90,34 +140,52 @@ class HttpOperationProvider:
                 fix="Use the opaque operation ID returned by host apply",
                 details={"operation_id": operation_id},
             )
-        return OperationRecord.from_payload(self._request("GET", f"/operations/{operation_id}"))
-
-    def _request(self, method: str, path: str, body: dict[str, str] | None = None) -> object:
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        request = Request(
-            f"{self._base_url}{path}",
-            data=data,
-            method=method,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-        )
-        try:
-            with urlopen(request, timeout=15) as response:  # noqa: S310 - configured control plane
-                return json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, ValueError):
-            raise _provider_failure("Control plane operation is unavailable") from None
+        return int(match.group("repository")), int(match.group("number"))
 
 
 def operation_provider_from_environment() -> OperationProvider:
-    url = os.environ.get(_CONTROL_PLANE_URL)
-    if not url:
+    values = {
+        _WOODPECKER_URL: os.environ.get(_WOODPECKER_URL),
+        _WOODPECKER_REPOSITORY_ID: os.environ.get(_WOODPECKER_REPOSITORY_ID),
+        _WOODPECKER_BRANCH: os.environ.get(_WOODPECKER_BRANCH),
+        _WOODPECKER_TOKEN_ENV: os.environ.get(_WOODPECKER_TOKEN_ENV),
+    }
+    missing = sorted(name for name, value in values.items() if not value)
+    if missing:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Host apply control plane is not configured",
+            message="Host apply Woodpecker control host is not configured",
             exit_code=ExitCode.PROVIDER_ERROR,
-            fix=f"Set {_CONTROL_PLANE_URL} for the configured control-plane adapter",
-            details={"environment": _CONTROL_PLANE_URL},
+            fix="Configure the required INFRALINK_WOODPECKER_* control-host environment",
+            details={"missing_environment": missing},
         )
-    return HttpOperationProvider(url)
+    repository_id_text = values[_WOODPECKER_REPOSITORY_ID]
+    token_environment = values[_WOODPECKER_TOKEN_ENV]
+    assert repository_id_text is not None
+    assert token_environment is not None
+    if not repository_id_text.isdigit() or int(repository_id_text) < 1:
+        raise _configuration_failure(_WOODPECKER_REPOSITORY_ID)
+    if _ENVIRONMENT_NAME.fullmatch(token_environment) is None:
+        raise _configuration_failure(_WOODPECKER_TOKEN_ENV)
+    token = os.environ.get(token_environment)
+    if not token:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host apply Woodpecker token is not configured",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix=f"Set the environment named by {_WOODPECKER_TOKEN_ENV}",
+            details={"token_environment": token_environment},
+        )
+    url = values[_WOODPECKER_URL]
+    branch = values[_WOODPECKER_BRANCH]
+    assert url is not None
+    assert branch is not None
+    return WoodpeckerOperationProvider(
+        url=url,
+        repository_id=int(repository_id_text),
+        branch=branch,
+        token=token,
+    )
 
 
 def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
@@ -223,6 +291,16 @@ def _registry_failure(message: str, path: Path) -> CliFailure:
         exit_code=ExitCode.INPUT_ERROR,
         fix="Correct the declared host apply configuration and retry",
         details={"path": str(path)},
+    )
+
+
+def _configuration_failure(environment: str) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.CONFIGURATION_REQUIRED,
+        message="Host apply Woodpecker control host configuration is invalid",
+        exit_code=ExitCode.PROVIDER_ERROR,
+        fix="Correct the configured INFRALINK_WOODPECKER_* control-host environment",
+        details={"environment": environment},
     )
 
 

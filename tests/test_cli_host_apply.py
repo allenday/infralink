@@ -10,7 +10,6 @@ from click.testing import CliRunner
 from infralink.cli.main import cli
 from tests.cli_helpers import assert_schema
 
-
 HOSTS = (
     ("32a3324f-c3d0-4a4f-9587-52c099bcb3fb", "relaxgg-db-es1"),
     ("7ffe46b7-0eb4-40cb-8e14-ea679b9948f4", "cyberstorm-watchtower"),
@@ -85,7 +84,7 @@ def test_host_apply_submits_each_target_through_one_opaque_operation_for_an_immu
     class Provider:
         def submit(self, request: operations.ApplyRequest) -> operations.OperationRecord:
             submitted.update(request.as_payload())
-            return operations.OperationRecord(id="op_01J00000000000000000000000", state="queued")
+            return operations.OperationRecord(id="woodpecker/30/42", state="queued")
 
         def status(self, operation_id: str) -> operations.OperationRecord:
             raise AssertionError("default apply must not poll")
@@ -103,13 +102,13 @@ def test_host_apply_submits_each_target_through_one_opaque_operation_for_an_immu
         "selector": "release-channels/v2.yml",
     }
     assert payload["result"] == {
-        "operation": {"id": "op_01J00000000000000000000000", "state": "queued"},
+        "operation": {"id": "woodpecker/30/42", "state": "queued"},
         "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
     }
     assert payload["next_actions"] == [
         {
             "rel": "status",
-            "command": "infralink operation status op_01J00000000000000000000000",
+            "command": "infralink operation status woodpecker/30/42",
             "description": "Check host apply progress",
             "safe": True,
         }
@@ -127,7 +126,7 @@ def test_host_apply_wait_polls_the_submitted_operation_until_terminal(
 
     class Provider:
         def submit(self, request: operations.ApplyRequest) -> operations.OperationRecord:
-            return operations.OperationRecord(id="op_01J00000000000000000000000", state="queued")
+            return operations.OperationRecord(id="woodpecker/30/42", state="queued")
 
         def status(self, operation_id: str) -> operations.OperationRecord:
             return operations.OperationRecord(
@@ -148,7 +147,7 @@ def test_host_apply_wait_polls_the_submitted_operation_until_terminal(
     assert response.exit_code == 0
     assert_schema(payload, "host-apply")
     assert payload["result"]["operation"]["state"] == "converged"
-    assert payload["result"]["operation"]["id"] == "op_01J00000000000000000000000"
+    assert payload["result"]["operation"]["id"] == "woodpecker/30/42"
 
 
 @pytest.mark.parametrize(("host_id", "canonical_name"), HOSTS)
@@ -162,7 +161,7 @@ def test_operation_status_is_a_resumable_provider_poll(
             raise AssertionError("status must not submit")
 
         def status(self, operation_id: str) -> operations.OperationRecord:
-            assert operation_id == "op_01J00000000000000000000000"
+            assert operation_id == "woodpecker/30/42"
             return operations.OperationRecord(
                 id=operation_id,
                 state="applying",
@@ -171,14 +170,14 @@ def test_operation_status_is_a_resumable_provider_poll(
 
     monkeypatch.setattr(operations, "operation_provider_from_environment", lambda: Provider())
     response = CliRunner().invoke(
-        cli, ["operation", "status", "op_01J00000000000000000000000"]
+        cli, ["operation", "status", "woodpecker/30/42"]
     )
 
     payload = yaml.safe_load(response.output)
     assert response.exit_code == 0
     assert_schema(payload, "operation-status")
     assert payload["result"]["operation"] == {
-        "id": "op_01J00000000000000000000000",
+        "id": "woodpecker/30/42",
         "state": "applying",
     }
     assert payload["result"]["target"] == {
