@@ -42,7 +42,9 @@ def test_info_json():
     with runner.isolated_filesystem():
         _write_registry("registry.yml")
         _write_edges("edges.yml")
-        result = runner.invoke(cli, ["--registry", "registry.yml", "--edges", "edges.yml", "info"])
+        result = runner.invoke(
+            cli, ["--output", "json", "--registry", "registry.yml", "--edges", "edges.yml", "info"]
+        )
     payload = json.loads(result.output)
     assert payload["ok"] is True
 
@@ -51,7 +53,7 @@ def test_hosts_json():
     runner = CliRunner()
     with runner.isolated_filesystem():
         _write_registry("registry.yml")
-        result = runner.invoke(cli, ["--registry", "registry.yml", "hosts"])
+        result = runner.invoke(cli, ["--output", "json", "--registry", "registry.yml", "hosts"])
     payload = json.loads(result.output)
     assert payload["ok"] is True
 
@@ -62,7 +64,16 @@ def test_edges_list_json():
         _write_registry("registry.yml")
         _write_edges("edges.yml")
         result = runner.invoke(
-            cli, ["--registry", "registry.yml", "--edges", "edges.yml", "edges-list"]
+            cli,
+            [
+                "--output",
+                "json",
+                "--registry",
+                "registry.yml",
+                "--edges",
+                "edges.yml",
+                "edges-list",
+            ],
         )
     payload = json.loads(result.output)
     assert payload["ok"] is True
@@ -78,6 +89,8 @@ def test_diagram_stdout_is_a_json_usage_error():
         result = runner.invoke(
             cli,
             [
+                "--output",
+                "json",
                 "--registry",
                 "registry.yml",
                 "--edges",

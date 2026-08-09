@@ -17,7 +17,7 @@ EXAMPLES = ROOT / "examples"
 
 
 def invoke(*args: str):
-    return CliRunner().invoke(cli, list(args))
+    return CliRunner().invoke(cli, ["--output", "json", *args])
 
 
 def payload_for(*args: str) -> dict:
@@ -54,7 +54,7 @@ def test_help_is_json() -> None:
     assert payload["result"]["path"] == ["resolve"]
     assert payload["result"]["arguments"][0]["name"] == "edge_id"
     assert payload["result"]["options"]
-    assert payload["result"]["examples"]
+    assert payload["result"]["children"] == []
 
 
 def test_click_help_aliases_are_json() -> None:

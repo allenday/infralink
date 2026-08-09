@@ -40,6 +40,7 @@ INTERNAL_ERROR_FIX = "Retry the command or report the failure"
 
 class ErrorCode(str, Enum):
     USAGE_ERROR = "usage_error"
+    CONFIGURATION_REQUIRED = "configuration_required"
     INPUT_LOAD_FAILED = "input_load_failed"
     ENTITY_NOT_FOUND = "entity_not_found"
     INVALID_CURSOR = "invalid_cursor"

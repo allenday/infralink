@@ -17,7 +17,7 @@ EDGE_ID = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
 
 
 def invoke(*args: str):
-    return CliRunner().invoke(cli, list(args))
+    return CliRunner().invoke(cli, ["--output", "json", *args])
 
 
 def resolve(*args: str):

@@ -398,6 +398,18 @@ class HelpResult(ContractModel):
     arguments: list[ArgumentDescriptor]
     options: list[OptionDescriptor]
     examples: list[str]
+    children: list[HelpSubcommand] = Field(default_factory=list)
+
+
+class HelpSubcommand(ContractModel):
+    name: str
+    summary: str
+    action: HelpNavigationAction
+
+
+class HelpNavigationAction(ContractModel):
+    rel: Literal["help"] = "help"
+    command: str
 
 
 class VersionResult(ContractModel):

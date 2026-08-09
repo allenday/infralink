@@ -152,6 +152,26 @@
       "title": "ErrorDetail",
       "type": "object"
     },
+    "HelpNavigationAction": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "rel": {
+          "const": "help",
+          "default": "help",
+          "title": "Rel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "title": "HelpNavigationAction",
+      "type": "object"
+    },
     "HelpResult": {
       "additionalProperties": false,
       "properties": {
@@ -160,6 +180,13 @@
             "$ref": "#/$defs/ArgumentDescriptor"
           },
           "title": "Arguments",
+          "type": "array"
+        },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/HelpSubcommand"
+          },
+          "title": "Children",
           "type": "array"
         },
         "description": {
@@ -196,6 +223,29 @@
         "examples"
       ],
       "title": "HelpResult",
+      "type": "object"
+    },
+    "HelpSubcommand": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/HelpNavigationAction"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "summary",
+        "action"
+      ],
+      "title": "HelpSubcommand",
       "type": "object"
     },
     "Meta": {

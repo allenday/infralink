@@ -304,6 +304,8 @@ def _invoke(registry_path: Path, edges_path: Path, *args: str):
     return CliRunner().invoke(
         cli,
         [
+            "--output",
+            "json",
             "--registry",
             str(registry_path),
             "--edges",
@@ -429,7 +431,7 @@ def test_cli_cursor_resumes_without_duplicates_and_exposes_exact_binding(
     assert continuation["bindings"]["cursor"]["source"] == "result.page.next_cursor"
 
     replay_argv = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
-    second = _payload(CliRunner().invoke(cli, replay_argv[1:]))
+    second = _payload(CliRunner().invoke(cli, ["--output", "json", *replay_argv[1:]]))
     first_ids = {item["id"] for item in first["result"]["items"]}
     second_ids = {item["id"] for item in second["result"]["items"]}
     assert first_ids.isdisjoint(second_ids)
@@ -590,7 +592,7 @@ def test_truncated_host_preview_has_executable_detail_action(
     detail = next(
         item for item in payload["next_actions"] if item["argv"][-3:] == ["host", "show", host_id]
     )
-    replay = _payload(CliRunner().invoke(cli, detail["argv"][1:]))
+    replay = _payload(CliRunner().invoke(cli, ["--output", "json", *detail["argv"][1:]]))
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/host-show.json").read_text())
     Draft202012Validator(schema).validate(replay)
     assert not any(
@@ -629,7 +631,7 @@ def test_truncated_service_preview_has_executable_detail_action(
         for item in payload["next_actions"]
         if item["argv"][-3:] == ["service", "show", "shared"]
     )
-    replay = _payload(CliRunner().invoke(cli, detail["argv"][1:]))
+    replay = _payload(CliRunner().invoke(cli, ["--output", "json", *detail["argv"][1:]]))
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/service-show.json").read_text())
     Draft202012Validator(schema).validate(replay)
     assert not any(
@@ -683,7 +685,7 @@ def test_app_truncated_service_action_preserves_scope_and_paginates(
         ]
     )
 
-    scoped = _payload(CliRunner().invoke(cli, detail["argv"][1:]))
+    scoped = _payload(CliRunner().invoke(cli, ["--output", "json", *detail["argv"][1:]]))
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/service-show.json").read_text())
     Draft202012Validator(schema).validate(scoped)
     assert scoped["result"]["service"]["host_count"] == 129
@@ -696,5 +698,5 @@ def test_app_truncated_service_action_preserves_scope_and_paginates(
     ]
     cursor = scoped["result"]["hosts"]["page"]["next_cursor"]
     replay = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
-    final = _payload(CliRunner().invoke(cli, replay[1:]))
+    final = _payload(CliRunner().invoke(cli, ["--output", "json", *replay[1:]]))
     assert final["result"]["hosts"]["page"]["returned"] == 29

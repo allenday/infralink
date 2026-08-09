@@ -65,7 +65,7 @@ def write_topology(
 def invoke(registry: Path, edges: Path, *args: str):
     return CliRunner().invoke(
         cli,
-        ["--registry", str(registry), "--edges", str(edges), *args],
+        ["--output", "json", "--registry", str(registry), "--edges", str(edges), *args],
     )
 
 
@@ -165,7 +165,7 @@ def test_inspect_ref_unions_locations_across_projects_and_pages(tmp_path: Path) 
     ]
     cursor = first["result"]["locations"]["page"]["next_cursor"]
     replay_argv = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
-    second = CliRunner().invoke(cli, replay_argv[1:])
+    second = CliRunner().invoke(cli, ["--output", "json", *replay_argv[1:]])
     second_body = payload(second)
     assert second_body["result"]["locations"]["page"]["returned"] == 1
     assert second_body["result"]["locations"]["page"]["next_cursor"] is None
@@ -572,8 +572,8 @@ def test_audit_rejects_credential_and_arbitrary_identity_options(
 
 
 def test_secrets_help_is_live_and_has_no_credential_options() -> None:
-    inspect = payload(CliRunner().invoke(cli, ["help", "secrets", "inspect"]))
-    audit = payload(CliRunner().invoke(cli, ["help", "secrets", "audit"]))
+    inspect = payload(CliRunner().invoke(cli, ["--output", "json", "help", "secrets", "inspect"]))
+    audit = payload(CliRunner().invoke(cli, ["--output", "json", "help", "secrets", "audit"]))
 
     assert {item["name"] for item in inspect["result"]["options"]} == {
         "ref",
@@ -650,7 +650,7 @@ def test_audit_schema_and_provider_paging_replay(
     assert ["--provider", "bws"] == action["argv"][provider_index : provider_index + 2]
     cursor = first["result"]["references"]["page"]["next_cursor"]
     replay = [cursor if item == "{cursor}" else item for item in action["argv"]]
-    second = payload(CliRunner().invoke(cli, replay[1:]))
+    second = payload(CliRunner().invoke(cli, ["--output", "json", *replay[1:]]))
     assert second["result"]["references"]["items"][0]["ref"] == "beta"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/secrets-audit.json").read_text())
     Draft202012Validator(schema).validate(first)

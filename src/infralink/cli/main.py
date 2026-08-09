@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import click
+import yaml
 
 from infralink import __version__
 from infralink.cli.actions import action
@@ -21,7 +22,9 @@ from infralink.cli.contracts import (
     CommandContext,
     CommandDescriptor,
     EdgeSummary,
+    HelpNavigationAction,
     HelpResult,
+    HelpSubcommand,
     HostSummary,
     InfoResult,
     InfoSources,
@@ -39,15 +42,31 @@ from infralink.cli.output import (
     redact_argv,
 )
 
-# Default paths (can be overridden)
-DEFAULT_REGISTRY = "examples/registry.yml"
-DEFAULT_EDGES = "examples/edges.yml"
+# Topology sources are intentionally explicit. Examples are demo/test fixtures,
+# never an implicit operational fallback.
+REGISTRY_ENVVAR = "INFRALINK_REGISTRY"
+EDGES_ENVVAR = "INFRALINK_EDGES"
 _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+
+
+class _FlowMapping(dict[str, Any]):
+    """A YAML-only compact representation for small HATEOAS navigation links."""
+
+
+class _CliYamlDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_flow_mapping(dumper: yaml.SafeDumper, value: _FlowMapping) -> yaml.nodes.MappingNode:
+    return dumper.represent_mapping("tag:yaml.org,2002:map", value, flow_style=True)
+
+
+_CliYamlDumper.add_representer(_FlowMapping, _represent_flow_mapping)
 
 
 class Context:
@@ -57,7 +76,7 @@ class Context:
         self.registry_path: Path | None = None
         self.edges_path: Path | None = None
         self.verbose: bool = False
-        self.output: str = "json"
+        self.output: str = "yaml"
         self.output_explicit: bool = False
         self._registry: Any = None
         self._edges: Any = None
@@ -68,8 +87,10 @@ class Context:
         if self._registry is None:
             from infralink.core.registry import Registry
 
+            if not self.registry_path:
+                raise configuration_required("registry")
             path = str(self.registry_path)
-            if not self.registry_path or not self.registry_path.exists():
+            if not self.registry_path.exists():
                 raise input_load_failed("registry", path)
             try:
                 if self.registry_path.is_dir():
@@ -121,7 +142,7 @@ class Context:
                         except Exception:
                             raise input_load_failed("registry", str(self.registry_path)) from None
                 else:
-                    self._edges = EdgeSet([])
+                    raise configuration_required("edges")
         return self._edges
 
 
@@ -359,9 +380,9 @@ def _context_for(
     resolved = {
         "version": __version__,
         "cwd": os.getcwd(),
-        "registry": str(root_values.get("registry", DEFAULT_REGISTRY)),
-        "edges": str(root_values.get("edges", DEFAULT_EDGES)),
-        "output": root_values.get("output", "json"),
+        "registry": _source_value(root_values.get("registry")),
+        "edges": _source_value(root_values.get("edges")),
+        "output": root_values.get("output", "yaml"),
         "verbose": bool(root_values.get("verbose", False)),
     }
     resolved.update(_command_resolved_overrides(redacted_argv, parsed_path))
@@ -413,6 +434,27 @@ def input_load_failed(source: str, path: str) -> CliFailure:
             )
         ],
     )
+
+
+def configuration_required(source: str) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.CONFIGURATION_REQUIRED,
+        message=f"{source.title()} configuration is required",
+        exit_code=ExitCode.USAGE_ERROR,
+        fix=f"Set {REGISTRY_ENVVAR if source == 'registry' else EDGES_ENVVAR} or provide --{source}",
+        details={"source": source},
+        next_actions=[
+            action(
+                "help",
+                ["infralink", "help", "hosts" if source == "registry" else "edges-list"],
+                "Show topology input options",
+            )
+        ],
+    )
+
+
+def _source_value(path: Path | None) -> str | None:
+    return str(path) if path is not None else None
 
 
 def _protected_args(ctx: click.Context) -> list[str]:
@@ -536,11 +578,11 @@ def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
         return argv
 
     path, _, _ = _parse_invocation(redact_argv(argv[: argv.index("--help")]))
-    return ["help", *path]
+    return ["--output", _output_from_argv(argv), "help", *path]
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    serialized = json.dumps(payload, separators=(",", ":"))
+    serialized = _serialize(payload)
     _ENVELOPE_EMITTED.set(True)
     if _DEFER_ENVELOPE.get():
         _PENDING_ENVELOPE.set(serialized)
@@ -548,47 +590,168 @@ def _emit(payload: dict[str, Any]) -> None:
         click.echo(serialized)
 
 
+def _serialize(payload: dict[str, Any]) -> str:
+    """Serialize envelopes in the root invocation's selected output format."""
+    context = click.get_current_context(silent=True)
+    if context is not None:
+        root = context.find_root()
+        if isinstance(root.obj, Context):
+            output = root.obj.output
+        else:
+            output = _output_from_argv(_INVOCATION_ARGS.get() or [])
+    else:
+        incoming = _INVOCATION_ARGS.get()
+        # JsonGroup is reusable outside the public CLI. Preserve its historical
+        # JSON fallback when no Infralink root invocation established a format.
+        output = "json" if incoming is None else _output_from_argv(incoming)
+    if output == "json":
+        return json.dumps(payload, separators=(",", ":"))
+    return yaml.dump(_compact_help_actions(payload), Dumper=_CliYamlDumper, sort_keys=False).rstrip(
+        "\n"
+    )
+
+
+def _compact_help_actions(value: Any) -> Any:
+    if isinstance(value, dict):
+        converted = {key: _compact_help_actions(item) for key, item in value.items()}
+        if set(converted) == {"rel", "command"} and converted["rel"] == "help":
+            return _FlowMapping(converted)
+        return converted
+    if isinstance(value, list):
+        return [_compact_help_actions(item) for item in value]
+    return value
+
+
+def _output_from_argv(argv: list[str]) -> str:
+    """Read the root output option without re-entering Click command parsing."""
+    output = "yaml"
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--" or not token.startswith("-"):
+            break
+        if token in {"--registry", "--edges", "-r", "-e"}:
+            index += 2
+            continue
+        if token.startswith(("--registry=", "--edges=")):
+            index += 1
+            continue
+        if token in {"--output", "-o"}:
+            if index + 1 < len(argv):
+                output = argv[index + 1].lower()
+            index += 2
+            continue
+        if token.startswith("--output="):
+            output = token.partition("=")[2].lower()
+            index += 1
+            continue
+        if token.startswith("-") and not token.startswith("--"):
+            cluster = token[1:]
+            output_offset = cluster.find("o")
+            if output_offset >= 0:
+                attached = cluster[output_offset + 1 :]
+                if attached:
+                    output = attached.lower()
+                    index += 1
+                elif index + 1 < len(argv):
+                    output = argv[index + 1].lower()
+                    index += 2
+                else:
+                    index += 1
+                continue
+        index += 1
+    return output if output in {"json", "yaml"} else "yaml"
+
+
 def _help_result(path: tuple[str, ...]) -> HelpResult:
-    metadata = HELP_METADATA.get(path)
     command = _command_for_path(path)
-    if command is not None:
-        arguments = []
-        options = []
-        for parameter in command.params:
-            if isinstance(parameter, click.Argument):
-                arguments.append(
-                    ArgumentDescriptor(
-                        name=parameter.name or "",
-                        type=parameter.type.name,
-                        required=parameter.required,
-                    )
-                )
-            elif isinstance(parameter, click.Option):
-                long_option = next(
-                    (option for option in parameter.opts if option.startswith("--")),
-                    parameter.name or "",
-                )
-                options.append(
-                    OptionDescriptor(
-                        name=long_option.removeprefix("--").replace("-", "_"),
-                        type=parameter.type.name,
-                        required=parameter.required,
-                    )
-                )
-        root_metadata = COMMAND_METADATA.get(path[0], {}) if path else {}
-        metadata = {
-            "description": (
-                (metadata or {}).get("description")
-                or command.help
-                or root_metadata.get("description", "")
-            ),
-            "arguments": arguments,
-            "options": options,
-            "examples": (metadata or {}).get("examples", [root_metadata.get("usage", "infralink")]),
-        }
-    if metadata is None:
+    if command is None:
         raise click.UsageError("Unknown command path")
-    return HelpResult(path=list(path), **metadata)
+    arguments, options = _help_parameters(command)
+    return HelpResult(
+        path=list(path),
+        description=_command_description(command),
+        arguments=arguments,
+        options=options,
+        examples=[],
+        children=_help_children(path, command),
+    )
+
+
+def _help_parameters(
+    command: click.Command,
+) -> tuple[list[ArgumentDescriptor], list[OptionDescriptor]]:
+    arguments: list[ArgumentDescriptor] = []
+    options: list[OptionDescriptor] = []
+    for parameter in command.params:
+        if isinstance(parameter, click.Argument):
+            arguments.append(
+                ArgumentDescriptor(
+                    name=parameter.name or "",
+                    type=parameter.type.name,
+                    required=parameter.required,
+                )
+            )
+        elif isinstance(parameter, click.Option):
+            long_option = next(
+                (option for option in parameter.opts if option.startswith("--")),
+                parameter.name or "",
+            )
+            options.append(
+                OptionDescriptor(
+                    name=long_option.removeprefix("--").replace("-", "_"),
+                    type=parameter.type.name,
+                    required=parameter.required,
+                )
+            )
+    return arguments, options
+
+
+def _command_description(command: click.Command) -> str:
+    callback = command.callback
+    return (
+        command.help
+        or command.short_help
+        or (callback.__doc__ if callback is not None else "")
+        or ""
+    )
+
+
+def _help_children(path: tuple[str, ...], command: click.Command) -> list[HelpSubcommand]:
+    if not isinstance(command, click.Group):
+        return []
+    context = click.Context(command)
+    children: list[HelpSubcommand] = []
+    for name in command.list_commands(context):
+        child = command.get_command(context, name)
+        if child is None:
+            continue
+        action_value = HelpNavigationAction(command=" ".join([*_help_argv_prefix(), *path, name]))
+        children.append(
+            HelpSubcommand(
+                name=name,
+                summary=_command_summary(child),
+                action=action_value,
+            )
+        )
+    return children
+
+
+def _command_summary(command: click.Command) -> str:
+    return next(
+        (line.strip() for line in _command_description(command).splitlines() if line.strip()),
+        "",
+    )
+
+
+def _help_argv_prefix() -> list[str]:
+    context = click.get_current_context(silent=True)
+    if context is None:
+        return ["infralink", "help"]
+    root = context.find_root()
+    if isinstance(root.obj, Context) and root.obj.output_explicit:
+        return ["infralink", "--output", root.obj.output, "help"]
+    return ["infralink", "help"]
 
 
 def _command_for_path(path: tuple[str, ...]) -> click.Command | None:
@@ -853,14 +1016,16 @@ def version_command() -> None:
     "-r",
     "--registry",
     type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_REGISTRY,
+    default=None,
+    envvar=REGISTRY_ENVVAR,
     help="Path to registry YAML file",
 )
 @click.option(
     "-e",
     "--edges",
     type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_EDGES,
+    default=None,
+    envvar=EDGES_ENVVAR,
     help="Path to edges YAML file",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output")
@@ -868,12 +1033,14 @@ def version_command() -> None:
     "-o",
     "--output",
     type=click.Choice(["json", "yaml"], case_sensitive=False),
-    default="json",
+    default="yaml",
     show_default=True,
-    help="Output format (json = agent-first)",
+    help="Output format (yaml by default; json for explicit machine parsing)",
 )
 @pass_context
-def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -> None:
+def cli(
+    ctx: Context, registry: Path | None, edges: Path | None, verbose: bool, output: str
+) -> None:
     """
     Infralink - Infrastructure topology modeling.
 
@@ -911,9 +1078,9 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
         _context_for(path=[]),
         command_tree,
         [
-            action("help", ["infralink", "help"], "Show available commands"),
-            action("list", ["infralink", "services"], "List declared services"),
-            action("version", ["infralink", "version"], "Show CLI version"),
+            action("help", _help_argv_prefix(), "Show available commands"),
+            action("list", [*_root_source_argv(ctx), "services"], "List declared services"),
+            action("version", [*_root_action_prefix(ctx), "version"], "Show CLI version"),
         ],
     )
     _emit(payload)
@@ -1010,13 +1177,19 @@ def _attach_next_cursors(
 
 
 def _root_source_argv(ctx: Context) -> list[str]:
-    return [
-        "infralink",
-        "--registry",
-        str(ctx.registry_path),
-        "--edges",
-        str(ctx.edges_path),
-    ]
+    argv = _root_action_prefix(ctx)
+    if ctx.registry_path is not None:
+        argv.extend(["--registry", str(ctx.registry_path)])
+    if ctx.edges_path is not None:
+        argv.extend(["--edges", str(ctx.edges_path)])
+    return argv
+
+
+def _root_action_prefix(ctx: Context) -> list[str]:
+    argv = ["infralink"]
+    if ctx.output_explicit:
+        argv.extend(["--output", ctx.output])
+    return argv
 
 
 def _summary_detail_actions(
@@ -1333,6 +1506,7 @@ def host_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
+    """Show one host."""
     from infralink.cli.queries import show_host
 
     selected = _active_collection(collection, cursor, ("services", "projects"))
@@ -1391,6 +1565,7 @@ def service_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
+    """Show one service."""
     from infralink.cli.queries import show_service
 
     collections = ("hosts", "ports", "protocols", "edges")
@@ -1473,6 +1648,7 @@ def edge_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
+    """Show one edge."""
     from infralink.cli.queries import show_edge
 
     selected = _active_collection(collection, cursor, ("secret_refs",))

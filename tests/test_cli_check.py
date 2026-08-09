@@ -43,6 +43,8 @@ def _invoke(*args: str, edges_path: Path | None = None):
     return CliRunner().invoke(
         cli,
         [
+            "--output",
+            "json",
             "--registry",
             str(EXAMPLES / "registry.yml"),
             "--edges",
@@ -266,7 +268,7 @@ def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     ]
     cursor = first["result"]["checks"]["page"]["next_cursor"]
     replay = [cursor if item == "{cursor}" else item for item in action["argv"]]
-    second_result = CliRunner().invoke(cli, replay[1:])
+    second_result = CliRunner().invoke(cli, ["--output", "json", *replay[1:]])
     second = json.loads(second_result.output)
     assert second_result.exit_code == 0
     assert second["result"]["checks"]["items"] != first["result"]["checks"]["items"]
@@ -421,7 +423,7 @@ def test_check_expected_load_failure_and_unexpected_failure_use_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    missing = CliRunner().invoke(cli, ["--registry", "missing.yml", "check"])
+    missing = CliRunner().invoke(cli, ["--output", "json", "--registry", "missing.yml", "check"])
     missing_payload = json.loads(missing.output)
     assert missing.exit_code == 3
     assert missing_payload["error"]["code"] == "input_load_failed"

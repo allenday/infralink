@@ -11,7 +11,7 @@ EXAMPLE_EDGE_ID = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
 
 def run_cmd(args: list[str]):
     runner = CliRunner()
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, ["--output", "json", *args])
     return result
 
 

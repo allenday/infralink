@@ -68,7 +68,7 @@ edges:
 def _invoke(root: Path, *args: str):
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=root):
-        result = runner.invoke(cli, list(args))
+        result = runner.invoke(cli, ["--output", "json", *args])
         cwd = Path.cwd()
         paths = {
             path.relative_to(cwd): path.read_bytes() for path in cwd.rglob("*") if path.is_file()
@@ -86,7 +86,7 @@ def _payload(result) -> dict:
 def test_artifact_commands_require_explicit_output(tmp_path: Path, command: str) -> None:
     registry, edges = _write_topology(tmp_path)
     args = ["--registry", str(registry), "--edges", str(edges), command]
-    result = CliRunner().invoke(cli, args)
+    result = CliRunner().invoke(cli, ["--output", "json", *args])
     payload = _payload(result)
 
     assert result.exit_code == 2
@@ -122,7 +122,7 @@ def test_diagram_stdout_is_rejected_without_embedded_content(tmp_path: Path) -> 
 def test_artifact_help_marks_output_required_and_does_not_advertise_stdout(
     command: str,
 ) -> None:
-    result = CliRunner().invoke(cli, ["help", command])
+    result = CliRunner().invoke(cli, ["--output", "json", "help", command])
     payload = _payload(result)
     options = {option["name"]: option for option in payload["result"]["options"]}
 
@@ -350,7 +350,7 @@ def test_artifact_continuation_action_is_executable_and_source_preserving(
         )
         cursor = first_payload["result"]["artifacts"]["page"]["next_cursor"]
         replay = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
-        second = runner.invoke(cli, replay[1:])
+        second = runner.invoke(cli, ["--output", "json", *replay[1:]])
     second_payload = _payload(second)
 
     assert second.exit_code == 0
