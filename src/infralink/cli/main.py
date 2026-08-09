@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import click
 import yaml
@@ -159,7 +162,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     },
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
-    "host": {"description": "Inspect hosts.", "usage": "infralink host show <host-id>"},
+    "host": {
+        "description": "Inspect or scaffold hosts.",
+        "usage": "infralink host [create|list|show]",
+    },
     "edge": {"description": "Inspect edges.", "usage": "infralink edge show <edge-id>"},
     "service": {
         "description": "Inspect services.",
@@ -1439,7 +1445,109 @@ def _emit_edge_list(ctx: Context, *, path: list[str]) -> None:
 
 @click.group()
 def host() -> None:
-    """Inspect hosts."""
+    """Inspect or scaffold hosts."""
+
+
+_HOSTNAME_PATTERN = re.compile(
+    r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z"
+)
+
+
+def _host_address(value: str) -> tuple[str, str]:
+    try:
+        return "tailscale_ip", str(ipaddress.ip_address(value))
+    except ValueError:
+        if _HOSTNAME_PATTERN.fullmatch(value):
+            return "tailscale_name", value.lower()
+    raise click.BadParameter("must be an IP address or DNS hostname")
+
+
+def _host_create_failure(message: str, fix: str, details: dict[str, Any]) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.USAGE_ERROR,
+        message=message,
+        exit_code=ExitCode.USAGE_ERROR,
+        fix=fix,
+        details=details,
+        next_actions=[
+            action("help", ["infralink", "help", "host", "create"], "Show host create help")
+        ],
+    )
+
+
+@host.command(name="create")
+@click.option("--name", required=True, type=str, help="Canonical host name")
+@click.option("--address", required=True, type=str, help="IP address or DNS hostname")
+@click.option("--write", "write", is_flag=True, help="Write the scaffold into a directory registry")
+@pass_context
+def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
+    """Create a dry-run host manifest scaffold, or write it with --write."""
+    address_field, normalized_address = _host_address(address)
+    host_id = str(uuid4())
+    host_data = {
+        "canonical_name": name,
+        "status": "provisioning",
+        address_field: normalized_address,
+    }
+
+    from infralink.core.schema import HostSchema
+
+    HostSchema(**host_data)
+    manifest = {"hosts": {host_id: host_data}}
+    manifest_path: Path | None = None
+    mode = "dry_run"
+
+    if write:
+        if ctx.registry_path is None or not ctx.registry_path.is_dir():
+            raise _host_create_failure(
+                "Host create --write requires a directory registry",
+                "Provide --registry pointing to a local hosts directory",
+                {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
+            )
+        registry = ctx.registry
+        if registry.get_by_name(name) is not None:
+            raise _host_create_failure(
+                "Host canonical name already exists",
+                "Choose a unique --name or update the existing host manifest",
+                {"name": name},
+            )
+        manifest_path = ctx.registry_path / host_id / "manifest.yml"
+        if manifest_path.parent.exists():
+            raise _host_create_failure(
+                "Generated host UUID already exists",
+                "Run host create again to generate a new host UUID",
+                {"host_id": host_id},
+            )
+        manifest_path.parent.mkdir(mode=0o755)
+        manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+        mode = "written"
+
+    result = {
+        "mode": mode,
+        "host_id": host_id,
+        "address": {
+            "field": address_field,
+            "value": normalized_address,
+            "reason": (
+                "input is an IP address"
+                if address_field == "tailscale_ip"
+                else "input is a DNS hostname and maps to tailscale_name"
+            ),
+        },
+        "manifest_path": str(manifest_path) if manifest_path is not None else None,
+        "manifest": manifest,
+    }
+    actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
+    if manifest_path is not None:
+        actions.append(
+            action(
+                "show",
+                [*_root_source_argv(ctx), "host", "show", host_id],
+                "Show the created host",
+            )
+        )
+    _emit(ok_envelope(_context_for(path=["host", "create"]), result, actions))
 
 
 @host.command(name="list")
