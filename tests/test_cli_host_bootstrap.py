@@ -11,6 +11,7 @@ import yaml
 from click.testing import CliRunner
 
 from infralink.cli.main import cli
+from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_readiness
 from infralink.host_readiness import HostReadinessProbe
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,3 +117,53 @@ def test_real_module_apply_failure_emits_an_envelope_and_nonzero_exit() -> None:
     payload = yaml.safe_load(result.stdout)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "provider_unavailable"
+
+
+def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monkeypatch) -> None:
+    readiness = HostReadinessProbe(
+        reachable=True,
+        hostname="database.example.com",
+        machine_id="machine-id",
+        commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": False},
+        devops_account=True,
+        devops_authorized_access=True,
+        bws_config=False,
+        self_deploy_runtime=False,
+        self_deploy_timer_enabled=False,
+        self_deploy_timer_active=False,
+        error=None,
+    )
+    monkeypatch.setattr(
+        "infralink.cli.main.evaluate_host_readiness",
+        lambda *_args: evaluate_readiness(
+            type("Host", (), {"canonical_name": "database.example.com", "tailscale_ip": "192.0.2.10", "public_ip": None})(),
+            type("Transport", (), {"probe": lambda _self, _address: readiness})(),
+        ),
+    )
+    calls: list[object] = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        "infralink.cli.main.subprocess.run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or Completed(),
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output", "json", "--registry", str(ROOT / "examples" / "registry.yml"),
+            "--edges", str(ROOT / "examples" / "edges.yml"),
+            "host", "bootstrap", "database.example.com", "--apply",
+        ],
+    )
+
+    assert result.exit_code == 1
+    argv, _kwargs = calls[0]
+    serialized = " ".join(str(item) for item in argv[0])
+    assert "install_bws_cli" in serialized
+    assert "configure_bws" not in serialized
+    assert "install_self_deploy_runtime" not in serialized
+    assert "enable_self_deploy_timer" not in serialized

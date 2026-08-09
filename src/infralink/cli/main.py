@@ -57,6 +57,9 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+_MANUAL_BOOTSTRAP_ACTIONS = frozenset(
+    {"configure_bws", "install_self_deploy_runtime", "enable_self_deploy_timer"}
+)
 
 
 class Context:
@@ -1651,7 +1654,10 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     readiness = evaluate_host_readiness(target, SshReadinessTransport())
     if plan_only == apply_changes:
         raise click.UsageError("pass exactly one of --plan or --apply")
-    if apply_changes and readiness.actions:
+    automated_actions = [
+        item.id for item in readiness.actions if item.id not in _MANUAL_BOOTSTRAP_ACTIONS
+    ]
+    if apply_changes and automated_actions:
         control_root = Path("/opt/infra")
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
         if not playbook.is_file():
@@ -1675,7 +1681,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
             [
                 "ansible-playbook", "-i", f"{address},", "-u", "root", str(playbook),
                 "-e", f"host_address={address}", "-e", f"host_uuid={target.uuid}", "-e", f"canonical_name={target.canonical_name}",
-                "-e", json.dumps({"bootstrap_actions": [item.id for item in readiness.actions]}),
+                "-e", json.dumps({"bootstrap_actions": automated_actions}),
             ],
             cwd=control_root, text=True, capture_output=True, check=False,
         )
