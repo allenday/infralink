@@ -10,6 +10,7 @@ from infralink.cli.main import cli
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
 from infralink.health.checks import HealthCheckResult
+from infralink.host_readiness import HostReadinessProbe
 from infralink.secrets import SecretAudit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +121,22 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
             criticality=edge.criticality.value,
             check_type="tcp",
             timestamp=0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.main.SshReadinessTransport.probe",
+        lambda self, address: HostReadinessProbe(
+            reachable=False,
+            hostname=None,
+            machine_id=None,
+            commands={},
+            devops_account=False,
+            devops_authorized_access=False,
+            bws_config=False,
+            self_deploy_runtime=False,
+            self_deploy_timer_enabled=False,
+            self_deploy_timer_active=False,
+            error="ssh_unreachable",
         ),
     )
     monkeypatch.setattr(
@@ -241,7 +258,8 @@ selection:
         ("app", "list"): ([*source, "app", "list"], 0, True),
         ("app", "show"): ([*source, "app", "show", "core"], 0, True),
         ("check",): ([*source, "check", "--edge", EDGE_ID], 0, True),
-            ("diagram",): (
+        ("doctor",): ([*source, "doctor", "host", TARGET_ID], 2, False),
+        ("diagram",): (
             [
                 *source,
                 "diagram",
@@ -252,9 +270,8 @@ selection:
                 str(artifacts / "diagrams"),
             ],
             0,
-                True,
-            ),
-                ("doctor",): ([*source, "doctor", "host", TARGET_ID], 2, False),
+            True,
+        ),
         ("docs",): (
             [
                 *source,
@@ -268,12 +285,13 @@ selection:
         ("edge", "show"): ([*source, "edge", "show", EDGE_ID], 0, True),
         ("edge", "list"): ([*source, "edge", "list"], 0, True),
         ("host", "show"): ([*source, "host", "show", TARGET_ID], 0, True),
-            ("host", "list"): ([*source, "host", "list"], 0, True),
-            ("host", "create"): (
-                ["host", "create", "--name", "secret-leak-test", "--address", "192.0.2.1"],
-                0,
-                True,
-            ),
+        ("host", "list"): ([*source, "host", "list"], 0, True),
+        ("host", "create"): (
+            ["host", "create", "--name", "secret-leak-test", "--address", "192.0.2.1"],
+            0,
+            True,
+        ),
+        ("host", "bootstrap"): ([*source, "host", "bootstrap", TARGET_ID, "--plan"], 0, True),
         ("info",): ([*source, "info"], 0, True),
         ("resolve",): ([*source, "resolve", EDGE_ID], 0, True),
         ("secrets", "audit"): ([*source, "secrets", "audit"], 0, True),

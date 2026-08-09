@@ -469,7 +469,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         },
         "app": {"app-list", "app-show"},
         "info": {"info"},
-        "host": {"hosts", "host-show"},
+        "host": {"hosts", "host-show", "host-bootstrap"},
         "edge": {"edges-list", "edge-show"},
         "service": {"services", "service-show"},
     }

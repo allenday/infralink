@@ -24,9 +24,11 @@ from infralink.cli.contracts import (
     Binding,
     CommandContext,
     CommandDescriptor,
+    DoctorTarget,
     HelpNavigationAction,
     HelpResult,
     HelpSubcommand,
+    HostBootstrapPlanResult,
     InfoResult,
     InfoSources,
     InfoSummary,
@@ -35,12 +37,14 @@ from infralink.cli.contracts import (
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
+from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.output import (
     command_context,
     error_envelope,
     ok_envelope,
     redact_argv,
 )
+from infralink.host_transport import SshReadinessTransport
 
 # Topology sources are intentionally explicit. Examples are demo/test fixtures,
 # never an implicit operational fallback.
@@ -163,8 +167,8 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
     "host": {
-        "description": "Inspect or scaffold hosts.",
-        "usage": "infralink host [create|list|show]",
+        "description": "Inspect, scaffold, or plan bootstrap for hosts.",
+        "usage": "infralink host [create|list|show|bootstrap]",
     },
     "edge": {"description": "Inspect edges.", "usage": "infralink edge show <edge-id>"},
     "service": {
@@ -251,6 +255,12 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             {"name": "collection", "type": "string", "required": False},
         ],
         "examples": ["infralink host show host-1"],
+    },
+    ("host", "bootstrap"): {
+        "description": "Plan host bootstrap actions without applying them.",
+        "arguments": [{"name": "host_id", "type": "string", "required": True}],
+        "options": [{"name": "plan", "type": "boolean", "required": True}],
+        "examples": ["infralink host bootstrap host-1 --plan"],
     },
     ("edge",): {
         "description": "Inspect edges.",
@@ -662,7 +672,7 @@ def _help_result(path: tuple[str, ...]) -> HelpResult:
         description=_command_description(command),
         arguments=arguments,
         options=options,
-        examples=[],
+        examples=list(HELP_METADATA.get(path, {}).get("examples", [])),
         children=_help_children(path, command),
     )
 
@@ -1616,6 +1626,41 @@ def host_show(
         command_argv=["host", "show", host_id],
         result=result,
         limit=limit,
+    )
+
+
+@host.command(name="bootstrap")
+@click.argument("host_id")
+@click.option(
+    "--plan",
+    "plan_only",
+    is_flag=True,
+    required=True,
+    help="Emit a read-only bootstrap plan.",
+)
+@pass_context
+def host_bootstrap(ctx: Context, host_id: str, plan_only: bool) -> None:
+    """Plan required host bootstrap actions without applying them."""
+    target = ctx.registry.get(host_id)
+    if target is None:
+        raise entity_not_found("host", host_id)
+    readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    result = HostBootstrapPlanResult(
+        host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        readiness=readiness,
+    )
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "bootstrap"]),
+            result,
+            [
+                action(
+                    "reinspect-readiness",
+                    [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--plan"],
+                    "Reinspect live host readiness",
+                )
+            ],
+        )
     )
 
 

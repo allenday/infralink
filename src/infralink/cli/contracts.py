@@ -512,14 +512,41 @@ class DoctorEvidenceSummary(ContractModel):
     latest_observed_at: str | None = None
 
 
+class HostReadinessCheck(ContractModel):
+    id: str
+    required: bool
+    passed: bool
+    description: str
+    detail: str | None = None
+
+
+class HostBootstrapAction(ContractModel):
+    id: str
+    check_id: str
+    description: str
+
+
+class HostReadinessResult(ContractModel):
+    transport: Literal["root_ssh", "declaration_only"]
+    ready: bool
+    checks: list[HostReadinessCheck]
+    actions: list[HostBootstrapAction]
+
+
 class DoctorResult(ContractModel):
     target: DoctorTarget
     declared: dict[str, Any]
     evidence: list[DoctorEvidence]
     evidence_summary: list[DoctorEvidenceSummary]
     coverage: DoctorCoverage | None = None
+    readiness: HostReadinessResult | None = None
     status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
     reason: str | None = None
+
+
+class HostBootstrapPlanResult(ContractModel):
+    host: DoctorTarget
+    readiness: HostReadinessResult
 
 
 class AppListResult(ContractModel):

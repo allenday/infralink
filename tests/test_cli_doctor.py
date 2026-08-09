@@ -372,3 +372,51 @@ def test_doctor_unknown_host_returns_a_bounded_canonical_discovery_action(
 
     assert result.exit_code == 2
     assert payload["error"]["details"] == {"source": "observation_plan"}
+
+
+def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from infralink.host_readiness import HostReadinessProbe
+
+    monkeypatch.setattr(
+        "infralink.cli.doctor.SshReadinessTransport.probe",
+        lambda self, address: HostReadinessProbe(
+            reachable=True,
+            hostname="database.example.com",
+            machine_id="machine-id",
+            commands={"git": True, "docker": False, "tailscale": True, "jq": False, "bws": False},
+            devops_account=False,
+            devops_authorized_access=False,
+            bws_config=False,
+            self_deploy_runtime=False,
+            self_deploy_timer_enabled=False,
+            self_deploy_timer_active=False,
+            error=None,
+        ),
+    )
+
+    plan, bindings = _observation_inputs(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": True}]}],
+    )
+    result = _invoke(
+        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
+        "--gatus-url", "http://gatus.test", "host", "database.example.com",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["readiness"]["ready"] is False
+    assert payload["result"]["readiness"]["transport"] == "root_ssh"
+    assert payload["result"]["readiness"]["checks"][0] == {
+        "id": "ssh_reachable",
+        "required": True,
+        "passed": True,
+        "description": "Root SSH is reachable.",
+        "detail": None,
+    }
+    plan_action = next(item for item in payload["next_actions"] if item["rel"] == "bootstrap-plan")
+    assert shlex.split(plan_action["command"])[-4:] == ["host", "bootstrap", HOST_ID, "--plan"]
+    assert plan_action["safe"] is True

@@ -68,6 +68,7 @@ SCHEMA_NAMES = (
     "info",
     "hosts",
     "host-show",
+    "host-bootstrap",
     "services",
     "service-show",
     "edges-list",

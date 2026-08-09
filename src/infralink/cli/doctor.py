@@ -21,8 +21,10 @@ from infralink.cli.contracts import (
     DoctorTarget,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
+from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, pass_context
 from infralink.cli.output import ok_envelope
+from infralink.host_transport import SshReadinessTransport
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
@@ -459,6 +461,39 @@ def _emit_result(
     _emit(ok_envelope(command, result, actions))
 
 
+def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> Any:
+    if declaration_only:
+        return None
+    host = ctx.registry.get(target_ref)
+    if host is None:
+        return None
+    return evaluate_host_readiness(host, SshReadinessTransport())
+
+
+def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
+    if readiness is None:
+        return result
+    if not readiness.ready:
+        if result.status in {"unhealthy", "unavailable"}:
+            return result.model_copy(update={"readiness": readiness})
+        return result.model_copy(
+            update={
+                "readiness": readiness,
+                "status": "unhealthy",
+                "reason": "host_readiness_incomplete",
+            }
+        )
+    return result.model_copy(update={"readiness": readiness})
+
+
+def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
+    return action(
+        "bootstrap-plan",
+        [*_root_source_argv(ctx), "host", "bootstrap", host_id, "--plan"],
+        "Plan the failed host bootstrap prerequisites",
+    )
+
+
 @click.command(name="doctor")
 @click.option(
     "--observation-plan",
@@ -595,6 +630,10 @@ def doctor(
                 "Set INFRALINK_GATUS_URL or pass --gatus-url",
             )
         )
+    readiness = _host_readiness(ctx, target_ref, declaration_only) if target_type == "host" else None
+    result = _apply_host_readiness(result, readiness)
+    if readiness is not None and not readiness.ready:
+        actions.append(_bootstrap_plan_action(ctx, target.id))
     _emit_result(
         ctx,
         result,
@@ -605,4 +644,4 @@ def doctor(
         gatus_url,
         gatus_token_env,
     )
-    return 0 if status == "healthy" or declaration_only and coverage.valid else 1
+    return 0 if result.status == "healthy" or declaration_only and coverage.valid else 1

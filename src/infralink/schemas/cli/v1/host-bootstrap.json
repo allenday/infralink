@@ -97,254 +97,6 @@
       "title": "CommandContext",
       "type": "object"
     },
-    "DoctorCoverage": {
-      "additionalProperties": false,
-      "properties": {
-        "bound": {
-          "minimum": 0,
-          "title": "Bound",
-          "type": "integer"
-        },
-        "required": {
-          "minimum": 0,
-          "title": "Required",
-          "type": "integer"
-        },
-        "unbound": {
-          "minimum": 0,
-          "title": "Unbound",
-          "type": "integer"
-        },
-        "unsupported": {
-          "minimum": 0,
-          "title": "Unsupported",
-          "type": "integer"
-        },
-        "valid": {
-          "title": "Valid",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "required",
-        "bound",
-        "unbound",
-        "unsupported",
-        "valid"
-      ],
-      "title": "DoctorCoverage",
-      "type": "object"
-    },
-    "DoctorEvidence": {
-      "additionalProperties": false,
-      "properties": {
-        "adapter": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Adapter"
-        },
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "observed_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Observed At"
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reason"
-        },
-        "signal_refs": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Signal Refs",
-          "type": "array"
-        },
-        "status": {
-          "enum": [
-            "healthy",
-            "unhealthy",
-            "unavailable",
-            "unknown"
-          ],
-          "title": "Status",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "signal_refs",
-        "status"
-      ],
-      "title": "DoctorEvidence",
-      "type": "object"
-    },
-    "DoctorEvidenceSummary": {
-      "additionalProperties": false,
-      "properties": {
-        "adapter": {
-          "title": "Adapter",
-          "type": "string"
-        },
-        "configured": {
-          "title": "Configured",
-          "type": "boolean"
-        },
-        "healthy": {
-          "minimum": 0,
-          "title": "Healthy",
-          "type": "integer"
-        },
-        "latest_observed_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Latest Observed At"
-        },
-        "live_observation_count": {
-          "minimum": 0,
-          "title": "Live Observation Count",
-          "type": "integer"
-        },
-        "unavailable": {
-          "minimum": 0,
-          "title": "Unavailable",
-          "type": "integer"
-        },
-        "unhealthy": {
-          "minimum": 0,
-          "title": "Unhealthy",
-          "type": "integer"
-        },
-        "unknown": {
-          "minimum": 0,
-          "title": "Unknown",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "adapter",
-        "configured",
-        "healthy",
-        "unhealthy",
-        "unavailable",
-        "unknown",
-        "live_observation_count"
-      ],
-      "title": "DoctorEvidenceSummary",
-      "type": "object"
-    },
-    "DoctorResult": {
-      "additionalProperties": false,
-      "properties": {
-        "coverage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DoctorCoverage"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "declared": {
-          "additionalProperties": true,
-          "title": "Declared",
-          "type": "object"
-        },
-        "evidence": {
-          "items": {
-            "$ref": "#/$defs/DoctorEvidence"
-          },
-          "title": "Evidence",
-          "type": "array"
-        },
-        "evidence_summary": {
-          "items": {
-            "$ref": "#/$defs/DoctorEvidenceSummary"
-          },
-          "title": "Evidence Summary",
-          "type": "array"
-        },
-        "readiness": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HostReadinessResult"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reason"
-        },
-        "status": {
-          "enum": [
-            "healthy",
-            "unhealthy",
-            "unavailable",
-            "unknown"
-          ],
-          "title": "Status",
-          "type": "string"
-        },
-        "target": {
-          "$ref": "#/$defs/DoctorTarget"
-        }
-      },
-      "required": [
-        "target",
-        "declared",
-        "evidence",
-        "evidence_summary",
-        "status"
-      ],
-      "title": "DoctorResult",
-      "type": "object"
-    },
     "DoctorTarget": {
       "additionalProperties": false,
       "properties": {
@@ -436,6 +188,23 @@
         "description"
       ],
       "title": "HostBootstrapAction",
+      "type": "object"
+    },
+    "HostBootstrapPlanResult": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/DoctorTarget"
+        },
+        "readiness": {
+          "$ref": "#/$defs/HostReadinessResult"
+        }
+      },
+      "required": [
+        "host",
+        "readiness"
+      ],
+      "title": "HostBootstrapPlanResult",
       "type": "object"
     },
     "HostReadinessCheck": {
@@ -621,7 +390,7 @@
     "result": {
       "anyOf": [
         {
-          "$ref": "#/$defs/DoctorResult"
+          "$ref": "#/$defs/HostBootstrapPlanResult"
         },
         {
           "type": "null"
@@ -641,6 +410,6 @@
     "command",
     "next_actions"
   ],
-  "title": "Envelope[DoctorResult]",
+  "title": "Envelope[HostBootstrapPlanResult]",
   "type": "object"
 }
