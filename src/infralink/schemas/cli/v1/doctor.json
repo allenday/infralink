@@ -190,7 +190,8 @@
             "healthy",
             "unhealthy",
             "unavailable",
-            "unknown"
+            "unknown",
+            "provisioning"
           ],
           "title": "Status",
           "type": "string"

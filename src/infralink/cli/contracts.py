@@ -488,7 +488,7 @@ class DoctorEvidence(ContractModel):
     id: str
     adapter: str | None = None
     signal_refs: list[str]
-    status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
+    status: Literal["healthy", "unhealthy", "unavailable", "unknown", "provisioning"]
     reason: str | None = None
     observed_at: str | None = Field(default=None, exclude_if=lambda value: value is None)
 

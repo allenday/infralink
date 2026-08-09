@@ -420,3 +420,26 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
     plan_action = next(item for item in payload["next_actions"] if item["rel"] == "bootstrap-plan")
     assert shlex.split(plan_action["command"])[-4:] == ["host", "bootstrap", HOST_ID, "--plan"]
     assert plan_action["safe"] is True
+
+
+def test_doctor_keeps_zero_service_provisioning_host_out_of_unhealthy_state() -> None:
+    from infralink.cli.contracts import DoctorResult, DoctorTarget, HostReadinessResult
+    from infralink.cli.doctor import _apply_host_readiness
+
+    result = DoctorResult(
+        target=DoctorTarget(type="host", id=HOST_ID, canonical_name="database.example.com"),
+        declared={"status": "provisioning", "service_count": 0},
+        evidence=[],
+        evidence_summary=[],
+        status="unknown",
+        reason="no_live_observation_evidence",
+    )
+    readiness = HostReadinessResult(
+        transport="root_ssh", ready=False, checks=[], actions=[]
+    )
+
+    updated = _apply_host_readiness(result, readiness)
+
+    assert updated.status == "provisioning"
+    assert updated.reason == "host_provisioning_incomplete"
+    assert updated.readiness == readiness

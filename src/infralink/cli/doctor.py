@@ -474,6 +474,17 @@ def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
     if readiness is None:
         return result
     if not readiness.ready:
+        if (
+            result.declared.get("status") == "provisioning"
+            and result.declared.get("service_count") == 0
+        ):
+            return result.model_copy(
+                update={
+                    "readiness": readiness,
+                    "status": "provisioning",
+                    "reason": "host_provisioning_incomplete",
+                }
+            )
         if result.status in {"unhealthy", "unavailable"}:
             return result.model_copy(update={"readiness": readiness})
         return result.model_copy(
