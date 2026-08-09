@@ -55,10 +55,21 @@ def test_readiness_is_fail_closed_and_derives_only_failed_baseline_actions() -> 
     ]
 
 
-def test_legacy_registry_layout_is_a_required_migration_failure() -> None:
+def test_legacy_registry_layout_remains_healthy_without_declared_migration_policy() -> None:
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name="relaxgg-db-es1",
         probe=_probe(registry_layout="legacy_nested"),
+    )
+
+    layout = next(check for check in readiness.checks if check.id == "registry_layout")
+    assert layout.passed is True
+    assert not any(action.id == "migrate_v2_registry_layout" for action in readiness.actions)
+
+
+def test_legacy_registry_layout_requires_migration_only_when_declared() -> None:
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relaxgg-db-es1",
+        probe=_probe(registry_layout="legacy_nested", requires_v2_registry_layout=True),
     )
 
     layout = next(check for check in readiness.checks if check.id == "registry_layout")
@@ -96,11 +107,35 @@ def test_v2_reconcile_success_satisfies_readiness() -> None:
             self_deploy_timer_active=True,
             self_deploy_reconcile_result="success",
             self_deploy_reconcile_exit_status=0,
+            self_deploy_reconcile_active_state="inactive",
+            self_deploy_reconcile_sub_state="dead",
+            self_deploy_reconcile_exit_timestamp_monotonic=123,
         ),
     )
 
     reconcile = next(check for check in readiness.checks if check.id == "self_deploy_reconcile")
     assert reconcile.passed is True
+
+
+def test_v2_reconcile_never_started_fails_closed_despite_systemd_defaults() -> None:
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relaxgg-db-es1",
+        probe=_probe(
+            self_deploy_runtime=True,
+            self_deploy_mode="v2_reconcile",
+            self_deploy_timer_enabled=True,
+            self_deploy_timer_active=True,
+            self_deploy_reconcile_result="success",
+            self_deploy_reconcile_exit_status=0,
+            self_deploy_reconcile_active_state="inactive",
+            self_deploy_reconcile_sub_state="dead",
+            self_deploy_reconcile_exit_timestamp_monotonic=0,
+        ),
+    )
+
+    reconcile = next(check for check in readiness.checks if check.id == "self_deploy_reconcile")
+    assert reconcile.passed is False
+    assert reconcile.detail == "self_deploy_reconcile_not_completed"
 
 
 def test_unreachable_host_fails_every_required_baseline_without_actions_that_claim_success() -> (
@@ -137,6 +172,9 @@ self_deploy_timer_active=0
 registry_layout=legacy_nested
 self_deploy_reconcile_result=exit-code
 self_deploy_reconcile_exit_status=1
+self_deploy_reconcile_active_state=failed
+self_deploy_reconcile_sub_state=failed
+self_deploy_reconcile_exit_timestamp_monotonic=123
 """
 
     calls: list[object] = []
@@ -162,6 +200,9 @@ self_deploy_reconcile_exit_status=1
     assert probe.registry_layout == "legacy_nested"
     assert probe.self_deploy_reconcile_result == "exit-code"
     assert probe.self_deploy_reconcile_exit_status == 1
+    assert probe.self_deploy_reconcile_active_state == "failed"
+    assert probe.self_deploy_reconcile_sub_state == "failed"
+    assert probe.self_deploy_reconcile_exit_timestamp_monotonic == 123
 
 
 def test_ssh_transport_requires_a_nonempty_bws_token_in_etc_environment() -> None:

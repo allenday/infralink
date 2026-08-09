@@ -122,6 +122,11 @@ class Host:
         return self._schema.bootstrap_executor.model_dump()
 
     @property
+    def self_deploy_v2_registry_layout_enabled(self) -> bool:
+        """Whether this host's declared migration policy requires the V2 checkout root."""
+        return bool(self._schema.model_extra.get("self_deploy_v2_registry_layout_enabled"))
+
+    @property
     def managed_services(self) -> dict[str, Any]:
         """Managed service configurations (in legacy docker-compose.yml.j2)."""
         # Prefer managed_services, fall back to services for backward compat

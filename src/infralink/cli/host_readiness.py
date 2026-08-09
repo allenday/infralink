@@ -56,6 +56,14 @@ def evaluate_host_readiness(
             if probe.registry_layout in {"v2_managed", "legacy_nested", "missing", "unsafe"}
             else "unsafe"
         ),
+        requires_v2_registry_layout=bool(
+            getattr(host, "self_deploy_v2_registry_layout_enabled", False)
+        ),
         self_deploy_reconcile_result=probe.self_deploy_reconcile_result,
         self_deploy_reconcile_exit_status=probe.self_deploy_reconcile_exit_status,
+        self_deploy_reconcile_active_state=probe.self_deploy_reconcile_active_state,
+        self_deploy_reconcile_sub_state=probe.self_deploy_reconcile_sub_state,
+        self_deploy_reconcile_exit_timestamp_monotonic=(
+            probe.self_deploy_reconcile_exit_timestamp_monotonic
+        ),
     )

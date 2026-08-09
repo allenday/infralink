@@ -36,10 +36,16 @@ fi
 if systemctl cat self-deploy-v2-reconcile.service >/dev/null 2>&1; then
   reconcile_result="$(systemctl show self-deploy-v2-reconcile.service -p Result --value 2>/dev/null || true)"
   reconcile_exit_status="$(systemctl show self-deploy-v2-reconcile.service -p ExecMainStatus --value 2>/dev/null || true)"
+  reconcile_active_state="$(systemctl show self-deploy-v2-reconcile.service -p ActiveState --value 2>/dev/null || true)"
+  reconcile_sub_state="$(systemctl show self-deploy-v2-reconcile.service -p SubState --value 2>/dev/null || true)"
+  reconcile_exit_timestamp_monotonic="$(systemctl show self-deploy-v2-reconcile.service -p ExecMainExitTimestampMonotonic --value 2>/dev/null || true)"
   printf 'self_deploy_reconcile_result=%s\n' "$reconcile_result"
   printf 'self_deploy_reconcile_exit_status=%s\n' "$reconcile_exit_status"
+  printf 'self_deploy_reconcile_active_state=%s\n' "$reconcile_active_state"
+  printf 'self_deploy_reconcile_sub_state=%s\n' "$reconcile_sub_state"
+  printf 'self_deploy_reconcile_exit_timestamp_monotonic=%s\n' "$reconcile_exit_timestamp_monotonic"
 else
-  printf 'self_deploy_reconcile_result=\nself_deploy_reconcile_exit_status=\n'
+  printf 'self_deploy_reconcile_result=\nself_deploy_reconcile_exit_status=\nself_deploy_reconcile_active_state=\nself_deploy_reconcile_sub_state=\nself_deploy_reconcile_exit_timestamp_monotonic=\n'
 fi
 if test -L /var/lib/infralink/registry || test -L /opt/infra/registry; then
   printf 'registry_layout=unsafe\n'
@@ -108,6 +114,13 @@ class SshReadinessTransport:
             self_deploy_reconcile_result=values.get("self_deploy_reconcile_result") or None,
             self_deploy_reconcile_exit_status=_optional_int(
                 values.get("self_deploy_reconcile_exit_status")
+            ),
+            self_deploy_reconcile_active_state=(
+                values.get("self_deploy_reconcile_active_state") or None
+            ),
+            self_deploy_reconcile_sub_state=values.get("self_deploy_reconcile_sub_state") or None,
+            self_deploy_reconcile_exit_timestamp_monotonic=_optional_int(
+                values.get("self_deploy_reconcile_exit_timestamp_monotonic")
             ),
         )
 
