@@ -1674,16 +1674,16 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         completed = subprocess.run(
             [
                 "ansible-playbook", "-i", f"{address},", "-u", "root", str(playbook),
-                "-e", f"host_uuid={target.uuid}", "-e", f"canonical_name={target.canonical_name}",
+                "-e", f"host_address={address}", "-e", f"host_uuid={target.uuid}", "-e", f"canonical_name={target.canonical_name}",
                 "-e", json.dumps({"bootstrap_actions": [item.id for item in readiness.actions]}),
             ],
             cwd=control_root, text=True, capture_output=True, check=False,
         )
         if completed.returncode != 0:
             raise CliFailure(
-                code=ErrorCode.INPUT_LOAD_FAILED,
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
                 message="Host baseline apply failed",
-                exit_code=ExitCode.POSITIVE_RESULT,
+                exit_code=ExitCode.PROVIDER_ERROR,
                 fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
                 details={"host": target.uuid},
             )

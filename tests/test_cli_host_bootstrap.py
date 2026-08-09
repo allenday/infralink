@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
+import yaml
 from click.testing import CliRunner
 
 from infralink.cli.main import cli
@@ -87,3 +91,28 @@ def test_host_bootstrap_help_marks_plan_required_and_shows_an_example() -> None:
         "infralink host bootstrap host-1 --plan",
         "infralink host bootstrap host-1 --apply",
     ]
+
+
+def test_real_module_apply_failure_emits_an_envelope_and_nonzero_exit() -> None:
+    environment = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "infralink",
+            "--registry", str(ROOT / "examples" / "registry.yml"),
+            "--edges", str(ROOT / "examples" / "edges.yml"),
+            "host", "bootstrap", "database.example.com", "--apply",
+        ],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 4
+    payload = yaml.safe_load(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "provider_unavailable"
