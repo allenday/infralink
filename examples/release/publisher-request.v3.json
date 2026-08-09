@@ -9,7 +9,7 @@
   "controller_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "ci_receipt": {
     "provider": "woodpecker",
-    "repository": "example/registry",
+    "repository": "https://example.com/relaxgg/infra-registry",
     "run": "576",
     "source_identity": "woodpecker://example.com/registry/pipelines/576",
     "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -27,21 +27,38 @@
     "image": "registry.example.com/infralink/publisher@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   },
   "mode": "dry-run",
-  "tag_signer_policy": {
-    "selector": {
-      "repository": "gitea://example.com/example/infralink-release-publisher",
-      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "path": "release-publisher/tag-signer-policy",
-      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    },
-    "signer": {
-      "principal": "infralink-release-publisher",
-      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  "release_manifest": {
+    "repository": "https://example.com/relaxgg/infra-registry",
+    "blob_identity": "https://example.com/relaxgg/infra-registry/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "authority": {
+      "release": {
+        "identity": "releases/core-v2/42",
+        "channel": "core-v2",
+        "sequence": 42
+      },
+      "registry_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "controller_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ci_receipt": {
+        "provider": "woodpecker",
+        "repository": "https://example.com/relaxgg/infra-registry",
+        "run": "576",
+        "source_identity": "woodpecker://example.com/registry/pipelines/576",
+        "source_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "artifacts": [
+        {
+          "path": "release/runtime-archive",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "source_identity": "woodpecker://example.com/registry/artifacts/runtime-archive",
+          "source_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      ],
+      "publisher": {
+        "identity": "infralink-release-publisher-woodpecker",
+        "image": "registry.example.com/infralink/publisher@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
     }
   },
-  "manifest_signer": {
-    "principal": "infralink-release-publisher",
-    "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-  },
-  "request_digest": "cc8abef32517b7174a7b53d5dac204c8151404a5191f04b841678dd70b3f0ce7"
+  "request_digest": "2ec645e216c51f0bffb701db1deab581d50e8882846df53ddfcb027d8240cb0f"
 }

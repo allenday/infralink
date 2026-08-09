@@ -310,6 +310,75 @@
       "title": "PublisherRequestV2",
       "type": "object"
     },
+    "PublisherRequestV3": {
+      "additionalProperties": false,
+      "description": "V2 request facts plus one immutable canonical release-manifest binding.",
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSourceBindingV2"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "ci_receipt": {
+          "$ref": "#/$defs/ImmutableSourceReceiptV2"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "dry-run",
+            "publish"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "publisher": {
+          "$ref": "#/$defs/PublisherIdentityV2"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "release": {
+          "$ref": "#/$defs/ReleaseIdentityV1"
+        },
+        "release_manifest": {
+          "$ref": "#/$defs/ReleaseManifestBindingV1"
+        },
+        "request_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Digest",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "infralink.publisher-request.v3",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "release",
+        "registry_commit",
+        "controller_commit",
+        "ci_receipt",
+        "artifacts",
+        "publisher",
+        "mode",
+        "request_digest",
+        "release_manifest"
+      ],
+      "title": "PublisherRequestV3",
+      "type": "object"
+    },
     "ReleaseArtifactBinding": {
       "additionalProperties": false,
       "properties": {
@@ -423,6 +492,9 @@
             },
             {
               "$ref": "#/$defs/ReleaseAttestationV2"
+            },
+            {
+              "$ref": "#/$defs/ReleaseAttestationV3"
             }
           ],
           "title": "Attestation"
@@ -484,6 +556,56 @@
       "title": "ReleaseAttestationV2",
       "type": "object"
     },
+    "ReleaseAttestationV3": {
+      "additionalProperties": false,
+      "description": "Immutable publisher result bound to one canonical v3 request.",
+      "properties": {
+        "publisher_receipt": {
+          "$ref": "#/$defs/ImmutableSourceReceiptV2"
+        },
+        "request": {
+          "$ref": "#/$defs/PublisherRequestV3"
+        },
+        "request_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Digest",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "dry-run",
+            "published"
+          ],
+          "title": "Result",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "infralink.release-attestation.v3",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tag": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseTagV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "request",
+        "request_digest",
+        "publisher_receipt",
+        "result"
+      ],
+      "title": "ReleaseAttestationV3",
+      "type": "object"
+    },
     "ReleaseCiReceipt": {
       "additionalProperties": false,
       "properties": {
@@ -540,6 +662,84 @@
         "sequence"
       ],
       "title": "ReleaseIdentityV1",
+      "type": "object"
+    },
+    "ReleaseManifestAuthorityV1": {
+      "additionalProperties": false,
+      "description": "The request facts which a canonical release manifest must carry.",
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSourceBindingV2"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "ci_receipt": {
+          "$ref": "#/$defs/ImmutableSourceReceiptV2"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
+          "type": "string"
+        },
+        "publisher": {
+          "$ref": "#/$defs/PublisherIdentityV2"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "release": {
+          "$ref": "#/$defs/ReleaseIdentityV1"
+        }
+      },
+      "required": [
+        "release",
+        "registry_commit",
+        "controller_commit",
+        "ci_receipt",
+        "artifacts",
+        "publisher"
+      ],
+      "title": "ReleaseManifestAuthorityV1",
+      "type": "object"
+    },
+    "ReleaseManifestBindingV1": {
+      "additionalProperties": false,
+      "description": "Exact canonical registry blob and its declared request authority.",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/ReleaseManifestAuthorityV1"
+        },
+        "blob_identity": {
+          "maxLength": 640,
+          "pattern": "^(?:https|ssh)://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)*/blobs/[0-9a-f]{40}$",
+          "title": "Blob Identity",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 512,
+          "pattern": "^(?:https|ssh)://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)+$",
+          "title": "Repository",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "blob_identity",
+        "sha256",
+        "authority"
+      ],
+      "title": "ReleaseManifestBindingV1",
       "type": "object"
     },
     "ReleasePublisherReceipt": {

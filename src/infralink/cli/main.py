@@ -326,7 +326,7 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink release validate-candidate --candidate candidate.json"],
     },
     ("release", "render-publisher-request"): {
-        "description": "Inspect a registry-rendered v2 publisher request without invoking it.",
+        "description": "Inspect a registry-rendered immutable publisher request without invoking it.",
         "arguments": [],
         "options": [
             {"name": "publisher_request", "type": "path", "required": False},

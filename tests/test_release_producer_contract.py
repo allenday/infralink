@@ -50,20 +50,32 @@ def _bind_request_digest(request: dict[str, object]) -> None:
 def _v3_request() -> dict[str, object]:
     request = _fixture("publisher-request.v2.json")
     request["schema_version"] = "infralink.publisher-request.v3"
-    signer = {
-        "principal": "infralink-release-publisher",
-        "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    remote = "https://example.com/relaxgg/infra-registry"
+    receipt = request["ci_receipt"]
+    assert isinstance(receipt, dict)
+    receipt["repository"] = remote
+    request["release_manifest"] = {
+        "repository": remote,
+        "blob_identity": f"{remote}/blobs/{'a' * 40}",
+        "sha256": "b" * 64,
+        "authority": json.loads(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in request.items()
+                    if key
+                    in {
+                        "release",
+                        "registry_commit",
+                        "controller_commit",
+                        "ci_receipt",
+                        "artifacts",
+                        "publisher",
+                    }
+                }
+            )
+        ),
     }
-    request["tag_signer_policy"] = {
-        "selector": {
-            "repository": "gitea://gitea.i.cyberstorm.dev/cyberstorm/infralink-release-publisher",
-            "commit": "a" * 40,
-            "path": "release-publisher/allowed-signers.json",
-            "sha256": "b" * 64,
-        },
-        "signer": signer,
-    }
-    request["manifest_signer"] = dict(signer)
     _bind_request_digest(request)
     return request
 
@@ -185,44 +197,13 @@ def test_v2_attestation_fixture_binds_the_canonical_request_digest() -> None:
     assert attestation.tag is None
 
 
-def test_v3_request_binds_manifest_signer_to_an_immutable_tag_policy() -> None:
+def test_v3_request_binds_a_canonical_immutable_release_manifest() -> None:
     request = PublisherRequestV3.model_validate(_v3_request())
 
     assert request.request_digest == request.canonical_digest()
-    assert request.tag_signer_policy.selector.commit == "a" * 40
-    assert request.tag_signer_policy.selector.sha256 == "b" * 64
-    assert request.tag_signer_policy.signer == request.manifest_signer
-
-
-def test_v3_request_accepts_the_canonical_unpadded_ssh_fingerprint() -> None:
-    request = PublisherRequestV3.model_validate(_v3_request())
-
-    assert request.manifest_signer.fingerprint == (
-        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    )
-
-
-@pytest.mark.parametrize(
-    "fingerprint",
-    [
-        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    ],
-)
-def test_v3_request_rejects_noncanonical_ssh_fingerprint(fingerprint: str) -> None:
-    request = _v3_request()
-    policy = request["tag_signer_policy"]
-    assert isinstance(policy, dict)
-    policy_signer = policy["signer"]
-    assert isinstance(policy_signer, dict)
-    policy_signer["fingerprint"] = fingerprint
-    manifest_signer = request["manifest_signer"]
-    assert isinstance(manifest_signer, dict)
-    manifest_signer["fingerprint"] = fingerprint
-    _bind_request_digest(request)
-
-    with pytest.raises(ValidationError, match="fingerprint"):
-        PublisherRequestV3.model_validate(request)
+    assert request.release_manifest.blob_identity.endswith("/blobs/" + "a" * 40)
+    assert request.release_manifest.sha256 == "b" * 64
+    assert request.release_manifest.authority.release == request.release
 
 
 def test_v3_published_schema_and_strict_parser_accept_the_public_fixture() -> None:
@@ -245,50 +226,87 @@ def test_v3_attestation_carries_the_bound_v3_request() -> None:
 
     parsed = ReleaseAttestationV3.model_validate(attestation)
 
-    assert parsed.request.manifest_signer == parsed.request.tag_signer_policy.signer
+    assert parsed.request.release_manifest.repository == parsed.request.ci_receipt.repository
     assert parse_release_attestation_v3_json(json.dumps(attestation, separators=(",", ":")))
 
 
 @pytest.mark.parametrize(
     ("field", "value", "match"),
     [
-        ("commit", "main", "commit"),
-        ("path", "../allowed-signers.json", "safe and relative"),
+        ("blob_identity", "release-candidates/core-v2/1/release-manifest.json", "blob_identity"),
+        ("blob_identity", "https://gitea.i.cyberstorm.dev/relaxgg/infra-registry.git/blobs/main", "blob_identity"),
+        ("blob_identity", "https://gitea.i.cyberstorm.dev/relaxgg/infra-registry.git/blobs/" + "A" * 40, "blob_identity"),
         ("sha256", "0" * 63, "sha256"),
     ],
 )
-def test_v3_request_rejects_mutable_or_unsafe_signer_policy_selector(
+def test_v3_request_rejects_path_only_mutable_or_noncanonical_manifest_identity(
     field: str, value: str, match: str
 ) -> None:
     request = _v3_request()
-    policy = request["tag_signer_policy"]
-    assert isinstance(policy, dict)
-    selector = policy["selector"]
-    assert isinstance(selector, dict)
-    selector[field] = value
+    manifest = request["release_manifest"]
+    assert isinstance(manifest, dict)
+    manifest[field] = value
+    _bind_request_digest(request)
 
     with pytest.raises(ValidationError, match=match):
         PublisherRequestV3.model_validate(request)
 
 
-def test_v3_request_rejects_a_manifest_signer_that_differs_from_policy() -> None:
+def test_v3_request_rejects_a_manifest_from_another_registry_authority() -> None:
     request = _v3_request()
-    manifest_signer = request["manifest_signer"]
-    assert isinstance(manifest_signer, dict)
-    manifest_signer["principal"] = "another-publisher"
+    manifest = request["release_manifest"]
+    assert isinstance(manifest, dict)
+    other_remote = "https://example.com/relaxgg/another-registry"
+    manifest["repository"] = other_remote
+    manifest["blob_identity"] = f"{other_remote}/blobs/{'a' * 40}"
     _bind_request_digest(request)
 
-    with pytest.raises(ValidationError, match="manifest signer must match tag signer policy"):
+    with pytest.raises(ValidationError, match="manifest repository must match request authority"):
         PublisherRequestV3.model_validate(request)
 
 
-def test_v3_request_rejects_a_missing_tag_signer_policy_binding() -> None:
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda request: request["release"].update({"identity": "releases/core-v2/43", "sequence": 43}),
+        lambda request: request.update({"registry_commit": "c" * 40}),
+        lambda request: request.update({"controller_commit": "c" * 40}),
+        lambda request: request["ci_receipt"].update({"run": "577"}),
+        lambda request: request["artifacts"][0].update({"sha256": "d" * 64}),
+        lambda request: request["publisher"].update({"identity": "another-publisher"}),
+    ],
+)
+def test_v3_request_rejects_manifest_authority_that_disagrees_with_request(
+    mutate: Callable[[dict[str, object]], None],
+) -> None:
     request = _v3_request()
-    request.pop("tag_signer_policy")
+    mutate(request)
     _bind_request_digest(request)
 
-    with pytest.raises(ValidationError, match="tag_signer_policy"):
+    with pytest.raises(ValidationError, match="manifest authority must match request authority"):
         PublisherRequestV3.model_validate(request)
+
+
+def test_v3_request_rejects_a_missing_manifest_binding() -> None:
+    request = _v3_request()
+    request.pop("release_manifest")
+    _bind_request_digest(request)
+
+    with pytest.raises(ValidationError, match="release_manifest"):
+        PublisherRequestV3.model_validate(request)
+
+
+def test_v3_published_schema_rejects_noncanonical_manifest_locator() -> None:
+    request = _v3_request()
+    manifest = request["release_manifest"]
+    assert isinstance(manifest, dict)
+    manifest["blob_identity"] = "release-candidates/core-v2/1/release-manifest.json"
+    _bind_request_digest(request)
+    schema = json.loads(
+        (V2_SCHEMAS.parent / "v3" / "publisher-request.v3.schema.json").read_text(encoding="utf-8")
+    )
+
+    assert list(Draft202012Validator(schema).iter_errors(request))
 
 
 def test_v2_request_remains_compatible_without_signer_policy_binding() -> None:
