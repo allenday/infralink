@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
@@ -259,8 +260,11 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
     ("host", "bootstrap"): {
         "description": "Plan host bootstrap actions without applying them.",
         "arguments": [{"name": "host_id", "type": "string", "required": True}],
-        "options": [{"name": "plan", "type": "boolean", "required": True}],
-        "examples": ["infralink host bootstrap host-1 --plan"],
+        "options": [
+            {"name": "plan", "type": "boolean", "required": False},
+            {"name": "apply", "type": "boolean", "required": False},
+        ],
+        "examples": ["infralink host bootstrap host-1 --plan", "infralink host bootstrap host-1 --apply"],
     },
     ("edge",): {
         "description": "Inspect edges.",
@@ -1635,16 +1639,55 @@ def host_show(
     "--plan",
     "plan_only",
     is_flag=True,
-    required=True,
     help="Emit a read-only bootstrap plan.",
 )
+@click.option("--apply", "apply_changes", is_flag=True, help="Apply only failed host baseline actions.")
 @pass_context
-def host_bootstrap(ctx: Context, host_id: str, plan_only: bool) -> None:
+def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: bool) -> int:
     """Plan required host bootstrap actions without applying them."""
     target = ctx.registry.get(host_id)
     if target is None:
         raise entity_not_found("host", host_id)
     readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    if plan_only == apply_changes:
+        raise click.UsageError("pass exactly one of --plan or --apply")
+    if apply_changes and readiness.actions:
+        control_root = Path("/opt/infra")
+        playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+        if not playbook.is_file():
+            raise CliFailure(
+                code=ErrorCode.CONFIGURATION_REQUIRED,
+                message="Bastion host-bootstrap capability is not installed",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Install the current infra-management host-bootstrap capability on Bastion",
+                details={"capability": "host_bootstrap"},
+            )
+        address = target.tailscale_ip or target.public_ip
+        if not address:
+            raise CliFailure(
+                code=ErrorCode.CONFIGURATION_REQUIRED,
+                message="Host address is required for bootstrap",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Declare a Tailscale or public address for the host",
+                details={"host": target.uuid},
+            )
+        completed = subprocess.run(
+            [
+                "ansible-playbook", "-i", f"{address},", "-u", "root", str(playbook),
+                "-e", f"host_uuid={target.uuid}", "-e", f"canonical_name={target.canonical_name}",
+                "-e", json.dumps({"bootstrap_actions": [item.id for item in readiness.actions]}),
+            ],
+            cwd=control_root, text=True, capture_output=True, check=False,
+        )
+        if completed.returncode != 0:
+            raise CliFailure(
+                code=ErrorCode.INPUT_LOAD_FAILED,
+                message="Host baseline apply failed",
+                exit_code=ExitCode.POSITIVE_RESULT,
+                fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
+                details={"host": target.uuid},
+            )
+        readiness = evaluate_host_readiness(target, SshReadinessTransport())
     result = HostBootstrapPlanResult(
         host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
         readiness=readiness,
@@ -1662,6 +1705,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool) -> None:
             ],
         )
     )
+    return 0 if readiness.ready or plan_only else 1
 
 
 @click.group()

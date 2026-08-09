@@ -80,6 +80,10 @@ def test_host_bootstrap_help_marks_plan_required_and_shows_an_example() -> None:
 
     assert result.exit_code == 0
     assert payload["result"]["options"] == [
-        {"name": "plan", "type": "boolean", "required": True}
+        {"name": "plan", "type": "boolean", "required": False},
+        {"name": "apply", "type": "boolean", "required": False},
     ]
-    assert payload["result"]["examples"] == ["infralink host bootstrap host-1 --plan"]
+    assert payload["result"]["examples"] == [
+        "infralink host bootstrap host-1 --plan",
+        "infralink host bootstrap host-1 --apply",
+    ]
