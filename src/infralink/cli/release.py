@@ -52,11 +52,15 @@ from infralink.release.contracts import (
     ArtifactBindingV1,
     CiReceiptV1,
     PublisherRequestV2,
+    PublisherRequestV3,
     ReleaseAttestationV1,
     ReleaseAttestationV2,
+    ReleaseAttestationV3,
     ReleaseCandidateV1,
     parse_publisher_request_v2_json,
+    parse_publisher_request_v3_json,
     parse_release_attestation_v2_json,
+    parse_release_attestation_v3_json,
 )
 
 _IDENTITY = re.compile(r"^releases/([a-z0-9][a-z0-9-]{0,62})/([1-9][0-9]*)$")
@@ -247,20 +251,24 @@ def _parse_candidate(path: Path) -> _CandidateDocument | _LegacyCandidateDocumen
             ) from error
 
 
-def _parse_publisher_request_v2(path: Path) -> PublisherRequestV2:
+def _parse_publisher_request(path: Path) -> PublisherRequestV2 | PublisherRequestV3:
     try:
-        return parse_publisher_request_v2_json(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
+        document = json.loads(raw)
+        if isinstance(document, dict) and document.get("schema_version") == "infralink.publisher-request.v3":
+            return parse_publisher_request_v3_json(raw)
+        return parse_publisher_request_v2_json(raw)
     except (OSError, ValueError, ValidationError) as error:
         raise _invalid(
             "publisher-request",
-            "does not match infralink.publisher-request.v2",
+            "does not match an accepted immutable publisher-request schema",
             {"path": str(path)},
         ) from error
 
 
 def _parse_attestation(
     path: Path,
-) -> _AttestationDocument | _LegacyAttestationDocument | ReleaseAttestationV2:
+) -> _AttestationDocument | _LegacyAttestationDocument | ReleaseAttestationV2 | ReleaseAttestationV3:
     try:
         raw = path.read_text(encoding="utf-8")
         discriminator = json.loads(raw)
@@ -277,6 +285,18 @@ def _parse_attestation(
             raise _invalid(
                 "attestation",
                 "does not match infralink.release-attestation.v2",
+                {"path": str(path)},
+            ) from error
+    if isinstance(discriminator, dict) and discriminator.get("schema_version") == (
+        "infralink.release-attestation.v3"
+    ):
+        try:
+            assert raw is not None
+            return parse_release_attestation_v3_json(raw)
+        except (ValueError, ValidationError) as error:
+            raise _invalid(
+                "attestation",
+                "does not match infralink.release-attestation.v3",
                 {"path": str(path)},
             ) from error
     try:
@@ -453,7 +473,7 @@ def validate_candidate(candidate: Path) -> None:
 def render_publisher_request(
     candidate: Path | None, admission: Path | None, publisher_request: Path | None
 ) -> None:
-    """Inspect a registry-rendered v2 request, or render legacy v1 evidence only."""
+    """Inspect a registry-rendered versioned request, or render legacy v1 evidence only."""
     if publisher_request is not None:
         if candidate is not None or admission is not None:
             raise _invalid(
@@ -465,7 +485,7 @@ def render_publisher_request(
             ok_envelope(
                 _context_for(path=["release", "render-publisher-request"]),
                 PublisherRequestResult(
-                    publisher_request=_parse_publisher_request_v2(publisher_request)
+                    publisher_request=_parse_publisher_request(publisher_request)
                 ),
                 [
                     action(
@@ -576,8 +596,8 @@ def render_publisher_request(
 def inspect_attestation(attestation: Path) -> None:
     """Inspect a publisher completion record without contacting a provider."""
     value = _parse_attestation(attestation)
-    if isinstance(value, ReleaseAttestationV2):
-        output: ReleaseAttestation | ReleaseAttestationV2 = value
+    if isinstance(value, (ReleaseAttestationV2, ReleaseAttestationV3)):
+        output: ReleaseAttestation | ReleaseAttestationV2 | ReleaseAttestationV3 = value
     elif isinstance(value, _LegacyAttestationDocument):
         output = ReleaseAttestation(
             release_identity=value.release_identity,

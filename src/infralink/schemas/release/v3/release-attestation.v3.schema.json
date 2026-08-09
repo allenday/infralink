@@ -36,42 +36,6 @@
       "title": "ArtifactSourceBindingV2",
       "type": "object"
     },
-    "ImmutablePolicySelectorV1": {
-      "additionalProperties": false,
-      "description": "Exact registry blob containing a public tag-signer policy.",
-      "properties": {
-        "commit": {
-          "pattern": "^[0-9a-f]{40}$",
-          "title": "Commit",
-          "type": "string"
-        },
-        "path": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Path",
-          "type": "string"
-        },
-        "repository": {
-          "maxLength": 512,
-          "pattern": "^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$",
-          "title": "Repository",
-          "type": "string"
-        },
-        "sha256": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Sha256",
-          "type": "string"
-        }
-      },
-      "required": [
-        "path",
-        "sha256",
-        "repository",
-        "commit"
-      ],
-      "title": "ImmutablePolicySelectorV1",
-      "type": "object"
-    },
     "ImmutableSourceReceiptV2": {
       "additionalProperties": false,
       "description": "A receipt whose source cannot be silently retargeted.",
@@ -143,7 +107,7 @@
     },
     "PublisherRequestV3": {
       "additionalProperties": false,
-      "description": "V2 request facts plus immutable tag-signer policy provenance.",
+      "description": "V2 request facts plus one immutable canonical release-manifest binding.",
       "properties": {
         "artifacts": {
           "items": {
@@ -161,9 +125,6 @@
           "pattern": "^[0-9a-f]{40}$",
           "title": "Controller Commit",
           "type": "string"
-        },
-        "manifest_signer": {
-          "$ref": "#/$defs/ReleaseManifestSignerV1"
         },
         "mode": {
           "enum": [
@@ -184,6 +145,9 @@
         "release": {
           "$ref": "#/$defs/ReleaseIdentityV1"
         },
+        "release_manifest": {
+          "$ref": "#/$defs/ReleaseManifestBindingV1"
+        },
         "request_digest": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Request Digest",
@@ -193,9 +157,6 @@
           "const": "infralink.publisher-request.v3",
           "title": "Schema Version",
           "type": "string"
-        },
-        "tag_signer_policy": {
-          "$ref": "#/$defs/PublisherTagSignerPolicyV1"
         }
       },
       "required": [
@@ -208,28 +169,9 @@
         "publisher",
         "mode",
         "request_digest",
-        "tag_signer_policy",
-        "manifest_signer"
+        "release_manifest"
       ],
       "title": "PublisherRequestV3",
-      "type": "object"
-    },
-    "PublisherTagSignerPolicyV1": {
-      "additionalProperties": false,
-      "description": "Immutable policy location and the one public signer it authorizes.",
-      "properties": {
-        "selector": {
-          "$ref": "#/$defs/ImmutablePolicySelectorV1"
-        },
-        "signer": {
-          "$ref": "#/$defs/ReleaseManifestSignerV1"
-        }
-      },
-      "required": [
-        "selector",
-        "signer"
-      ],
-      "title": "PublisherTagSignerPolicyV1",
       "type": "object"
     },
     "ReleaseIdentityV1": {
@@ -260,28 +202,82 @@
       "title": "ReleaseIdentityV1",
       "type": "object"
     },
-    "ReleaseManifestSignerV1": {
+    "ReleaseManifestAuthorityV1": {
       "additionalProperties": false,
-      "description": "Public SSH signer identity named by a release manifest.",
+      "description": "The request facts which a canonical release manifest must carry.",
       "properties": {
-        "fingerprint": {
-          "pattern": "^SHA256:[A-Za-z0-9+/]{43}$",
-          "title": "Fingerprint",
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSourceBindingV2"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "ci_receipt": {
+          "$ref": "#/$defs/ImmutableSourceReceiptV2"
+        },
+        "controller_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Controller Commit",
           "type": "string"
         },
-        "principal": {
-          "maxLength": 63,
-          "minLength": 1,
-          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
-          "title": "Principal",
+        "publisher": {
+          "$ref": "#/$defs/PublisherIdentityV2"
+        },
+        "registry_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Commit",
+          "type": "string"
+        },
+        "release": {
+          "$ref": "#/$defs/ReleaseIdentityV1"
+        }
+      },
+      "required": [
+        "release",
+        "registry_commit",
+        "controller_commit",
+        "ci_receipt",
+        "artifacts",
+        "publisher"
+      ],
+      "title": "ReleaseManifestAuthorityV1",
+      "type": "object"
+    },
+    "ReleaseManifestBindingV1": {
+      "additionalProperties": false,
+      "description": "Exact canonical registry blob and its declared request authority.",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/ReleaseManifestAuthorityV1"
+        },
+        "blob_identity": {
+          "maxLength": 640,
+          "pattern": "^(?:https|ssh)://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)*/blobs/[0-9a-f]{40}$",
+          "title": "Blob Identity",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 512,
+          "pattern": "^(?:https|ssh)://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)+$",
+          "title": "Repository",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
           "type": "string"
         }
       },
       "required": [
-        "principal",
-        "fingerprint"
+        "repository",
+        "blob_identity",
+        "sha256",
+        "authority"
       ],
-      "title": "ReleaseManifestSignerV1",
+      "title": "ReleaseManifestBindingV1",
       "type": "object"
     },
     "ReleaseTagV1": {

@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import PurePath
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -15,7 +16,8 @@ _COMMIT = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _SOURCE_IDENTITY = r"^[a-z][a-z0-9+.-]{0,31}://[A-Za-z0-9._~:/@+-]{1,384}$"
 _OCI_IMAGE_DIGEST = r"^[a-z0-9][a-z0-9._/-]{0,383}@sha256:[0-9a-f]{64}$"
-_SSH_FINGERPRINT = r"^SHA256:[A-Za-z0-9+/]{43}$"
+_CANONICAL_GIT_REMOTE = r"^(?:https|ssh)://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)+$"
+_IMMUTABLE_GIT_BLOB = r"^(?:https|ssh)://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)*/blobs/[0-9a-f]{40}$"
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -152,25 +154,38 @@ class PublisherIdentityV2(_Contract):
     image: str = Field(pattern=_OCI_IMAGE_DIGEST, max_length=512)
 
 
-class ReleaseManifestSignerV1(_Contract):
-    """Public SSH signer identity named by a release manifest."""
+class ReleaseManifestAuthorityV1(_Contract):
+    """The request facts which a canonical release manifest must carry."""
 
-    principal: ConsumerId
-    fingerprint: str = Field(pattern=_SSH_FINGERPRINT)
-
-
-class ImmutablePolicySelectorV1(ArtifactBindingV1):
-    """Exact registry blob containing a public tag-signer policy."""
-
-    repository: str = Field(pattern=_SOURCE_IDENTITY, max_length=512)
-    commit: str = Field(pattern=_COMMIT)
+    release: ReleaseIdentityV1
+    registry_commit: str = Field(pattern=_COMMIT)
+    controller_commit: str = Field(pattern=_COMMIT)
+    ci_receipt: ImmutableSourceReceiptV2
+    artifacts: list[ArtifactSourceBindingV2] = Field(min_length=1, max_length=64)
+    publisher: PublisherIdentityV2
 
 
-class PublisherTagSignerPolicyV1(_Contract):
-    """Immutable policy location and the one public signer it authorizes."""
+class ReleaseManifestBindingV1(_Contract):
+    """Exact canonical registry blob and its declared request authority."""
 
-    selector: ImmutablePolicySelectorV1
-    signer: ReleaseManifestSignerV1
+    repository: str = Field(pattern=_CANONICAL_GIT_REMOTE, max_length=512)
+    blob_identity: str = Field(pattern=_IMMUTABLE_GIT_BLOB, max_length=640)
+    sha256: str = Field(pattern=_SHA256)
+    authority: ReleaseManifestAuthorityV1
+
+    @field_validator("repository")
+    @classmethod
+    def canonical_registry_remote(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("repository must be a credential-free canonical Git remote")
+        return value
+
+    @model_validator(mode="after")
+    def blob_identity_is_exact_immutable_registry_blob(self) -> ReleaseManifestBindingV1:
+        if not self.blob_identity.startswith(f"{self.repository}/blobs/"):
+            raise ValueError("blob identity must name an exact immutable registry blob")
+        return self
 
 
 class PublisherRequestV2(_Contract):
@@ -215,7 +230,7 @@ class PublisherRequestV2(_Contract):
 
 
 class PublisherRequestV3(_Contract):
-    """V2 request facts plus immutable tag-signer policy provenance."""
+    """V2 request facts plus one immutable canonical release-manifest binding."""
 
     schema_version: Literal["infralink.publisher-request.v3"]
     release: ReleaseIdentityV1
@@ -226,8 +241,7 @@ class PublisherRequestV3(_Contract):
     publisher: PublisherIdentityV2
     mode: Literal["dry-run", "publish"]
     request_digest: str = Field(pattern=_SHA256)
-    tag_signer_policy: PublisherTagSignerPolicyV1
-    manifest_signer: ReleaseManifestSignerV1
+    release_manifest: ReleaseManifestBindingV1
 
     @field_validator("artifacts")
     @classmethod
@@ -257,9 +271,18 @@ class PublisherRequestV3(_Contract):
         return self
 
     @model_validator(mode="after")
-    def manifest_signer_matches_policy(self) -> PublisherRequestV3:
-        if self.manifest_signer != self.tag_signer_policy.signer:
-            raise ValueError("manifest signer must match tag signer policy")
+    def manifest_repository_matches_request_authority(self) -> PublisherRequestV3:
+        if self.release_manifest.repository != self.ci_receipt.repository:
+            raise ValueError("manifest repository must match request authority")
+        if self.release_manifest.authority != ReleaseManifestAuthorityV1(
+            release=self.release,
+            registry_commit=self.registry_commit,
+            controller_commit=self.controller_commit,
+            ci_receipt=self.ci_receipt,
+            artifacts=self.artifacts,
+            publisher=self.publisher,
+        ):
+            raise ValueError("manifest authority must match request authority")
         return self
 
 
