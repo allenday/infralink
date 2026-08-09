@@ -29,8 +29,12 @@ class HostReadinessProbe:
     self_deploy_mode: str | None = None
     self_deploy_dependencies: bool = False
     registry_layout: str | None = None
+    requires_v2_registry_layout: bool = False
     self_deploy_reconcile_result: str | None = None
     self_deploy_reconcile_exit_status: int | None = None
+    self_deploy_reconcile_active_state: str | None = None
+    self_deploy_reconcile_sub_state: str | None = None
+    self_deploy_reconcile_exit_timestamp_monotonic: int | None = None
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,7 @@ class HostReadiness:
 BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
     BaselineRequirement(
         "registry_layout",
-        "V2 registry checkout uses the canonical non-nested layout.",
+        "Registry checkout layout is safe and conforms to declared migration policy.",
         "migrate_v2_registry_layout",
         "Migrate the host registry checkout to the V2-owned root.",
     ),
@@ -145,8 +149,21 @@ class HostReadinessEvaluator:
         reconcile_passed, reconcile_detail = _reconcile_outcome(probe)
         outcomes: dict[str, tuple[bool, str | None]] = {
             "registry_layout": (
-                probe.reachable and probe.registry_layout == "v2_managed",
-                None if probe.registry_layout == "v2_managed" else probe.registry_layout or "missing",
+                probe.reachable
+                and (
+                    probe.registry_layout == "v2_managed"
+                    or (
+                        probe.registry_layout == "legacy_nested"
+                        and not probe.requires_v2_registry_layout
+                    )
+                ),
+                None
+                if probe.registry_layout == "v2_managed"
+                or (
+                    probe.registry_layout == "legacy_nested"
+                    and not probe.requires_v2_registry_layout
+                )
+                else probe.registry_layout or "missing",
             ),
             "ssh_reachable": (probe.reachable, probe.error),
             "host_identity": (
@@ -222,8 +239,16 @@ def _reconcile_outcome(probe: HostReadinessProbe) -> tuple[bool, str | None]:
     if (
         probe.self_deploy_reconcile_result == "success"
         and probe.self_deploy_reconcile_exit_status == 0
+        and probe.self_deploy_reconcile_active_state == "inactive"
+        and probe.self_deploy_reconcile_sub_state == "dead"
+        and (probe.self_deploy_reconcile_exit_timestamp_monotonic or 0) > 0
     ):
         return True, None
+    if (
+        probe.self_deploy_reconcile_result == "success"
+        and probe.self_deploy_reconcile_exit_status == 0
+    ):
+        return False, "self_deploy_reconcile_not_completed"
     if probe.self_deploy_reconcile_result:
         suffix = (
             f":{probe.self_deploy_reconcile_exit_status}"

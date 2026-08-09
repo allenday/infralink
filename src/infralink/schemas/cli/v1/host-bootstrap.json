@@ -287,6 +287,11 @@
           "default": null,
           "title": "Registry Layout"
         },
+        "requires_v2_registry_layout": {
+          "default": false,
+          "title": "Requires V2 Registry Layout",
+          "type": "boolean"
+        },
         "runtime_mode": {
           "anyOf": [
             {
@@ -303,6 +308,18 @@
           "default": null,
           "title": "Runtime Mode"
         },
+        "self_deploy_reconcile_active_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Active State"
+        },
         "self_deploy_reconcile_exit_status": {
           "anyOf": [
             {
@@ -315,6 +332,18 @@
           "default": null,
           "title": "Self Deploy Reconcile Exit Status"
         },
+        "self_deploy_reconcile_exit_timestamp_monotonic": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Exit Timestamp Monotonic"
+        },
         "self_deploy_reconcile_result": {
           "anyOf": [
             {
@@ -326,6 +355,18 @@
           ],
           "default": null,
           "title": "Self Deploy Reconcile Result"
+        },
+        "self_deploy_reconcile_sub_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Sub State"
         },
         "transport": {
           "enum": [
