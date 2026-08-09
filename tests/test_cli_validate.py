@@ -1,4 +1,5 @@
 import json
+import shlex
 from copy import deepcopy
 from pathlib import Path
 from uuid import UUID
@@ -269,25 +270,11 @@ def test_validate_pages_selected_collection_and_replays_all_inputs(
         item
         for item in first["next_actions"]
         if item["rel"] == "continue"
-        and "--collection" in item["argv"]
-        and item["argv"][item["argv"].index("--collection") + 1] == "warnings"
+        and "--collection warnings" in item["command"]
     )
-    assert action["argv"] == [
-        "infralink",
-        "--output",
-        "json",
-        "validate",
-        "--strict",
-        "--check-resolution",
-        "--collection",
-        "warnings",
-        "--cursor",
-        "{cursor}",
-        "--limit",
-        "1",
-    ]
-    replay = [warning_cursor if item == "{cursor}" else item for item in action["argv"]]
-    second = json.loads(CliRunner().invoke(cli, replay[1:]).output)
+    assert action["command"].endswith("validate --strict --check-resolution --collection warnings --cursor '{cursor}' --limit 1")
+    replay = [warning_cursor if item == "{cursor}" else item for item in shlex.split(action["command"])]
+    second = yaml.safe_load(CliRunner().invoke(cli, replay[1:]).output)
     assert second["result"]["warnings"]["page"]["returned"] == 1
     assert second["result"]["warnings"]["page"]["total"] == 3
     assert second["result"]["errors"]["items"] == first["result"]["errors"]["items"]

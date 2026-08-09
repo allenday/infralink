@@ -8,61 +8,26 @@ from typing import Any, cast, overload
 
 from pydantic import BaseModel
 
+from infralink.cli.actions import SENSITIVE_OPTIONS, redact_argv, render_action
 from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
 from infralink.cli.errors import CliFailure
 
-SENSITIVE_OPTIONS = {
-    "--access-token",
-    "--password",
-    "--password-env",
-    "--token",
-}
 _REDACTED = "[REDACTED]"
 _SENSITIVE_KEYS = {"access_token", "password", "password_env", "token"}
-_SENSITIVE_SHORT_OPTIONS = {"-p"}
-_SENSITIVE_ARGV_OPTIONS = SENSITIVE_OPTIONS | _SENSITIVE_SHORT_OPTIONS
 
 
-def redact_argv(argv: list[str]) -> list[str]:
-    redacted: list[str] = []
-    index = 0
-    while index < len(argv):
-        value = argv[index]
-        option, separator, _ = value.partition("=")
-        if option in _SENSITIVE_ARGV_OPTIONS:
-            redacted.append(f"{option}={_REDACTED}" if separator else option)
-            if separator:
-                index += 1
-                continue
+_INHERITABLE_SOURCE_OPTIONS = frozenset(
+    {"--registry", "--edges", "--observation-plan", "--adapter-bindings"}
+)
+_SOURCE_OPTION_ALIASES = {"-r": "--registry", "-e": "--edges"}
 
-            next_index = index + 1
-            if next_index < len(argv):
-                next_option = argv[next_index].partition("=")[0]
-                if next_option not in _SENSITIVE_ARGV_OPTIONS:
-                    redacted.append(_REDACTED)
-                    index += 2
-                    continue
-            index += 1
-            continue
 
-        attached_short = next(
-            (
-                short
-                for short in _SENSITIVE_SHORT_OPTIONS
-                if value.startswith(short)
-                and len(value) > len(short)
-                and not value.startswith("--")
-            ),
-            None,
-        )
-        if attached_short is not None:
-            redacted.append(f"{attached_short}{_REDACTED}")
-            index += 1
-            continue
-
-        redacted.append(value)
-        index += 1
-    return redacted
+def _inherited_source_options(context: CommandContext) -> frozenset[str]:
+    supplied = {
+        _SOURCE_OPTION_ALIASES.get(flag.split("=", 1)[0], flag.split("=", 1)[0])
+        for flag in context.parsed.get("flags", [])
+    }
+    return frozenset(option for option in _INHERITABLE_SOURCE_OPTIONS if option not in supplied)
 
 
 def _sanitize_value(value: Any) -> Any:
@@ -165,6 +130,12 @@ def ok_envelope(
         next_actions=cast(list[Action], next_actions),
     )
     payload = envelope.model_dump(mode="json")
+    payload["next_actions"] = [
+        render_action(
+            item, context.resolved, inherited_options=_inherited_source_options(context)
+        )
+        for item in cast(list[Action], next_actions)
+    ]
     payload.pop("error", None)
     payload.pop("fix", None)
     return payload
@@ -248,5 +219,11 @@ def error_envelope(
         next_actions=failure.next_actions,
     )
     payload = envelope.model_dump(mode="json")
+    payload["next_actions"] = [
+        render_action(
+            item, context.resolved, inherited_options=_inherited_source_options(context)
+        )
+        for item in failure.next_actions
+    ]
     payload.pop("result", None)
     return payload

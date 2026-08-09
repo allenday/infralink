@@ -241,7 +241,7 @@ selection:
         ("app", "list"): ([*source, "app", "list"], 0, True),
         ("app", "show"): ([*source, "app", "show", "core"], 0, True),
         ("check",): ([*source, "check", "--edge", EDGE_ID], 0, True),
-        ("diagram",): (
+            ("diagram",): (
             [
                 *source,
                 "diagram",
@@ -252,8 +252,9 @@ selection:
                 str(artifacts / "diagrams"),
             ],
             0,
-            True,
-        ),
+                True,
+            ),
+                ("doctor",): ([*source, "doctor", "host", TARGET_ID], 2, False),
         ("docs",): (
             [
                 *source,
@@ -267,7 +268,12 @@ selection:
         ("edge", "show"): ([*source, "edge", "show", EDGE_ID], 0, True),
         ("edge", "list"): ([*source, "edge", "list"], 0, True),
         ("host", "show"): ([*source, "host", "show", TARGET_ID], 0, True),
-        ("host", "list"): ([*source, "host", "list"], 0, True),
+            ("host", "list"): ([*source, "host", "list"], 0, True),
+            ("host", "create"): (
+                ["host", "create", "--name", "secret-leak-test", "--address", "192.0.2.1"],
+                0,
+                True,
+            ),
         ("info",): ([*source, "info"], 0, True),
         ("resolve",): ([*source, "resolve", EDGE_ID], 0, True),
         ("secrets", "audit"): ([*source, "secrets", "audit"], 0, True),

@@ -465,7 +465,99 @@ def test_ok_envelope_contains_structured_command_and_action() -> None:
     assert payload["result"] == {"valid": True}
     assert "error" not in payload
     assert "fix" not in payload
-    assert payload["next_actions"][0]["argv"] == ["infralink", "check"]
+    assert payload["next_actions"][0] == {
+        "rel": "check",
+        "command": "infralink check",
+        "description": "Run checks",
+        "safe": True,
+    }
+
+
+def test_rendered_actions_inherit_resolved_sources_and_keep_templated_contracts() -> None:
+    context = command_context(
+        ["infralink", "doctor", "host", "watchtower", "--validate"],
+        path=["doctor", "host"],
+        args={},
+        flags=[],
+        resolved={
+            "registry": "/registry/hosts",
+            "edges": "/registry/edges.yml",
+            "observation_plan": "/registry/plan.json",
+            "adapter_bindings": "/registry/bindings.yml",
+        },
+    )
+    payload = ok_envelope(
+        context=context,
+        result={"status": "unknown"},
+        next_actions=[
+            action(
+                "verbose",
+                [
+                    "infralink",
+                    "--verbose",
+                    "--registry",
+                    "/registry/hosts",
+                    "--edges",
+                    "/registry/edges.yml",
+                    "doctor",
+                    "--observation-plan",
+                    "/registry/plan.json",
+                    "--adapter-bindings",
+                    "/registry/bindings.yml",
+                    "host",
+                    "watchtower",
+                    "--validate",
+                ],
+                "Show complete evidence",
+            ),
+            action(
+                "show",
+                ["infralink", "host", "show", "{id}"],
+                "Show host",
+                bindings={"id": Binding(type="string", required=True, source="result.items[]")},
+            ),
+        ],
+    )
+
+    assert payload["next_actions"] == [
+        {
+            "rel": "verbose",
+            "command": "infralink --verbose doctor host watchtower --validate",
+            "description": "Show complete evidence",
+            "safe": True,
+        },
+        {
+            "rel": "show",
+            "command": "infralink host show '{id}'",
+            "description": "Show host",
+            "safe": True,
+            "templated": True,
+            "bindings": {"id": {"type": "string", "required": True, "source": "result.items[]"}},
+        },
+    ]
+
+
+@pytest.mark.parametrize("token_option", ["--token", "--token=super-secret"])
+def test_rendered_action_redacts_sensitive_option_values(token_option: str) -> None:
+    argv = ["infralink", "release", token_option]
+    if "=" not in token_option:
+        argv.append("super-secret")
+
+    payload = ok_envelope(
+        context=command_context(
+            ["infralink", "release"],
+            path=["release"],
+            args={},
+            flags=[],
+            resolved={},
+        ),
+        result={"ok": True},
+        next_actions=[action("retry", argv, "Retry")],
+    )
+
+    rendered = payload["next_actions"][0]["command"]
+    assert "super-secret" not in rendered
+    assert "[REDACTED]" in rendered
 
 
 def test_ok_envelope_preserves_required_nullable_result_fields() -> None:

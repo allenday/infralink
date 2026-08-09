@@ -50,13 +50,17 @@ class Binding(ContractModel):
 
 
 class Action(ContractModel):
+    """An internal action recipe with a compact public serialization."""
+
     rel: str
-    argv: list[str]
+    argv: list[str] = Field(exclude=True)
     command: str
     description: str
     safe: bool
-    templated: bool = False
-    bindings: dict[str, Binding] = Field(default_factory=dict)
+    templated: bool = Field(default=False, exclude_if=lambda value: not value)
+    bindings: dict[str, Binding] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
 
 class CommandContext(ContractModel):
@@ -409,7 +413,7 @@ class HelpSubcommand(ContractModel):
 
 class HelpNavigationAction(ContractModel):
     rel: Literal["help"] = "help"
-    argv: list[str]
+    argv: list[str] = Field(exclude=True)
     command: str
 
 
@@ -486,6 +490,7 @@ class DoctorEvidence(ContractModel):
     signal_refs: list[str]
     status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
     reason: str | None = None
+    observed_at: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class DoctorCoverage(ContractModel):
@@ -496,10 +501,22 @@ class DoctorCoverage(ContractModel):
     valid: bool
 
 
+class DoctorEvidenceSummary(ContractModel):
+    adapter: str
+    configured: bool
+    healthy: int = Field(ge=0)
+    unhealthy: int = Field(ge=0)
+    unavailable: int = Field(ge=0)
+    unknown: int = Field(ge=0)
+    live_observation_count: int = Field(ge=0)
+    latest_observed_at: str | None = None
+
+
 class DoctorResult(ContractModel):
     target: DoctorTarget
     declared: dict[str, Any]
     evidence: list[DoctorEvidence]
+    evidence_summary: list[DoctorEvidenceSummary]
     coverage: DoctorCoverage | None = None
     status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
     reason: str | None = None

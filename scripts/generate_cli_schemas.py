@@ -103,6 +103,14 @@ def render_schemas() -> dict[str, str]:
     rendered_schemas: dict[str, str] = {}
     for name, model in MODELS.items():
         schema = model.model_json_schema()
+        for definition in schema.get("$defs", {}).values():
+            if definition.get("title") not in {"Action", "HelpNavigationAction"}:
+                continue
+            definition.get("properties", {}).pop("argv", None)
+            if "required" in definition:
+                definition["required"] = [
+                    field for field in definition["required"] if field != "argv"
+                ]
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["oneOf"] = OUTCOME_INVARIANT
         rendered_schemas[f"{name}.json"] = json.dumps(schema, indent=2, sort_keys=True) + "\n"

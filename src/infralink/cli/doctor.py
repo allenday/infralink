@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import click
 import yaml
 
 from infralink.cli.actions import action
-from infralink.cli.contracts import DoctorCoverage, DoctorEvidence, DoctorResult, DoctorTarget
+from infralink.cli.contracts import (
+    DoctorCoverage,
+    DoctorEvidence,
+    DoctorEvidenceSummary,
+    DoctorResult,
+    DoctorTarget,
+)
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, pass_context
 from infralink.cli.output import ok_envelope
@@ -18,6 +27,81 @@ from infralink.cli.output import ok_envelope
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
 ADAPTER_BINDINGS_ENVVAR = "INFRALINK_ADAPTER_BINDINGS"
+GATUS_URL_ENVVAR = "INFRALINK_GATUS_URL"
+GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
+
+
+def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
+    request = Request(f"{url.rstrip('/')}/api/v1/endpoints/statuses")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urlopen(request, timeout=10) as response:  # noqa: S310 - configured operator endpoint
+            value = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, OSError, ValueError):
+        raise RuntimeError("gatus_result_api_unavailable") from None
+    if not isinstance(value, list):
+        raise RuntimeError("gatus_result_api_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _gatus_evidence(
+    evidence: list[DoctorEvidence], bindings: dict[str, Any] | None, url: str | None, token: str | None
+) -> list[DoctorEvidence]:
+    if not url:
+        return evidence
+    try:
+        statuses = _fetch_gatus_statuses(url, token)
+    except RuntimeError as error:
+        return [
+            item.model_copy(update={"status": "unavailable", "reason": str(error)})
+            if item.adapter == "gatus" and item.reason == "no_live_observation_evidence"
+            else item
+            for item in evidence
+        ]
+    binding_by_identity = {
+        item.get("output_identity"): item
+        for item in (bindings or {}).get("bindings", [])
+        if isinstance(item, dict) and item.get("renderer_kind") == "gatus"
+    }
+    by_identity = {item.get("name"): item for item in statuses if isinstance(item.get("name"), str)}
+    updated: list[DoctorEvidence] = []
+    for item in evidence:
+        binding = binding_by_identity.get(item.id)
+        status = by_identity.get(binding.get("output_identity")) if isinstance(binding, dict) else None
+        if item.adapter != "gatus" or item.reason != "no_live_observation_evidence":
+            updated.append(item)
+        elif status is None:
+            updated.append(item.model_copy(update={"reason": "gatus_output_identity_missing"}))
+        else:
+            results = status.get("results")
+            latest = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else {}
+            success = latest.get("success")
+            observed_at = latest.get("timestamp") if isinstance(latest.get("timestamp"), str) else None
+            updated.append(item.model_copy(update={
+                "status": "healthy" if success is True else "unhealthy" if success is False else "unknown",
+                "reason": None if isinstance(success, bool) else "gatus_result_missing",
+                "observed_at": observed_at,
+            }))
+    return updated
+
+
+def _result_status(
+    coverage: DoctorCoverage | None, evidence: list[DoctorEvidence], gatus_url: str | None
+) -> tuple[str, str | None]:
+    if gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+        return "unknown", "gatus_not_configured"
+    if coverage is not None and not coverage.valid:
+        return "unknown", "observer_coverage_incomplete"
+    statuses = {item.status for item in evidence}
+    if "unavailable" in statuses:
+        reasons = {item.reason for item in evidence if item.status == "unavailable"}
+        return "unavailable", reasons.pop() if len(reasons) == 1 else "gatus_result_api_unavailable"
+    if "unhealthy" in statuses:
+        return "unhealthy", "gatus_observation_unhealthy"
+    if "healthy" in statuses and statuses <= {"healthy"}:
+        return "healthy", None
+    return "unknown", "no_live_observation_evidence"
 
 
 def _doctor_prefix(
@@ -76,11 +160,21 @@ def _missing(
 
 
 def _configuration_required(ctx: Context, source: str) -> CliFailure:
+    labels = {
+        "observation_plan": "Observation plan",
+        "adapter_bindings": "Adapter bindings",
+        "gatus_url": "Gatus URL",
+    }
+    envvars = {
+        "observation_plan": OBSERVATION_PLAN_ENVVAR,
+        "adapter_bindings": ADAPTER_BINDINGS_ENVVAR,
+        "gatus_url": GATUS_URL_ENVVAR,
+    }
     return CliFailure(
         code=ErrorCode.CONFIGURATION_REQUIRED,
-        message="Observation plan configuration is required",
+        message=f"{labels[source]} configuration is required",
         exit_code=ExitCode.USAGE_ERROR,
-        fix=f"Provide --observation-plan or set {OBSERVATION_PLAN_ENVVAR}",
+        fix=f"Provide --{source.replace('_', '-')} or set {envvars[source]}",
         details={"source": source},
         next_actions=[
             action("help", [*_root_source_argv(ctx), "help", "doctor"], "Show doctor usage"),
@@ -308,13 +402,37 @@ def _coverage(
 
 
 def _display_evidence(ctx: Context, evidence: list[DoctorEvidence]) -> list[DoctorEvidence]:
-    """Keep normal observer absence summarized by coverage; verbose expands it."""
+    """Keep healthy and absent observer detail behind the explicit verbose action."""
     if ctx.verbose:
         return evidence
     return [
         item
         for item in evidence
-        if item.status != "unknown" or item.reason != "no_live_observation_evidence"
+        if item.status in {"unhealthy", "unavailable"}
+        or (item.status == "unknown" and item.reason != "no_live_observation_evidence")
+    ]
+
+
+def _evidence_summary(
+    evidence: list[DoctorEvidence], gatus_url: str | None
+) -> list[DoctorEvidenceSummary]:
+    grouped: dict[str, list[DoctorEvidence]] = {}
+    for item in evidence:
+        grouped.setdefault(item.adapter or "undeclared", []).append(item)
+    return [
+        DoctorEvidenceSummary(
+            adapter=adapter,
+            configured=adapter == "gatus" and gatus_url is not None,
+            healthy=sum(item.status == "healthy" for item in items),
+            unhealthy=sum(item.status == "unhealthy" for item in items),
+            unavailable=sum(item.status == "unavailable" for item in items),
+            unknown=sum(item.status == "unknown" for item in items),
+            live_observation_count=sum(item.observed_at is not None for item in items),
+            latest_observed_at=max(
+                (item.observed_at for item in items if item.observed_at is not None), default=None
+            ),
+        )
+        for adapter, items in sorted(grouped.items())
     ]
 
 
@@ -325,12 +443,19 @@ def _emit_result(
     actions: list[Any],
     observation_plan: Path | None = None,
     adapter_bindings: Path | None = None,
+    gatus_url: str | None = None,
+    gatus_token_env: str | None = None,
 ) -> None:
     command = _context_for(path=path)
     if observation_plan is not None:
         command.resolved["observation_plan"] = str(observation_plan)
     if adapter_bindings is not None:
         command.resolved["adapter_bindings"] = str(adapter_bindings)
+    if gatus_url is not None:
+        command.resolved["gatus_url"] = gatus_url
+    command.resolved["gatus_configured"] = gatus_url is not None
+    if gatus_token_env is not None:
+        command.resolved["gatus_token_env"] = gatus_token_env
     _emit(ok_envelope(command, result, actions))
 
 
@@ -350,6 +475,8 @@ def _emit_result(
 @click.option(
     "--validate", "declaration_only", is_flag=True, help="Validate declarations without I/O"
 )
+@click.option("--gatus-url", default=None, envvar=GATUS_URL_ENVVAR)
+@click.option("--gatus-token-env", default=GATUS_TOKEN_ENVVAR)
 @click.argument(
     "target_type", required=False, type=click.Choice(["host", "service", "edge", "profile"])
 )
@@ -360,6 +487,8 @@ def doctor(
     observation_plan: Path | None,
     adapter_bindings: Path | None,
     declaration_only: bool,
+    gatus_url: str | None,
+    gatus_token_env: str,
     target_type: DoctorKind | None,
     target_ref: str | None,
 ) -> int:
@@ -369,11 +498,18 @@ def doctor(
             raise click.UsageError("a target type is required")
         from infralink.cli.queries import list_services
 
-        if observation_plan is None and declaration_only:
+        if observation_plan is None:
             raise _configuration_required(ctx, "observation_plan")
+        if adapter_bindings is None:
+            raise _configuration_required(ctx, "adapter_bindings")
         plan = _load_mapping(observation_plan, "observation_plan") if observation_plan else None
         bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
         coverage, evidence = _coverage(plan, bindings, None, "") if plan is not None else (None, [])
+        if not declaration_only and gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+            raise _configuration_required(ctx, "gatus_url")
+        if not declaration_only:
+            evidence = _gatus_evidence(evidence, bindings, gatus_url, os.environ.get(gatus_token_env))
+        status, reason = _result_status(coverage, evidence, gatus_url)
 
         result = DoctorResult(
             target=DoctorTarget(type="global"),
@@ -383,15 +519,10 @@ def doctor(
                 "edge_count": len(ctx.edges),
             },
             evidence=_display_evidence(ctx, evidence),
+            evidence_summary=_evidence_summary(evidence, gatus_url),
             coverage=coverage,
-            status="unknown",
-            reason=(
-                "observer_coverage_incomplete"
-                if coverage is not None and not coverage.valid
-                else "no_live_observation_evidence"
-                if plan is not None
-                else "no_observation_evidence"
-            ),
+            status=status if plan is not None else "unknown",
+            reason=reason if plan is not None else "no_observation_evidence",
         )
         _emit_result(
             ctx,
@@ -408,36 +539,14 @@ def doctor(
             observation_plan,
             adapter_bindings,
         )
-        return 0
+        return 0 if status == "healthy" or declaration_only and coverage is not None and coverage.valid else 1
 
     if target_ref is None:
         raise click.UsageError("a target reference is required")
     if observation_plan is None:
-        if declaration_only or target_type == "profile":
-            raise _configuration_required(ctx, "observation_plan")
-        target, declared, _ = _target(ctx, target_type, target_ref, None)
-        result = DoctorResult(
-            target=target,
-            declared=declared,
-            evidence=[],
-            status="unknown",
-            reason="no_observation_evidence",
-        )
-        _emit_result(
-            ctx,
-            result,
-            ["doctor", target_type],
-            [
-                action(
-                    "help",
-                    [*_root_source_argv(ctx), "help", "doctor"],
-                    "Show observation input options",
-                )
-            ],
-            observation_plan,
-            adapter_bindings,
-        )
-        return 0
+        raise _configuration_required(ctx, "observation_plan")
+    if adapter_bindings is None:
+        raise _configuration_required(ctx, "adapter_bindings")
 
     plan = _load_mapping(observation_plan, "observation_plan")
     bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
@@ -450,15 +559,18 @@ def doctor(
         adapter_bindings,
     )
     coverage, evidence = _coverage(plan, bindings, target_type, target_id)
-    reason = (
-        "observer_coverage_incomplete" if not coverage.valid else "no_live_observation_evidence"
-    )
+    if not declaration_only and gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+        raise _configuration_required(ctx, "gatus_url")
+    if not declaration_only:
+        evidence = _gatus_evidence(evidence, bindings, gatus_url, os.environ.get(gatus_token_env))
+    status, reason = _result_status(coverage, evidence, gatus_url)
     result = DoctorResult(
         target=target,
         declared=declared,
         evidence=_display_evidence(ctx, evidence),
+        evidence_summary=_evidence_summary(evidence, gatus_url),
         coverage=coverage,
-        status="unknown",
+        status=status,
         reason=reason,
     )
     actions = [
@@ -466,6 +578,8 @@ def doctor(
             "verbose",
             [
                 *_verbose_doctor_prefix(ctx, observation_plan, adapter_bindings),
+                *(["--gatus-url", gatus_url] if gatus_url else []),
+                *(["--gatus-token-env", gatus_token_env] if gatus_url else []),
                 target_type,
                 target_id,
                 *(["--validate"] if declaration_only else []),
@@ -473,6 +587,14 @@ def doctor(
             "Show complete declared observer evidence",
         ),
     ]
+    if gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+        actions.append(
+            action(
+                "configure-gatus",
+                [*_root_source_argv(ctx), "help", "doctor"],
+                "Set INFRALINK_GATUS_URL or pass --gatus-url",
+            )
+        )
     _emit_result(
         ctx,
         result,
@@ -480,5 +602,7 @@ def doctor(
         actions,
         observation_plan,
         adapter_bindings,
+        gatus_url,
+        gatus_token_env,
     )
-    return 0
+    return 0 if status == "healthy" or declaration_only and coverage.valid else 1

@@ -2,14 +2,8 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
       "properties": {
-        "argv": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Argv",
-          "type": "array"
-        },
         "bindings": {
           "additionalProperties": {
             "$ref": "#/$defs/Binding"
@@ -41,7 +35,6 @@
       },
       "required": [
         "rel",
-        "argv",
         "command",
         "description",
         "safe"
@@ -155,13 +148,6 @@
     "HelpNavigationAction": {
       "additionalProperties": false,
       "properties": {
-        "argv": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Argv",
-          "type": "array"
-        },
         "command": {
           "title": "Command",
           "type": "string"
@@ -174,7 +160,6 @@
         }
       },
       "required": [
-        "argv",
         "command"
       ],
       "title": "HelpNavigationAction",

@@ -1,4 +1,5 @@
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -59,12 +60,7 @@ def test_topology_commands_require_explicit_or_environment_sources(
     missing_payload = yaml.safe_load(missing.output)
     assert missing_payload["error"]["code"] == "configuration_required"
     assert missing_payload["error"]["details"] == {"source": "registry"}
-    assert missing_payload["next_actions"][0]["argv"] == [
-        "infralink",
-        "help",
-        "host",
-        "list",
-    ]
+    assert missing_payload["next_actions"][0]["command"] == "infralink help host list"
 
 
 def test_environment_sources_are_used_and_flags_override_them(monkeypatch, tmp_path: Path) -> None:
@@ -111,7 +107,7 @@ def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None
         "message": "Edges could not be loaded",
         "details": {"source": "edges", "path": str(missing_edges)},
     }
-    assert payload["next_actions"][0]["argv"] == ["infralink", "help", "validate"]
+    assert payload["next_actions"][0]["command"] == "infralink help validate"
 
     json_result = CliRunner().invoke(
         cli,
@@ -126,13 +122,7 @@ def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None
             "list",
         ],
     )
-    assert json.loads(json_result.output)["next_actions"][0]["argv"] == [
-        "infralink",
-        "--output",
-        "json",
-        "help",
-        "validate",
-    ]
+    assert json.loads(json_result.output)["next_actions"][0]["command"] == "infralink --output json help validate"
 
 
 def test_bare_group_usage_preserves_explicit_json_output() -> None:
@@ -140,10 +130,7 @@ def test_bare_group_usage_preserves_explicit_json_output() -> None:
 
     payload = json.loads(result.output)
     assert result.exit_code == 2
-    assert all(
-        action["argv"][:3] == ["infralink", "--output", "json"]
-        for action in payload["next_actions"]
-    )
+    assert all(action["command"].startswith("infralink ") for action in payload["next_actions"])
 
 
 def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> None:
@@ -163,10 +150,7 @@ def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> Non
     payload = json.loads(result.output)
     show = next(action for action in payload["next_actions"] if action["rel"] == "show")
     host_id = payload["result"]["items"][0]
-    replay = CliRunner().invoke(
-        cli,
-        [host_id if value == "{id}" else value for value in show["argv"][1:]],
-    )
+    replay = CliRunner().invoke(cli, [host_id if value == "{id}" else value for value in shlex.split(show["command"])[1:]])
 
     assert replay.exit_code == 0
     assert replay.output.startswith("{")
@@ -197,15 +181,12 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
 
     bare_payload = yaml.safe_load(bare.output)
     assert bare.exit_code == 2
-    assert {action["argv"][-1] for action in bare_payload["next_actions"]} == {
+    assert {shlex.split(action["command"])[-1] for action in bare_payload["next_actions"]} == {
         "create",
         "list",
         "show",
     }
-    assert all(
-        action["argv"][:3] == ["infralink", "help", "host"]
-        for action in bare_payload["next_actions"]
-    )
+    assert all(action["command"].startswith("infralink help host") for action in bare_payload["next_actions"])
 
 
 def test_root_help_is_a_compact_generated_command_index() -> None:
@@ -223,7 +204,6 @@ def test_root_help_is_a_compact_generated_command_index() -> None:
         child["action"]
         == {
             "rel": "help",
-            "argv": ["infralink", "help", child["name"]],
             "command": f"infralink help {child['name']}",
         }
         and "\n" not in child["summary"]
@@ -257,9 +237,9 @@ def test_all_list_commands_have_uniform_executable_prefixed_actions(monkeypatch)
         assert "action: {" not in response.output
         payload = yaml.safe_load(response.output)
         actions = payload["next_actions"]
-        assert all(item["argv"][0] == "infralink" for item in actions)
+        assert all(item["command"].startswith("infralink ") for item in actions)
         show = next(item for item in actions if item["rel"] == "show")
-        assert show["argv"] == ["infralink", resource, "show", "{id}"]
+        assert "argv" not in show
         assert show["command"] == f"infralink {resource} show '{{id}}'"
         assert "continue" not in {item["rel"] for item in actions}
 
@@ -296,7 +276,6 @@ def test_parent_help_includes_a_live_registered_child_without_help_metadata(
         "summary": "Registered at runtime.",
         "action": {
             "rel": "help",
-            "argv": ["infralink", "help", "live-child"],
             "command": "infralink help live-child",
         },
     }

@@ -367,6 +367,16 @@ def _context_for(
         "verbose": bool(root_values.get("verbose", False)),
     }
     resolved.update(_command_resolved_overrides(redacted_argv, parsed_path))
+    if parsed_path and parsed_path[0] == "doctor":
+        gatus_url = os.environ.get("INFRALINK_GATUS_URL")
+        for index, item in enumerate(redacted_argv):
+            if item.startswith("--gatus-url="):
+                gatus_url = item.split("=", 1)[1]
+            elif item == "--gatus-url" and index + 1 < len(redacted_argv):
+                gatus_url = redacted_argv[index + 1]
+        resolved["gatus_configured"] = bool(gatus_url)
+        if gatus_url:
+            resolved["gatus_url"] = gatus_url
     return command_context(
         ["infralink", *redacted_argv],
         path=path if path is not None else parsed_path,

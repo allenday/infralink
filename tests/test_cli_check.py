@@ -1,4 +1,5 @@
 import json
+import shlex
 from copy import deepcopy
 from pathlib import Path
 from uuid import UUID
@@ -178,11 +179,11 @@ def test_failed_check_advertises_edge_inspection_and_resolution_repairs(
 
     result = _invoke("--edge", edge_id)
     payload = json.loads(result.output)
-    actions = {item["rel"]: item["argv"] for item in payload["next_actions"]}
+    actions = {item["rel"]: item["command"] for item in payload["next_actions"]}
 
     assert result.exit_code == 1
-    assert actions["show"][-3:] == ["edge", "show", edge_id]
-    assert actions["resolve"][-2:] == ["resolve", edge_id]
+    assert actions["show"].endswith(f"edge show {edge_id}")
+    assert actions["resolve"].endswith(f"resolve {edge_id}")
 
 
 def test_failed_check_repair_actions_survive_a_healthy_first_page(
@@ -203,12 +204,12 @@ def test_failed_check_repair_actions_survive_a_healthy_first_page(
 
     result = _invoke("--limit", "1")
     payload = json.loads(result.output)
-    actions = {item["rel"]: item["argv"] for item in payload["next_actions"]}
+    actions = {item["rel"]: item["command"] for item in payload["next_actions"]}
 
     assert result.exit_code == 1
     assert payload["result"]["checks"]["items"][0]["healthy"] is True
-    assert actions["show"][-3:] == ["edge", "show", failed_id]
-    assert actions["resolve"][-2:] == ["resolve", failed_id]
+    assert actions["show"].endswith(f"edge show {failed_id}")
+    assert actions["resolve"].endswith(f"resolve {failed_id}")
 
 
 def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
@@ -245,30 +246,13 @@ def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     monkeypatch.setenv("INFRALINK_REGISTRY", str(EXAMPLES / "registry.yml"))
     monkeypatch.setenv("INFRALINK_EDGES", str(edges_path))
 
-    assert action["argv"] == [
-        "infralink",
-        "--output",
-        "json",
-        "check",
-        "--edge",
-        "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
-        "--edge",
-        "7cfa416b-927f-4ae1-b59e-1f2df1d7220b",
-        "--type",
-        "database",
-        "--criticality",
-        "medium",
-        "--timeout",
-        "9",
-        "--collection",
-        "checks",
-        "--cursor",
-        "{cursor}",
-        "--limit",
-        "1",
-    ]
+    assert action["command"].endswith(
+        "check --edge 058e29ff-57b9-47c8-b6fa-0914ac03e25c "
+        "--edge 7cfa416b-927f-4ae1-b59e-1f2df1d7220b --type database "
+        "--criticality medium --timeout 9 --collection checks --cursor '{cursor}' --limit 1"
+    )
     cursor = first["result"]["checks"]["page"]["next_cursor"]
-    replay = [cursor if item == "{cursor}" else item for item in action["argv"]]
+    replay = [cursor if item == "{cursor}" else item for item in shlex.split(action["command"])]
     second_result = CliRunner().invoke(cli, ["--output", "json", *replay[1:]])
     second = json.loads(second_result.output)
     assert second_result.exit_code == 0
@@ -286,7 +270,7 @@ def test_check_critical_only_is_preserved_in_continuation(
     first = json.loads(_invoke("--critical-only", "--limit", "1").output)
     action = next(item for item in first["next_actions"] if item["rel"] == "continue")
 
-    assert "--critical-only" in action["argv"]
+    assert "--critical-only" in shlex.split(action["command"])
     assert first["result"]["summary"] == {"total": 2, "healthy": 2, "unhealthy": 0}
 
 

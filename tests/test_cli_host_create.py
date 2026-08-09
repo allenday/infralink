@@ -139,7 +139,6 @@ def test_host_create_is_discoverable_from_generated_host_help() -> None:
     children = {item["name"]: item for item in payload["result"]["children"]}
     assert children["create"]["action"] == {
         "rel": "help",
-        "argv": ["infralink", "help", "host", "create"],
         "command": "infralink help host create",
     }
 

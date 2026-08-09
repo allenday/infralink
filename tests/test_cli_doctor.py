@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
+import pytest
 import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
@@ -74,18 +76,17 @@ def _invoke(*args: str):
     return CliRunner().invoke(cli, ["--output", "json", *_sources(), "doctor", *args])
 
 
-def test_doctor_is_discoverable_and_global_doctor_is_declaration_only() -> None:
+def test_global_doctor_requires_declared_observation_inputs() -> None:
     help_result = CliRunner().invoke(cli, ["help"])
     help_payload = yaml.safe_load(help_result.output)
     assert "doctor" in {child["name"] for child in help_payload["result"]["children"]}
 
     result = _invoke()
     payload = json.loads(result.output)
-    assert result.exit_code == 0
-    assert payload["result"]["target"]["type"] == "global"
-    assert payload["result"]["status"] == "unknown"
-    assert payload["result"]["reason"] == "no_observation_evidence"
-    assert payload["result"]["evidence"] == []
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "configuration_required"
+    assert payload["error"]["details"] == {"source": "observation_plan"}
+    assert payload["command"]["resolved"]["gatus_configured"] is False
 
 
 def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network_calls(
@@ -123,13 +124,25 @@ def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network
     }
     assert payload["result"]["evidence"] == []
     assert payload["result"]["status"] == "unknown"
-    assert payload["result"]["reason"] == "no_live_observation_evidence"
+    assert payload["result"]["reason"] == "gatus_not_configured"
+    assert payload["result"]["evidence_summary"] == [{
+        "adapter": "gatus",
+        "configured": False,
+        "healthy": 0,
+        "unhealthy": 0,
+        "unavailable": 0,
+        "unknown": 1,
+        "live_observation_count": 0,
+        "latest_observed_at": None,
+    }]
+    configure = next(item for item in payload["next_actions"] if item["rel"] == "configure-gatus")
+    assert configure["description"] == "Set INFRALINK_GATUS_URL or pass --gatus-url"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/doctor.json").read_text())
     Draft202012Validator(schema).validate(payload)
 
 
-def test_normal_doctor_never_claims_health_without_a_declared_live_observer(
-    tmp_path: Path,
+def test_normal_doctor_requires_a_configured_gatus_observer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plan, bindings = _observation_inputs(tmp_path)
 
@@ -143,16 +156,10 @@ def test_normal_doctor_never_claims_health_without_a_declared_live_observer(
     )
     payload = json.loads(result.output)
 
-    assert result.exit_code == 0
-    assert payload["result"]["status"] == "unknown"
-    assert payload["result"]["reason"] == "no_live_observation_evidence"
-    assert payload["result"]["reason"] == "no_live_observation_evidence"
-    assert payload["result"]["evidence"] == []
-    prefix = ["infralink", "--verbose", "--output", "json", *_sources()]
-    assert all(action["argv"][: len(prefix)] == prefix for action in payload["next_actions"])
-    verbose = next(action for action in payload["next_actions"] if action["rel"] == "verbose")
-    assert "--verbose" in verbose["argv"]
-    assert CliRunner().invoke(cli, verbose["argv"][1:]).exit_code == 0
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "configuration_required"
+    assert payload["error"]["details"] == {"source": "gatus_url"}
+    assert payload["command"]["resolved"]["gatus_configured"] is False
 
 
 def test_verbose_doctor_includes_all_declared_evidence(tmp_path: Path) -> None:
@@ -175,17 +182,8 @@ def test_verbose_doctor_includes_all_declared_evidence(tmp_path: Path) -> None:
     )
     payload = json.loads(result.output)
 
-    assert result.exit_code == 0
-    assert payload["result"]["evidence"] == [
-        {
-            "id": OBSERVATION_ID,
-            "adapter": "gatus",
-            "signal_refs": [f"dependency/{OBSERVATION_ID}/health/reachable"],
-            "status": "unknown",
-            "reason": "no_live_observation_evidence",
-        }
-    ]
-    assert payload["meta"]["truncated"] is False
+    assert result.exit_code == 2
+    assert payload["error"]["details"] == {"source": "gatus_url"}
 
 
 def test_doctor_profile_resolves_declared_observation_profile_not_service_or_role_name(
@@ -272,15 +270,8 @@ def test_global_doctor_uses_supplied_observation_inputs(tmp_path: Path) -> None:
     result = _invoke("--observation-plan", str(plan), "--adapter-bindings", str(bindings))
     payload = json.loads(result.output)
 
-    assert result.exit_code == 0
-    assert payload["result"]["coverage"] == {
-        "required": 1,
-        "bound": 1,
-        "unbound": 0,
-        "unsupported": 0,
-        "valid": True,
-    }
-    assert payload["result"]["evidence"] == []
+    assert result.exit_code == 2
+    assert payload["error"]["details"] == {"source": "gatus_url"}
 
 
 def test_declared_dependency_edge_never_advertises_an_invalid_topology_show_action(
@@ -297,22 +288,87 @@ def test_declared_dependency_edge_never_advertises_an_invalid_topology_show_acti
     )
     payload = json.loads(result.output)
 
-    assert result.exit_code == 0
-    assert payload["result"]["target"]["id"] == OBSERVATION_ID
-    assert {action["rel"] for action in payload["next_actions"]} == {"verbose"}
+    assert result.exit_code == 2
+    assert payload["error"]["details"] == {"source": "gatus_url"}
 
 
-def test_doctor_unknown_host_returns_a_bounded_canonical_discovery_action() -> None:
+def test_doctor_uses_gatus_statuses_only_outside_declaration_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: calls.append((url, token))
+        or [{"name": OBSERVATION_ID, "results": [{"success": True, "timestamp": "2026-08-09T00:00:00Z"}]}],
+    )
+
+    live = _invoke(
+        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
+        "--gatus-url", "http://gatus.test", "edge", OBSERVATION_ID,
+    )
+    live_payload = json.loads(live.output)
+    assert live.exit_code == 0
+    assert calls == [("http://gatus.test", None)]
+    assert live_payload["result"]["status"] == "healthy"
+    assert live_payload["result"]["evidence"] == []
+    assert live_payload["result"]["evidence_summary"] == [{
+        "adapter": "gatus",
+        "configured": True,
+        "healthy": 1,
+        "unhealthy": 0,
+        "unavailable": 0,
+        "unknown": 0,
+        "live_observation_count": 1,
+        "latest_observed_at": "2026-08-09T00:00:00Z",
+    }]
+    verbose = live_payload["next_actions"][0]["command"]
+    assert "--gatus-url http://gatus.test" in verbose
+    assert "--gatus-token-env INFRALINK_GATUS_TOKEN" in verbose
+
+    validated = _invoke(
+        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
+        "--gatus-url", "http://gatus.test", "--validate", "edge", OBSERVATION_ID,
+    )
+    assert validated.exit_code == 0
+    assert calls == [("http://gatus.test", None)]
+    assert json.loads(validated.output)["result"]["evidence_summary"] == [{
+        "adapter": "gatus",
+        "configured": True,
+        "healthy": 0,
+        "unhealthy": 0,
+        "unavailable": 0,
+        "unknown": 1,
+        "live_observation_count": 0,
+        "latest_observed_at": None,
+    }]
+
+
+def test_configured_unhealthy_required_gatus_evidence_is_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": False, "timestamp": "2026-08-09T00:00:00Z"}]}],
+    )
+    result = _invoke(
+        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
+        "--gatus-url", "http://gatus.test", "edge", OBSERVATION_ID,
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["ok"] is True
+    assert payload["result"]["status"] == "unhealthy"
+    assert payload["result"]["reason"] == "gatus_observation_unhealthy"
+
+
+def test_doctor_unknown_host_returns_a_bounded_canonical_discovery_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     result = _invoke("host", "missing-host")
     payload = json.loads(result.output)
 
-    assert result.exit_code == 3
-    assert payload["error"]["code"] == "entity_not_found"
-    next_action = payload["next_actions"][0]
-    assert next_action["rel"] == "list"
-    assert next_action["argv"] == ["infralink", "--output", "json", *_sources(), "host", "list"]
-    replay = CliRunner().invoke(cli, next_action["argv"][1:])
-    assert replay.exit_code == 0
-    assert json.loads(replay.output)["command"]["resolved"]["registry"] == str(
-        EXAMPLES / "registry.yml"
-    )
+    assert result.exit_code == 2
+    assert payload["error"]["details"] == {"source": "observation_plan"}

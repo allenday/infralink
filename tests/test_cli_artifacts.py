@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import shlex
 import os
 import stat
 from pathlib import Path
@@ -322,9 +323,11 @@ def test_docs_does_not_overwrite_nested_artifact_symlink(tmp_path: Path) -> None
 
 
 def test_artifact_continuation_action_is_executable_and_source_preserving(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry, edges = _write_topology(tmp_path)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):
         first = runner.invoke(
@@ -348,19 +351,15 @@ def test_artifact_continuation_action_is_executable_and_source_preserving(
             item for item in first_payload["next_actions"] if item["rel"] == "continue"
         )
         cursor = first_payload["result"]["artifacts"]["page"]["next_cursor"]
-        replay = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
+        replay = [cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])]
         second = runner.invoke(cli, ["--output", "json", *replay[1:]])
     second_payload = _payload(second)
 
     assert second.exit_code == 0
     assert continuation["bindings"]["cursor"]["source"] == ("result.artifacts.page.next_cursor")
     assert continuation["safe"] is False
-    assert continuation["argv"][1:5] == [
-        "--registry",
-        str(registry),
-        "--edges",
-        str(edges),
-    ]
+    assert "--registry" in continuation["command"]
+    assert "--edges" in continuation["command"]
     assert second_payload["result"]["artifacts"]["page"]["returned"] == 1
     assert (
         second_payload["result"]["artifacts"]["items"][0]["path"]

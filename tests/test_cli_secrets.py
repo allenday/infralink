@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -115,15 +116,7 @@ def test_inspect_is_offline_bounded_and_schema_valid(tmp_path: Path) -> None:
     assert body["result"]["locations"]["items"] == []
     assert body["meta"]["truncated"] is True
     escalation = next(item for item in body["next_actions"] if item["rel"] == "inspect")
-    assert escalation["argv"] == [
-        *source(registry, edges),
-        "secrets",
-        "inspect",
-        "--ref",
-        "shared",
-        "--collection",
-        "locations",
-    ]
+    assert escalation["command"].endswith("secrets inspect --ref shared --collection locations")
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/secrets-inspect.json").read_text())
     Draft202012Validator(schema).validate(body)
 
@@ -157,24 +150,12 @@ def test_inspect_ref_unions_locations_across_projects_and_pages(
     assert [item["project"] for item in first["result"]["references"]["items"]] == [PROJECT_A]
     assert first["result"]["references"]["page"]["total"] == 2
     assert first["result"]["locations"]["page"]["total"] == 2
-    continuation = next(
-        item
-        for item in first["next_actions"]
-        if item["bindings"].get("cursor", {}).get("source") == "result.locations.page.next_cursor"
-    )
-    assert continuation["argv"][:7] == [
-        "infralink",
-        "--output",
-        "json",
-        "secrets",
-        "inspect",
-        "--ref",
-        "shared",
-    ]
+    continuation = next(item for item in first["next_actions"] if item.get("bindings", {}).get("cursor", {}).get("source") == "result.locations.page.next_cursor")
+    assert "secrets inspect --ref shared" in continuation["command"]
     cursor = first["result"]["locations"]["page"]["next_cursor"]
-    replay_argv = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
+    replay_argv = [cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])]
     second = CliRunner().invoke(cli, replay_argv[1:])
-    second_body = payload(second)
+    second_body = yaml.safe_load(second.output)
     assert second_body["result"]["locations"]["page"]["returned"] == 1
     assert second_body["result"]["locations"]["page"]["next_cursor"] is None
 
@@ -190,11 +171,7 @@ def test_unknown_ref_is_source_qualified_entity_failure(tmp_path: Path) -> None:
         "entity_type": "secret_reference",
         "requested_id": "absent",
     }
-    assert body["next_actions"][0]["argv"] == [
-        *source(registry, edges),
-        "secrets",
-        "inspect",
-    ]
+    assert body["next_actions"][0]["command"].endswith("secrets inspect")
 
 
 class FakeResolver:
@@ -365,13 +342,7 @@ def test_provider_failures_are_safe_and_repair_oriented(
     assert body["error"]["code"] == code
     if isinstance(failure, ModuleNotFoundError):
         install = next(item for item in body["next_actions"] if item["rel"] == "install")
-        assert install["argv"] == [
-            "python",
-            "-m",
-            "pip",
-            "install",
-            "infralink[bws]",
-        ]
+        assert install["command"] == "python -m pip install 'infralink[bws]'"
         assert install["safe"] is False
 
 
@@ -656,11 +627,12 @@ def test_audit_schema_and_provider_paging_replay(
         )
     )
     action = next(item for item in first["next_actions"] if item["rel"] == "continue")
-    provider_index = action["argv"].index("--provider")
-    assert ["--provider", "bws"] == action["argv"][provider_index : provider_index + 2]
+    rendered = shlex.split(action["command"])
+    provider_index = rendered.index("--provider")
+    assert rendered[provider_index : provider_index + 2] == ["--provider", "bws"]
     cursor = first["result"]["references"]["page"]["next_cursor"]
-    replay = [cursor if item == "{cursor}" else item for item in action["argv"]]
-    second = payload(CliRunner().invoke(cli, replay[1:]))
+    replay = [cursor if item == "{cursor}" else item for item in rendered]
+    second = yaml.safe_load(CliRunner().invoke(cli, replay[1:]).output)
     assert second["result"]["references"]["items"][0]["ref"] == "beta"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/secrets-audit.json").read_text())
     Draft202012Validator(schema).validate(first)

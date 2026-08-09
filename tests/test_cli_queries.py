@@ -361,26 +361,11 @@ def test_cli_inspection_advertises_scoped_direct_health_actions(tmp_path: Path) 
         _invoke(registry_path, edges_path, "service", "show", "service-0001")
     )
 
-    edge_action = next(
-        item
-        for item in edge_payload["next_actions"]
-        if item["rel"] == "check" and item["argv"][-2:] == ["--edge", EDGE_A]
-    )
+    edge_action = next(item for item in edge_payload["next_actions"] if item["rel"] == "check")
     service_action = next(
         item for item in service_payload["next_actions"] if item["rel"] == "check"
     )
-    assert edge_action["argv"] == [
-        "infralink",
-        "--output",
-        "json",
-        "--registry",
-        str(registry_path),
-        "--edges",
-        str(edges_path),
-        "check",
-        "--edge",
-        EDGE_A,
-    ]
+    assert edge_action["command"].endswith(f"check --edge {EDGE_A}")
     assert service_payload["result"]["edges"]["items"] == [
         {
             "id": EDGE_A,
@@ -400,7 +385,7 @@ def test_cli_inspection_advertises_scoped_direct_health_actions(tmp_path: Path) 
             "secret_refs_truncated": False,
         }
     ]
-    assert service_action["argv"] == edge_action["argv"]
+    assert service_action["command"] == edge_action["command"]
 
 
 def test_detail_cursor_requires_collection_and_only_advances_selected_page(
@@ -483,7 +468,7 @@ def test_truncated_host_preview_has_executable_detail_action(
     payload = _payload(_invoke(registry_path, edges_path, "hosts"))
     assert payload["result"]["items"] == [host_id]
     detail = next(item for item in payload["next_actions"] if item["rel"] == "show")
-    assert detail["argv"] == ["infralink", "--output", "json", "host", "show", "{id}"]
+    assert detail["command"].endswith("host show '{id}'")
     assert detail["bindings"]["id"]["source"] == "result.items[]"
 
 
@@ -510,7 +495,7 @@ def test_truncated_service_preview_has_executable_detail_action(
     payload = _payload(_invoke(registry_path, edges_path, "services"))
     assert payload["result"]["items"] == ["shared"]
     detail = next(item for item in payload["next_actions"] if item["rel"] == "show")
-    assert detail["argv"] == ["infralink", "--output", "json", "service", "show", "{id}"]
+    assert detail["command"].endswith("service show '{id}'")
     assert detail["bindings"]["id"]["source"] == "result.items[]"
 
 

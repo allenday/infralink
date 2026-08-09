@@ -2,14 +2,8 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
       "properties": {
-        "argv": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Argv",
-          "type": "array"
-        },
         "bindings": {
           "additionalProperties": {
             "$ref": "#/$defs/Binding"
@@ -41,7 +35,6 @@
       },
       "required": [
         "rel",
-        "argv",
         "command",
         "description",
         "safe"
@@ -161,6 +154,18 @@
           "title": "Id",
           "type": "string"
         },
+        "observed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
         "reason": {
           "anyOf": [
             {
@@ -199,6 +204,67 @@
       "title": "DoctorEvidence",
       "type": "object"
     },
+    "DoctorEvidenceSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "title": "Adapter",
+          "type": "string"
+        },
+        "configured": {
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "healthy": {
+          "minimum": 0,
+          "title": "Healthy",
+          "type": "integer"
+        },
+        "latest_observed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latest Observed At"
+        },
+        "live_observation_count": {
+          "minimum": 0,
+          "title": "Live Observation Count",
+          "type": "integer"
+        },
+        "unavailable": {
+          "minimum": 0,
+          "title": "Unavailable",
+          "type": "integer"
+        },
+        "unhealthy": {
+          "minimum": 0,
+          "title": "Unhealthy",
+          "type": "integer"
+        },
+        "unknown": {
+          "minimum": 0,
+          "title": "Unknown",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "adapter",
+        "configured",
+        "healthy",
+        "unhealthy",
+        "unavailable",
+        "unknown",
+        "live_observation_count"
+      ],
+      "title": "DoctorEvidenceSummary",
+      "type": "object"
+    },
     "DoctorResult": {
       "additionalProperties": false,
       "properties": {
@@ -223,6 +289,13 @@
             "$ref": "#/$defs/DoctorEvidence"
           },
           "title": "Evidence",
+          "type": "array"
+        },
+        "evidence_summary": {
+          "items": {
+            "$ref": "#/$defs/DoctorEvidenceSummary"
+          },
+          "title": "Evidence Summary",
           "type": "array"
         },
         "reason": {
@@ -255,6 +328,7 @@
         "target",
         "declared",
         "evidence",
+        "evidence_summary",
         "status"
       ],
       "title": "DoctorResult",
