@@ -1,0 +1,400 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "argv",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "CommandContext": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw": {
+          "title": "Raw",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw",
+        "parsed",
+        "resolved"
+      ],
+      "title": "CommandContext",
+      "type": "object"
+    },
+    "DoctorCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "edge_id": {
+          "title": "Edge Id",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "status": {
+          "enum": [
+            "healthy",
+            "unhealthy",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "edge_id",
+        "status"
+      ],
+      "title": "DoctorCheck",
+      "type": "object"
+    },
+    "DoctorResult": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/DoctorCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "declared": {
+          "additionalProperties": true,
+          "title": "Declared",
+          "type": "object"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "enum": [
+            "healthy",
+            "unhealthy",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/DoctorTarget"
+        }
+      },
+      "required": [
+        "target",
+        "declared",
+        "checks",
+        "status"
+      ],
+      "title": "DoctorResult",
+      "type": "object"
+    },
+    "DoctorTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Name"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "type": {
+          "enum": [
+            "global",
+            "host",
+            "service",
+            "edge",
+            "profile"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DoctorTarget",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "Meta",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CommandContext"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DoctorResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "infralink.cli/v1",
+      "default": "infralink.cli/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "next_actions"
+  ],
+  "title": "Envelope[DoctorResult]",
+  "type": "object"
+}

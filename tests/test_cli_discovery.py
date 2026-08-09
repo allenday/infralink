@@ -447,6 +447,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         "version": {"version"},
         "analyze": {"analyze"},
         "check": {"check"},
+        "doctor": {"doctor"},
         "diagram": {"diagram"},
         "docs": {"docs"},
         "resolve": {"resolve"},
