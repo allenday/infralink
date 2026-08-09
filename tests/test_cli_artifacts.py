@@ -78,8 +78,7 @@ def _invoke(root: Path, *args: str):
 
 def _payload(result) -> dict:
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
-    return json.loads(result.output)
+    return yaml.safe_load(result.output)
 
 
 @pytest.mark.parametrize("command", ["analyze", "diagram", "docs"])
@@ -544,15 +543,15 @@ def test_descriptor_relative_writer_contains_parent_symlink_swap(
     assert Path("detached/nested/result.txt").read_bytes() == b"bounded"
 
 
-def test_analyze_context_resolves_default_root_and_command_override_registry(
+def test_analyze_context_requires_explicit_registry_and_allows_command_override(
     tmp_path: Path,
 ) -> None:
-    from infralink.cli.main import DEFAULT_REGISTRY, _context_for
+    from infralink.cli.main import _context_for
 
     root_registry, edges = _write_topology(tmp_path)
     override = tmp_path / "override.yml"
     override.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
-    assert _context_for(path=["analyze"]).resolved["registry"] == DEFAULT_REGISTRY
+    assert _context_for(path=["analyze"]).resolved["registry"] is None
 
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):

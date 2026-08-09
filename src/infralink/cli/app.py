@@ -24,44 +24,15 @@ def app() -> None:
 
 
 @app.command(name="list")
-@_page_options
 @pass_context
-def list_apps(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def list_apps(ctx: Context) -> None:
     """List application groupings."""
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=True)
-    offset = _page_offset(
-        command="app list",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = query_list_apps(
-        ctx.registry,
-        ctx.edges,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="app list",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = query_list_apps(ctx.registry, ctx.edges)
     _emit_query_result(
         ctx=ctx,
         path=["app", "list"],
         command_argv=["app", "list"],
         result=result,
-        limit=limit,
     )
 
 

@@ -78,6 +78,8 @@ def payload(result) -> dict:
 def source(registry: Path, edges: Path) -> list[str]:
     return [
         "infralink",
+        "--output",
+        "json",
         "--registry",
         str(registry),
         "--edges",
@@ -126,12 +128,16 @@ def test_inspect_is_offline_bounded_and_schema_valid(tmp_path: Path) -> None:
     Draft202012Validator(schema).validate(body)
 
 
-def test_inspect_ref_unions_locations_across_projects_and_pages(tmp_path: Path) -> None:
+def test_inspect_ref_unions_locations_across_projects_and_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     declarations = [
         (HOST_A, "shared", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
         (HOST_B, "shared", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
     ]
     registry, edges = write_topology(tmp_path, declarations)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges))
 
     first = payload(
         invoke(
@@ -156,8 +162,10 @@ def test_inspect_ref_unions_locations_across_projects_and_pages(tmp_path: Path) 
         for item in first["next_actions"]
         if item["bindings"].get("cursor", {}).get("source") == "result.locations.page.next_cursor"
     )
-    assert continuation["argv"][:9] == [
-        *source(registry, edges),
+    assert continuation["argv"][:7] == [
+        "infralink",
+        "--output",
+        "json",
         "secrets",
         "inspect",
         "--ref",
@@ -165,7 +173,7 @@ def test_inspect_ref_unions_locations_across_projects_and_pages(tmp_path: Path) 
     ]
     cursor = first["result"]["locations"]["page"]["next_cursor"]
     replay_argv = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
-    second = CliRunner().invoke(cli, ["--output", "json", *replay_argv[1:]])
+    second = CliRunner().invoke(cli, replay_argv[1:])
     second_body = payload(second)
     assert second_body["result"]["locations"]["page"]["returned"] == 1
     assert second_body["result"]["locations"]["page"]["next_cursor"] is None
@@ -611,7 +619,7 @@ raise SystemExit(main([]))
         env=source_checkout_env(),
     )
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(completed.stdout)["ok"] is True
+    assert yaml.safe_load(completed.stdout)["ok"] is True
 
 
 def test_audit_schema_and_provider_paging_replay(
@@ -633,6 +641,8 @@ def test_audit_schema_and_provider_paging_replay(
         )
 
     monkeypatch.setattr(secret_commands, "_build_bws_resolver", factory)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges))
     first = payload(
         invoke(
             registry,
@@ -650,7 +660,7 @@ def test_audit_schema_and_provider_paging_replay(
     assert ["--provider", "bws"] == action["argv"][provider_index : provider_index + 2]
     cursor = first["result"]["references"]["page"]["next_cursor"]
     replay = [cursor if item == "{cursor}" else item for item in action["argv"]]
-    second = payload(CliRunner().invoke(cli, ["--output", "json", *replay[1:]]))
+    second = payload(CliRunner().invoke(cli, replay[1:]))
     assert second["result"]["references"]["items"][0]["ref"] == "beta"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/secrets-audit.json").read_text())
     Draft202012Validator(schema).validate(first)

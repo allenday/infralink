@@ -152,7 +152,7 @@ def test_check_empty_filters_are_healthy_typed_result() -> None:
         "checks": {
             "items": [],
             "page": {
-                "limit": 100,
+                "limit": 20,
                 "returned": 0,
                 "total": 0,
                 "next_cursor": None,
@@ -242,12 +242,13 @@ def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     )
     action = next(item for item in first["next_actions"] if item["rel"] == "continue")
 
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(EXAMPLES / "registry.yml"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges_path))
+
     assert action["argv"] == [
         "infralink",
-        "--registry",
-        str(EXAMPLES / "registry.yml"),
-        "--edges",
-        str(edges_path),
+        "--output",
+        "json",
         "check",
         "--edge",
         "058e29ff-57b9-47c8-b6fa-0914ac03e25c",

@@ -21,17 +21,14 @@ from infralink.cli.contracts import (
     Binding,
     CommandContext,
     CommandDescriptor,
-    EdgeSummary,
     HelpNavigationAction,
     HelpResult,
     HelpSubcommand,
-    HostSummary,
     InfoResult,
     InfoSources,
     InfoSummary,
     OptionDescriptor,
     RootResult,
-    ServiceSummary,
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
@@ -52,21 +49,6 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
-
-
-class _FlowMapping(dict[str, Any]):
-    """A YAML-only compact representation for small HATEOAS navigation links."""
-
-
-class _CliYamlDumper(yaml.SafeDumper):
-    pass
-
-
-def _represent_flow_mapping(dumper: yaml.SafeDumper, value: _FlowMapping) -> yaml.nodes.MappingNode:
-    return dumper.represent_mapping("tag:yaml.org,2002:map", value, flow_style=True)
-
-
-_CliYamlDumper.add_representer(_FlowMapping, _represent_flow_mapping)
 
 
 class Context:
@@ -109,8 +91,10 @@ class Context:
         if self._edges is None:
             from infralink.core.edges import EdgeSet
 
-            if self.edges_path and self.edges_path.exists():
+            if self.edges_path is not None:
                 path = str(self.edges_path)
+                if not self.edges_path.exists():
+                    raise input_load_failed("edges", path)
                 try:
                     self._edges = EdgeSet.load(self.edges_path)
                 except Exception:
@@ -123,17 +107,7 @@ class Context:
 
                 if self.registry_path and self.registry_path.exists():
                     if self.registry_path.is_dir():
-                        # For directory-based registry, we should probably look for a unified edges file
-                        # or just rely on EdgeSet initialization from the already-loaded registry.
-                        # Actually, EdgeSet.from_registry expects a dict.
-                        # I will check if registry is already loaded.
-                        if self._registry:
-                            # This is tricky because self._registry is a Registry object, not a dict.
-                            # But Registry has an applications property, etc.
-                            # For now, if it is a directory, we just default to empty if edges.yml is missing.
-                            self._edges = EdgeSet([])
-                        else:
-                            self._edges = EdgeSet([])
+                        raise configuration_required("edges")
                     else:
                         try:
                             with self.registry_path.open() as f:
@@ -181,9 +155,6 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     },
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
-    "hosts": {"description": "List all hosts.", "usage": "infralink hosts"},
-    "services": {"description": "List all services.", "usage": "infralink services"},
-    "edges-list": {"description": "List all edges.", "usage": "infralink edges-list"},
     "host": {"description": "Inspect hosts.", "usage": "infralink host show <host-id>"},
     "edge": {"description": "Inspect edges.", "usage": "infralink edge show <edge-id>"},
     "service": {
@@ -429,7 +400,7 @@ def input_load_failed(source: str, path: str) -> CliFailure:
         next_actions=[
             action(
                 "help",
-                ["infralink", "help", "validate"],
+                [*_action_argv_prefix(), "help", "validate"],
                 "Show validation input options",
             )
         ],
@@ -446,7 +417,11 @@ def configuration_required(source: str) -> CliFailure:
         next_actions=[
             action(
                 "help",
-                ["infralink", "help", "hosts" if source == "registry" else "edges-list"],
+                [
+                    *_action_argv_prefix(),
+                    "help",
+                    *(["host", "list"] if source == "registry" else ["edge", "list"]),
+                ],
                 "Show topology input options",
             )
         ],
@@ -455,6 +430,13 @@ def configuration_required(source: str) -> CliFailure:
 
 def _source_value(path: Path | None) -> str | None:
     return str(path) if path is not None else None
+
+
+def _action_argv_prefix() -> list[str]:
+    """Return an executable prefix that preserves an explicit output selection."""
+    if _output_from_argv(_INVOCATION_ARGS.get() or []) == "json":
+        return ["infralink", "--output", "json"]
+    return ["infralink"]
 
 
 def _protected_args(ctx: click.Context) -> list[str]:
@@ -606,20 +588,7 @@ def _serialize(payload: dict[str, Any]) -> str:
         output = "json" if incoming is None else _output_from_argv(incoming)
     if output == "json":
         return json.dumps(payload, separators=(",", ":"))
-    return yaml.dump(_compact_help_actions(payload), Dumper=_CliYamlDumper, sort_keys=False).rstrip(
-        "\n"
-    )
-
-
-def _compact_help_actions(value: Any) -> Any:
-    if isinstance(value, dict):
-        converted = {key: _compact_help_actions(item) for key, item in value.items()}
-        if set(converted) == {"rel", "command"} and converted["rel"] == "help":
-            return _FlowMapping(converted)
-        return converted
-    if isinstance(value, list):
-        return [_compact_help_actions(item) for item in value]
-    return value
+    return yaml.safe_dump(payload, sort_keys=False).rstrip("\n")
 
 
 def _output_from_argv(argv: list[str]) -> str:
@@ -726,7 +695,8 @@ def _help_children(path: tuple[str, ...], command: click.Command) -> list[HelpSu
         child = command.get_command(context, name)
         if child is None:
             continue
-        action_value = HelpNavigationAction(command=" ".join([*_help_argv_prefix(), *path, name]))
+        argv = [*_help_argv_prefix(), *path, name]
+        action_value = HelpNavigationAction(command=" ".join(argv), argv=argv)
         children.append(
             HelpSubcommand(
                 name=name,
@@ -746,11 +716,12 @@ def _command_summary(command: click.Command) -> str:
 
 def _help_argv_prefix() -> list[str]:
     context = click.get_current_context(silent=True)
-    if context is None:
-        return ["infralink", "help"]
-    root = context.find_root()
-    if isinstance(root.obj, Context) and root.obj.output_explicit:
-        return ["infralink", "--output", root.obj.output, "help"]
+    if context is not None:
+        root = context.find_root()
+        if isinstance(root.obj, Context) and root.obj.output_explicit:
+            return ["infralink", "--output", root.obj.output, "help"]
+    if _output_from_argv(_INVOCATION_ARGS.get() or []) == "json":
+        return ["infralink", "--output", "json", "help"]
     return ["infralink", "help"]
 
 
@@ -778,6 +749,41 @@ def _emit_help(path: tuple[str, ...], argv: list[str] | None = None) -> None:
             [],
         )
     )
+
+
+def _usage_actions(path: list[str], artifact_command: str | None) -> list:
+    if artifact_command is not None:
+        return [
+            action(
+                "help",
+                [*_help_argv_prefix(), artifact_command],
+                "Show command usage",
+            )
+        ]
+    canonical_alias = {
+        ("hosts",): ("host", "list"),
+        ("services",): ("service", "list"),
+        ("edges-list",): ("edge", "list"),
+    }.get(tuple(path))
+    if canonical_alias is not None:
+        return [
+            action(
+                "help",
+                [*_help_argv_prefix(), *canonical_alias],
+                "Show canonical command help",
+            )
+        ]
+    command = _command_for_path(tuple(path))
+    if isinstance(command, click.Group):
+        return [
+            action(
+                f"help-{child.name}",
+                child.action.argv,
+                f"Show {child.name} command help",
+            )
+            for child in _help_children(tuple(path), command)
+        ]
+    return [action("help", _help_argv_prefix(), "Show command usage")]
 
 
 def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
@@ -923,17 +929,7 @@ class JsonGroup(click.Group):
                         if artifact_command is not None
                         else "Run infralink help"
                     ),
-                    next_actions=[
-                        action(
-                            "help",
-                            [
-                                "infralink",
-                                "help",
-                                *([artifact_command] if artifact_command is not None else []),
-                            ],
-                            "Show command usage",
-                        )
-                    ],
+                    next_actions=_usage_actions(path, artifact_command),
                 )
                 if not continue_after_usage and not _ENVELOPE_EMITTED.get():
                     _emit(error_envelope(_context_for(incoming), usage_failure))
@@ -1079,7 +1075,7 @@ def cli(
         command_tree,
         [
             action("help", _help_argv_prefix(), "Show available commands"),
-            action("list", [*_root_source_argv(ctx), "services"], "List declared services"),
+            action("list", [*_root_source_argv(ctx), "service", "list"], "List declared services"),
             action("version", [*_root_action_prefix(ctx), "version"], "Show CLI version"),
         ],
     )
@@ -1192,55 +1188,58 @@ def _root_action_prefix(ctx: Context) -> list[str]:
     return argv
 
 
+def _compatibility_action(ctx: Context, path: list[str], canonical: list[str]) -> list:
+    if path == canonical:
+        return []
+    return [
+        action(
+            "canonical",
+            [*_root_action_prefix(ctx), *canonical],
+            f"Use canonical {' '.join(canonical)} command",
+        )
+    ]
+
+
 def _summary_detail_actions(
     ctx: Context,
     result: Any,
     path: list[str],
     command_argv: list[str],
 ) -> list[Any]:
-    summaries: list[Any]
-    scoped_app_id: str | None = None
-    if path in (["hosts"], ["services"], ["edges-list"]):
-        summaries = result.items
-    elif path == ["app", "show"]:
-        summaries = result.services.items
-        scoped_app_id = command_argv[2]
+    if path in (
+        ["hosts"],
+        ["services"],
+        ["edges-list"],
+        ["host", "list"],
+        ["service", "list"],
+        ["edge", "list"],
+    ):
+        entity = {
+            "hosts": "host",
+            "services": "service",
+            "edges-list": "edge",
+            "host list": "host",
+            "service list": "service",
+            "edge list": "edge",
+        }[" ".join(path)]
+    elif path == ["app", "list"]:
+        entity = "app"
     else:
         return []
-
-    actions = []
-    seen: set[tuple[str, str]] = set()
-    for summary in summaries:
-        if isinstance(summary, HostSummary):
-            truncated = summary.services_truncated or summary.projects_truncated
-            entity = "host"
-        elif isinstance(summary, ServiceSummary):
-            truncated = (
-                summary.hosts_truncated or summary.ports_truncated or summary.protocols_truncated
-            )
-            entity = "service"
-        elif isinstance(summary, EdgeSummary):
-            truncated = summary.secret_refs_truncated
-            entity = "edge"
-        else:
-            continue
-        identity = (entity, summary.id)
-        if not truncated or identity in seen:
-            continue
-        if scoped_app_id is not None and entity != "service":
-            continue
-        seen.add(identity)
-        command = [*_root_source_argv(ctx), entity, "show", summary.id]
-        if scoped_app_id is not None:
-            command.extend(["--app", scoped_app_id])
-        actions.append(
-            action(
-                "show",
-                command,
-                f"Show complete {entity} details",
-            )
+    return [
+        action(
+            "show",
+            [*_root_action_prefix(ctx), entity, "show", "{id}"],
+            f"Show one {entity}",
+            bindings={
+                "id": Binding(
+                    type="string",
+                    required=True,
+                    source="result.items[]",
+                )
+            },
         )
-    return actions
+    ]
 
 
 def _emit_query_result(
@@ -1249,7 +1248,7 @@ def _emit_query_result(
     path: list[str],
     command_argv: list[str],
     result: Any,
-    limit: int,
+    limit: int | None = None,
     extra_actions: list[Any] | None = None,
     resolved: dict[str, Any] | None = None,
     content_truncated: bool = False,
@@ -1275,18 +1274,24 @@ def _emit_query_result(
             page = getattr(result, name, None)
             if page is not None:
                 pages.append((name, page.page, f"result.{name}.page.next_cursor"))
-    actions = [action("help", ["infralink", "help", *path], f"Show {' '.join(path)} help")]
+    invocation_argv = [*_root_action_prefix(ctx), *command_argv]
+    actions = [
+        action(
+            "help",
+            [*_help_argv_prefix(), *path],
+            f"Show {' '.join(path)} help",
+        )
+    ]
     actions.extend(_summary_detail_actions(ctx, result, path, command_argv))
     actions.extend(extra_actions or [])
     for collection, page, source in pages:
-        if page.next_cursor is None:
+        if page.next_cursor is None or limit is None:
             continue
         actions.append(
             action(
                 "continue",
                 [
-                    *_root_source_argv(ctx),
-                    *command_argv,
+                    *invocation_argv,
                     "--collection",
                     collection,
                     "--cursor",
@@ -1324,52 +1329,28 @@ def _page_options(command: Any) -> Any:
     return click.option(
         "--limit",
         type=click.IntRange(1, 1000),
-        default=100,
+        default=20,
         show_default=True,
     )(command)
 
 
 @click.command()
-@_page_options
 @pass_context
-def services(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def services(ctx: Context) -> None:
     """List services declared by registry hosts."""
+    _emit_service_list(ctx, path=["services"])
+
+
+def _emit_service_list(ctx: Context, *, path: list[str]) -> None:
     from infralink.cli.queries import list_services
 
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=True)
-    offset = _page_offset(
-        command="services",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = list_services(
-        ctx.registry,
-        ctx.edges,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="services",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = list_services(ctx.registry, ctx.edges)
     _emit_query_result(
         ctx=ctx,
-        path=["services"],
-        command_argv=["services"],
+        path=path,
+        command_argv=path,
         result=result,
-        limit=limit,
+        extra_actions=_compatibility_action(ctx, path, ["service", "list"]),
     )
 
 
@@ -1381,7 +1362,7 @@ def info(ctx: Context) -> None:
 
     registry = ctx.registry
     edges = ctx.edges
-    service_count = list_services(registry, edges, limit=1).page.total
+    service_count = len(list_services(registry, edges).items)
     result = InfoResult(
         sources=InfoSources(
             registry=str(ctx.registry_path),
@@ -1397,102 +1378,67 @@ def info(ctx: Context) -> None:
         _context_for(path=["info"]),
         result,
         [
-            action("list", [*_root_source_argv(ctx), "hosts"], "List all hosts"),
-            action("list", [*_root_source_argv(ctx), "edges-list"], "List all edges"),
+            action("list", [*_root_source_argv(ctx), "host", "list"], "List all hosts"),
+            action("list", [*_root_source_argv(ctx), "edge", "list"], "List all edges"),
         ],
     )
     _emit(payload)
 
 
 @click.command()
-@_page_options
 @pass_context
-def hosts(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def hosts(ctx: Context) -> None:
     """List all hosts in registry."""
+    _emit_host_list(ctx, path=["hosts"])
+
+
+def _emit_host_list(
+    ctx: Context,
+    *,
+    path: list[str],
+) -> None:
     from infralink.cli.queries import list_hosts
 
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=False)
-    offset = _page_offset(
-        command="hosts",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = list_hosts(
-        ctx.registry,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="hosts",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = list_hosts(ctx.registry)
     _emit_query_result(
         ctx=ctx,
-        path=["hosts"],
-        command_argv=["hosts"],
+        path=path,
+        command_argv=path,
         result=result,
-        limit=limit,
+        extra_actions=_compatibility_action(ctx, path, ["host", "list"]),
     )
 
 
 @click.command(name="edges-list")
-@_page_options
 @pass_context
-def edges_list(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def edges_list(ctx: Context) -> None:
     """List all declared edges."""
+    _emit_edge_list(ctx, path=["edges-list"])
+
+
+def _emit_edge_list(ctx: Context, *, path: list[str]) -> None:
     from infralink.cli.queries import list_edges
 
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=False, include_edges=True)
-    offset = _page_offset(
-        command="edges-list",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = list_edges(
-        ctx.edges,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="edges-list",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = list_edges(ctx.edges)
     _emit_query_result(
         ctx=ctx,
-        path=["edges-list"],
-        command_argv=["edges-list"],
+        path=path,
+        command_argv=path,
         result=result,
-        limit=limit,
+        extra_actions=_compatibility_action(ctx, path, ["edge", "list"]),
     )
 
 
 @click.group()
 def host() -> None:
     """Inspect hosts."""
+
+
+@host.command(name="list")
+@pass_context
+def host_list(ctx: Context) -> None:
+    """List all hosts in registry."""
+    _emit_host_list(ctx, path=["host", "list"])
 
 
 @host.command(name="show")
@@ -1550,6 +1496,13 @@ def host_show(
 @click.group()
 def service() -> None:
     """Inspect services."""
+
+
+@service.command(name="list")
+@pass_context
+def service_list(ctx: Context) -> None:
+    """List services declared by registry hosts."""
+    _emit_service_list(ctx, path=["service", "list"])
 
 
 @service.command(name="show")
@@ -1635,6 +1588,13 @@ def service_show(
 @click.group()
 def edge() -> None:
     """Inspect edges."""
+
+
+@edge.command(name="list")
+@pass_context
+def edge_list(ctx: Context) -> None:
+    """List all declared edges."""
+    _emit_edge_list(ctx, path=["edge", "list"])
 
 
 @edge.command(name="show")

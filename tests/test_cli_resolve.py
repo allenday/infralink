@@ -63,6 +63,7 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
         "path": ["resolve"],
         "args": {"edge_id": EDGE_ID},
         "flags": [
+            "--output",
             "--registry",
             "--edges",
             "--user",
@@ -120,6 +121,8 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
     actions = {item["rel"]: item for item in payload["next_actions"]}
     source = [
         "infralink",
+        "--output",
+        "json",
         "--registry",
         str(EXAMPLES / "registry.yml"),
         "--edges",
@@ -181,11 +184,14 @@ def test_missing_edge_action_preserves_custom_sources_and_is_executable(
     action = payload["next_actions"][0]
     assert action["argv"] == [
         "infralink",
+        "--output",
+        "json",
         "--registry",
         str(registry_path),
         "--edges",
         str(edges_path),
-        "edges-list",
+        "edge",
+        "list",
     ]
 
     replay = invoke(*action["argv"][1:])
@@ -316,7 +322,7 @@ def test_resolve_resolution_error_is_safe_and_repairable(
     assert result.exit_code == 3
     assert payload["error"]["code"] == "input_load_failed"
     assert "provider-canary" not in result.output
-    assert payload["next_actions"][0]["argv"][-1] == "edges-list"
+    assert payload["next_actions"][0]["argv"][-2:] == ["edge", "list"]
 
 
 def test_resolve_unexpected_error_is_json_internal_failure(

@@ -409,6 +409,7 @@ class HelpSubcommand(ContractModel):
 
 class HelpNavigationAction(ContractModel):
     rel: Literal["help"] = "help"
+    argv: list[str]
     command: str
 
 
@@ -423,8 +424,7 @@ class InfoResult(ContractModel):
 
 
 class HostListResult(ContractModel):
-    items: list[HostSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class HostShowResult(ContractModel):
@@ -434,8 +434,7 @@ class HostShowResult(ContractModel):
 
 
 class ServiceListResult(ContractModel):
-    items: list[ServiceSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class ServiceShowResult(ContractModel):
@@ -447,8 +446,7 @@ class ServiceShowResult(ContractModel):
 
 
 class EdgeListResult(ContractModel):
-    items: list[EdgeSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class EdgeShowResult(ContractModel):
@@ -477,8 +475,7 @@ class CheckCommandResult(ContractModel):
 
 
 class AppListResult(ContractModel):
-    items: list[AppSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class AppShowResult(ContractModel):

@@ -4,6 +4,7 @@ import json
 
 import click
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from infralink.cli.contracts import CommandContext
@@ -63,8 +64,7 @@ def test_json_group_fails_closed_on_unregistered_callback_exit_code() -> None:
 
     assert result.exit_code == ExitCode.INTERNAL_ERROR
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     assert payload["schema_version"] == "infralink.cli/v1"
     assert payload["ok"] is False
     assert payload["error"] == {
@@ -91,9 +91,8 @@ def test_json_group_discards_buffered_envelope_on_unregistered_exit(
 
     assert result.exit_code == ExitCode.INTERNAL_ERROR
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
     assert canary not in result.output
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     assert payload["error"]["code"] == "internal_error"
     assert payload["error"]["message"] == "An unexpected internal error occurred"
 
@@ -110,9 +109,8 @@ def test_json_group_discards_buffered_envelope_on_unexpected_exception() -> None
 
     assert result.exit_code == ExitCode.INTERNAL_ERROR
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
     assert canary not in result.output
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     assert payload["error"] == {
         "code": "internal_error",
         "message": "An unexpected internal error occurred",
@@ -146,5 +144,4 @@ def test_json_group_flushes_one_envelope_for_registered_exit(
 
     assert result.exit_code == exit_code
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
-    assert json.loads(result.output) == {"registered": int(exit_code)}
+    assert yaml.safe_load(result.output) == {"registered": int(exit_code)}

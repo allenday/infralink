@@ -59,7 +59,12 @@ def test_topology_commands_require_explicit_or_environment_sources(
     missing_payload = yaml.safe_load(missing.output)
     assert missing_payload["error"]["code"] == "configuration_required"
     assert missing_payload["error"]["details"] == {"source": "registry"}
-    assert missing_payload["next_actions"][0]["argv"] == ["infralink", "help", "hosts"]
+    assert missing_payload["next_actions"][0]["argv"] == [
+        "infralink",
+        "help",
+        "host",
+        "list",
+    ]
 
 
 def test_environment_sources_are_used_and_flags_override_them(monkeypatch, tmp_path: Path) -> None:
@@ -79,13 +84,36 @@ def test_environment_sources_are_used_and_flags_override_them(monkeypatch, tmp_p
     assert from_environment.exit_code == with_flag.exit_code == 0
     assert environment_payload["command"]["resolved"]["registry"] == str(registry)
     assert override_payload["command"]["resolved"]["registry"] == str(alternate)
-    assert environment_payload["result"]["page"]["total"] > 0
-    assert override_payload["result"]["page"]["total"] == 0
+    assert environment_payload["result"]["items"]
+    assert override_payload["result"]["items"] == []
 
 
-def test_explicit_json_is_preserved_by_generated_follow_up_actions() -> None:
+def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
+    missing_edges = tmp_path / "missing-edges.yml"
+
     result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(root / "examples/registry.yml"),
+            "--edges",
+            str(missing_edges),
+            "edge",
+            "list",
+        ],
+    )
+
+    payload = yaml.safe_load(result.output)
+    assert result.exit_code == 3
+    assert payload["error"] == {
+        "code": "input_load_failed",
+        "message": "Edges could not be loaded",
+        "details": {"source": "edges", "path": str(missing_edges)},
+    }
+    assert payload["next_actions"][0]["argv"] == ["infralink", "help", "validate"]
+
+    json_result = CliRunner().invoke(
         cli,
         [
             "--output",
@@ -93,24 +121,83 @@ def test_explicit_json_is_preserved_by_generated_follow_up_actions() -> None:
             "--registry",
             str(root / "examples/registry.yml"),
             "--edges",
-            str(root / "examples/edges.yml"),
-            "services",
-            "--limit",
-            "1",
+            str(missing_edges),
+            "edge",
+            "list",
+        ],
+    )
+    assert json.loads(json_result.output)["next_actions"][0]["argv"] == [
+        "infralink",
+        "--output",
+        "json",
+        "help",
+        "validate",
+    ]
+
+
+def test_bare_group_usage_preserves_explicit_json_output() -> None:
+    result = CliRunner().invoke(cli, ["--output", "json", "host"])
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 2
+    assert all(
+        action["argv"][:3] == ["infralink", "--output", "json"]
+        for action in payload["next_actions"]
+    )
+
+
+def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "host",
+            "list",
         ],
     )
 
     payload = json.loads(result.output)
-    continuation = next(action for action in payload["next_actions"] if action["rel"] == "continue")
-    cursor = payload["result"]["page"]["next_cursor"]
+    show = next(action for action in payload["next_actions"] if action["rel"] == "show")
+    host_id = payload["result"]["items"][0]
     replay = CliRunner().invoke(
         cli,
-        [cursor if value == "{cursor}" else value for value in continuation["argv"][1:]],
+        [host_id if value == "{id}" else value for value in show["argv"][1:]],
     )
 
     assert replay.exit_code == 0
     assert replay.output.startswith("{")
     assert json.loads(replay.output)["command"]["resolved"]["output"] == "json"
+
+
+def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_alias(
+    monkeypatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+    runner = CliRunner()
+
+    help_result = runner.invoke(cli, ["help", "host"])
+    listed = runner.invoke(cli, ["host", "list"])
+    compatibility = runner.invoke(cli, ["hosts"])
+    bare = runner.invoke(cli, ["host"])
+
+    help_payload = yaml.safe_load(help_result.output)
+    assert help_result.exit_code == listed.exit_code == compatibility.exit_code == 0
+    assert {child["name"] for child in help_payload["result"]["children"]} == {"list", "show"}
+    assert yaml.safe_load(listed.output)["result"] == yaml.safe_load(compatibility.output)["result"]
+
+    bare_payload = yaml.safe_load(bare.output)
+    assert bare.exit_code == 2
+    assert {action["argv"][-1] for action in bare_payload["next_actions"]} == {"list", "show"}
+    assert all(
+        action["argv"][:3] == ["infralink", "help", "host"]
+        for action in bare_payload["next_actions"]
+    )
 
 
 def test_root_help_is_a_compact_generated_command_index() -> None:
@@ -125,14 +212,48 @@ def test_root_help_is_a_compact_generated_command_index() -> None:
     }
     assert payload["next_actions"] == []
     assert all(
-        child["action"] == {"rel": "help", "command": f"infralink help {child['name']}"}
+        child["action"]
+        == {
+            "rel": "help",
+            "argv": ["infralink", "help", child["name"]],
+            "command": f"infralink help {child['name']}",
+        }
         and "\n" not in child["summary"]
         for child in children
     )
     assert "arguments" not in children[0]
     assert "options" not in children[0]
     assert all("Examples:" not in child["summary"] for child in children)
-    assert result.output.count("\n") <= 120
+    assert result.output.count("\n") <= 220
+    assert "action: {" not in result.output
+    assert "{rel:" not in result.output
+
+
+def test_all_list_commands_have_uniform_executable_prefixed_actions(monkeypatch) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+    runner = CliRunner()
+
+    for command, resource in (
+        (["host", "list"], "host"),
+        (["service", "list"], "service"),
+        (["edge", "list"], "edge"),
+        (["app", "list"], "app"),
+        (["hosts"], "host"),
+        (["services"], "service"),
+        (["edges-list"], "edge"),
+    ):
+        response = runner.invoke(cli, command)
+        assert response.exit_code == 0
+        assert "action: {" not in response.output
+        payload = yaml.safe_load(response.output)
+        actions = payload["next_actions"]
+        assert all(item["argv"][0] == "infralink" for item in actions)
+        show = next(item for item in actions if item["rel"] == "show")
+        assert show["argv"] == ["infralink", resource, "show", "{id}"]
+        assert show["command"] == f"infralink {resource} show '{{id}}'"
+        assert "continue" not in {item["rel"] for item in actions}
 
 
 def test_parent_help_includes_a_live_registered_child_without_help_metadata(
@@ -165,7 +286,11 @@ def test_parent_help_includes_a_live_registered_child_without_help_metadata(
     assert child == {
         "name": "live-child",
         "summary": "Registered at runtime.",
-        "action": {"rel": "help", "command": "infralink help live-child"},
+        "action": {
+            "rel": "help",
+            "argv": ["infralink", "help", "live-child"],
+            "command": "infralink help live-child",
+        },
     }
 
 

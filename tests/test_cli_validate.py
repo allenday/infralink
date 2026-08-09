@@ -19,16 +19,16 @@ def validate_schema(payload: dict) -> None:
     Draft202012Validator(schema).validate(payload)
 
 
-def test_validate_returns_json_envelope():
+def test_validate_returns_yaml_envelope_by_default():
     runner = CliRunner()
     result = runner.invoke(cli, ["--registry", "missing.yml", "validate"])
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     assert payload["ok"] is False
     assert "error" in payload
     assert "fix" in payload
     assert result.exit_code == 3
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
+    assert result.output.startswith("schema_version: infralink.cli/v1\n")
     assert payload["error"]["code"] == "input_load_failed"
     validate_schema(payload)
 
@@ -46,17 +46,16 @@ def test_validate_malformed_input_uses_central_load_failure(tmp_path: Path) -> N
             "validate",
         ],
     )
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
 
     assert result.exit_code == 3
     assert payload["error"]["code"] == "input_load_failed"
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
 
 
 @pytest.mark.parametrize(
     "output_args",
-    [(), ("--output=json",), ("-o", "json")],
+    [("--output=yaml",), ("--output=json",), ("-o", "json")],
 )
 def test_validate_option_spellings_are_schema_equivalent(
     output_args: tuple[str, ...],
@@ -72,9 +71,8 @@ def test_validate_option_spellings_are_schema_equivalent(
             "validate",
         ],
     )
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
     validate_schema(payload)
     assert set(payload) == {
         "schema_version",
@@ -107,9 +105,8 @@ def test_resolution_warnings_are_structured_without_stderr(
             "--check-resolution",
         ],
     )
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
     validate_schema(payload)
     assert payload["result"]["warnings"]["items"] == [
         {
@@ -140,10 +137,10 @@ def test_validate_does_not_silently_truncate_101_diagnostics(
             "--check-resolution",
         ],
     )
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
     warning_page = payload["result"]["warnings"]
-    assert len(warning_page["items"]) == 100
-    assert warning_page["page"]["returned"] == 100
+    assert len(warning_page["items"]) == 20
+    assert warning_page["page"]["returned"] == 20
     assert warning_page["page"]["total"] == 101
     assert warning_page["page"]["next_cursor"] is not None
     assert payload["meta"]["truncated"] is True
@@ -169,6 +166,8 @@ def _invoke_validate(
     return CliRunner().invoke(
         cli,
         [
+            "--output",
+            "json",
             "--registry",
             str(registry_path),
             "--edges",
@@ -221,8 +220,8 @@ def test_strict_warnings_are_completed_negative_but_non_strict_is_positive(
 
     non_strict = CliRunner().invoke(cli, base)
     strict = CliRunner().invoke(cli, [*base, "--strict"])
-    non_strict_payload = json.loads(non_strict.output)
-    strict_payload = json.loads(strict.output)
+    non_strict_payload = yaml.safe_load(non_strict.output)
+    strict_payload = yaml.safe_load(strict.output)
 
     assert non_strict.exit_code == 0
     assert non_strict_payload["result"]["valid"] is True
@@ -245,6 +244,8 @@ def test_validate_pages_selected_collection_and_replays_all_inputs(
     from infralink.core.resolver import EdgeResolver
 
     registry_path, edges_path, _ = _write_invalid_target_inputs(tmp_path)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry_path))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges_path))
     monkeypatch.setattr(
         EdgeResolver,
         "validate_all",
@@ -273,10 +274,8 @@ def test_validate_pages_selected_collection_and_replays_all_inputs(
     )
     assert action["argv"] == [
         "infralink",
-        "--registry",
-        str(registry_path),
-        "--edges",
-        str(edges_path),
+        "--output",
+        "json",
         "validate",
         "--strict",
         "--check-resolution",
@@ -373,13 +372,12 @@ def test_validate_unexpected_resolution_error_uses_central_internal_failure(
             "--check-resolution",
         ],
     )
-    payload = json.loads(result.output)
+    payload = yaml.safe_load(result.output)
 
     assert result.exit_code == 70
     assert payload["error"]["code"] == "internal_error"
     assert "provider canary" not in result.output
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
 
 
 def test_validate_more_than_1000_diagnostics_has_no_loss_or_duplication(

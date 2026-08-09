@@ -29,11 +29,13 @@ from infralink.core.registry import Host, Registry
 
 
 def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
+    from infralink.cli.main import _action_argv_prefix
+
     discovery = {
-        "host": ["infralink", "hosts"],
-        "service": ["infralink", "services"],
-        "edge": ["infralink", "edges-list"],
-        "app": ["infralink", "app", "list"],
+        "host": [*_action_argv_prefix(), "host", "list"],
+        "service": [*_action_argv_prefix(), "service", "list"],
+        "edge": [*_action_argv_prefix(), "edge", "list"],
+        "app": [*_action_argv_prefix(), "app", "list"],
     }[entity_type]
     return CliFailure(
         code=ErrorCode.ENTITY_NOT_FOUND,
@@ -126,17 +128,15 @@ def edge_summary(edge: Edge) -> EdgeSummary:
     if port is not None:
         target["port"] = port
     refs = sorted({edge.secret_ref} if edge.secret_ref else set())
-    return EdgeSummary.model_validate(
-        {
-            "id": edge.id,
-            "type": edge.type.value,
-            "from": source,
-            "to": target,
-            "protocol": edge.protocol,
-            "secret_ref_count": len(refs),
-            "secret_refs": refs[:32],
-            "secret_refs_truncated": len(refs) > 32,
-        }
+    return EdgeSummary(
+        id=edge.id,
+        type=edge.type.value,
+        from_=source,
+        to=target,
+        protocol=edge.protocol,
+        secret_ref_count=len(refs),
+        secret_refs=refs[:32],
+        secret_refs_truncated=len(refs) > 32,
     )
 
 
@@ -198,14 +198,9 @@ def app_summary(application: Application, registry: Registry, edges: EdgeSet) ->
 
 def list_hosts(
     registry: Registry,
-    *,
-    limit: int = 100,
-    offset: int = 0,
-    next_cursor: str | None = None,
 ) -> HostListResult:
-    items = [host_summary(host) for host in sorted(registry, key=lambda item: item.uuid)]
-    page = page_items(items, limit=limit, offset=offset, next_cursor=next_cursor)
-    return HostListResult(items=page.items, page=page.page)
+    items = [host.uuid for host in sorted(registry, key=lambda item: item.uuid)]
+    return HostListResult(items=items)
 
 
 def show_host(
@@ -247,17 +242,10 @@ def show_host(
 def list_services(
     registry: Registry,
     edges: EdgeSet,
-    *,
-    limit: int = 100,
-    offset: int = 0,
-    next_cursor: str | None = None,
 ) -> ServiceListResult:
     identities = _service_identities(registry, edges)
-    items = [
-        service_summary(service_id, identities[service_id]) for service_id in sorted(identities)
-    ]
-    page = page_items(items, limit=limit, offset=offset, next_cursor=next_cursor)
-    return ServiceListResult(items=page.items, page=page.page)
+    items = sorted(identities)
+    return ServiceListResult(items=items)
 
 
 def show_service(
@@ -329,14 +317,9 @@ def show_service(
 
 def list_edges(
     edges: EdgeSet,
-    *,
-    limit: int = 100,
-    offset: int = 0,
-    next_cursor: str | None = None,
 ) -> EdgeListResult:
-    items = [edge_summary(edge) for edge in sorted(edges, key=lambda item: item.id)]
-    page = page_items(items, limit=limit, offset=offset, next_cursor=next_cursor)
-    return EdgeListResult(items=page.items, page=page.page)
+    items = [edge.id for edge in sorted(edges, key=lambda item: item.id)]
+    return EdgeListResult(items=items)
 
 
 def show_edge(
@@ -365,15 +348,10 @@ def show_edge(
 def list_apps(
     registry: Registry,
     edges: EdgeSet,
-    *,
-    limit: int = 100,
-    offset: int = 0,
-    next_cursor: str | None = None,
 ) -> AppListResult:
     applications = sorted(registry.applications, key=lambda item: item.id)
-    items = [app_summary(application, registry, edges) for application in applications]
-    page = page_items(items, limit=limit, offset=offset, next_cursor=next_cursor)
-    return AppListResult(items=page.items, page=page.page)
+    items = [application.id for application in applications]
+    return AppListResult(items=items)
 
 
 def show_app(
