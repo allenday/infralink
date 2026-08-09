@@ -140,10 +140,6 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "usage": "infralink analyze --output <directory>",
     },
     "check": {"description": "Run health checks for edges.", "usage": "infralink check"},
-    "doctor": {
-        "description": "Inspect declared topology and direct edge evidence.",
-        "usage": "infralink doctor [host|service|edge|profile <ref>]",
-    },
     "diagram": {
         "description": "Generate topology diagrams.",
         "usage": "infralink diagram --output <directory>",
@@ -816,10 +812,6 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.check import check
 
         return check
-    if name == "doctor":
-        from infralink.cli.doctor import doctor
-
-        return doctor
     if name == "diagram":
         from infralink.cli.diagram import diagram
 

@@ -75,7 +75,6 @@ SCHEMA_NAMES = (
     "validate",
     "resolve",
     "check",
-    "doctor",
     "app-list",
     "app-show",
     "analyze",

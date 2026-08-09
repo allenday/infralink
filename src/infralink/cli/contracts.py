@@ -474,27 +474,6 @@ class CheckCommandResult(ContractModel):
     summary: CheckSummary
 
 
-class DoctorTarget(ContractModel):
-    type: Literal["global", "host", "service", "edge", "profile"]
-    id: str | None = None
-    canonical_name: str | None = None
-
-
-class DoctorCheck(ContractModel):
-    edge_id: str
-    status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
-    latency_ms: float | None = None
-    error_code: str | None = None
-
-
-class DoctorResult(ContractModel):
-    target: DoctorTarget
-    declared: dict[str, Any]
-    checks: list[DoctorCheck]
-    status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
-    reason: str | None = None
-
-
 class AppListResult(ContractModel):
     items: list[str]
 
