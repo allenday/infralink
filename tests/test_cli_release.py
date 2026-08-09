@@ -388,7 +388,10 @@ def test_release_inspect_attestation_reads_the_manifest_bound_v3_completion_reco
     assert_schema(payload, "release-inspect-attestation")
     output = payload["result"]["attestation"]
     assert output["schema_version"] == "infralink.release-attestation.v3"
-    assert output["request"]["release_manifest"]["authority"]["publisher"] == output["request"]["publisher"]
+    assert (
+        output["request"]["release_manifest"]["authority"]["publisher"]
+        == output["request"]["publisher"]
+    )
     assert output["result"] == "dry-run"
     assert output["tag"] is None
 

@@ -234,8 +234,16 @@ def test_v3_attestation_carries_the_bound_v3_request() -> None:
     ("field", "value", "match"),
     [
         ("blob_identity", "release-candidates/core-v2/1/release-manifest.json", "blob_identity"),
-        ("blob_identity", "https://gitea.i.cyberstorm.dev/relaxgg/infra-registry.git/blobs/main", "blob_identity"),
-        ("blob_identity", "https://gitea.i.cyberstorm.dev/relaxgg/infra-registry.git/blobs/" + "A" * 40, "blob_identity"),
+        (
+            "blob_identity",
+            "https://gitea.i.cyberstorm.dev/relaxgg/infra-registry.git/blobs/main",
+            "blob_identity",
+        ),
+        (
+            "blob_identity",
+            "https://gitea.i.cyberstorm.dev/relaxgg/infra-registry.git/blobs/" + "A" * 40,
+            "blob_identity",
+        ),
         ("sha256", "0" * 63, "sha256"),
     ],
 )
@@ -268,7 +276,9 @@ def test_v3_request_rejects_a_manifest_from_another_registry_authority() -> None
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda request: request["release"].update({"identity": "releases/core-v2/43", "sequence": 43}),
+        lambda request: request["release"].update(
+            {"identity": "releases/core-v2/43", "sequence": 43}
+        ),
         lambda request: request.update({"registry_commit": "c" * 40}),
         lambda request: request.update({"controller_commit": "c" * 40}),
         lambda request: request["ci_receipt"].update({"run": "577"}),

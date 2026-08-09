@@ -255,7 +255,10 @@ def _parse_publisher_request(path: Path) -> PublisherRequestV2 | PublisherReques
     try:
         raw = path.read_text(encoding="utf-8")
         document = json.loads(raw)
-        if isinstance(document, dict) and document.get("schema_version") == "infralink.publisher-request.v3":
+        if (
+            isinstance(document, dict)
+            and document.get("schema_version") == "infralink.publisher-request.v3"
+        ):
             return parse_publisher_request_v3_json(raw)
         return parse_publisher_request_v2_json(raw)
     except (OSError, ValueError, ValidationError) as error:
@@ -268,7 +271,9 @@ def _parse_publisher_request(path: Path) -> PublisherRequestV2 | PublisherReques
 
 def _parse_attestation(
     path: Path,
-) -> _AttestationDocument | _LegacyAttestationDocument | ReleaseAttestationV2 | ReleaseAttestationV3:
+) -> (
+    _AttestationDocument | _LegacyAttestationDocument | ReleaseAttestationV2 | ReleaseAttestationV3
+):
     try:
         raw = path.read_text(encoding="utf-8")
         discriminator = json.loads(raw)
