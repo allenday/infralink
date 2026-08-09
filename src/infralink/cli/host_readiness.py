@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Literal, Protocol, cast
 
 from infralink.cli.contracts import HostBootstrapAction, HostReadinessCheck, HostReadinessResult
@@ -37,6 +38,10 @@ def evaluate_host_readiness(
         address = getattr(host, "tailscale_ip", None) or getattr(host, "public_ip", None) or ""
         probe = transport.probe(str(address))
         transport_name = "root_ssh"
+    requires_v2_registry_layout = bool(
+        getattr(host, "self_deploy_v2_registry_layout_enabled", False)
+    )
+    probe = replace(probe, requires_v2_registry_layout=requires_v2_registry_layout)
     readiness = HostReadinessEvaluator().evaluate(canonical_name=canonical_name, probe=probe)
     return HostReadinessResult(
         transport=cast(Literal["root_ssh", "declaration_only"], transport_name),
@@ -56,9 +61,7 @@ def evaluate_host_readiness(
             if probe.registry_layout in {"v2_managed", "legacy_nested", "missing", "unsafe"}
             else "unsafe"
         ),
-        requires_v2_registry_layout=bool(
-            getattr(host, "self_deploy_v2_registry_layout_enabled", False)
-        ),
+        requires_v2_registry_layout=requires_v2_registry_layout,
         self_deploy_reconcile_result=probe.self_deploy_reconcile_result,
         self_deploy_reconcile_exit_status=probe.self_deploy_reconcile_exit_status,
         self_deploy_reconcile_active_state=probe.self_deploy_reconcile_active_state,
