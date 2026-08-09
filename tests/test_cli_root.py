@@ -173,6 +173,7 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
     help_payload = yaml.safe_load(help_result.output)
     assert help_result.exit_code == listed.exit_code == compatibility.exit_code == 0
     assert {child["name"] for child in help_payload["result"]["children"]} == {
+        "apply",
         "bootstrap",
         "create",
         "list",
@@ -183,6 +184,7 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
     bare_payload = yaml.safe_load(bare.output)
     assert bare.exit_code == 2
     assert {shlex.split(action["command"])[-1] for action in bare_payload["next_actions"]} == {
+        "apply",
         "bootstrap",
         "create",
         "list",

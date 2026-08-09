@@ -39,6 +39,7 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.host_readiness import evaluate_host_readiness
+from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult, OperationSummary
 from infralink.cli.output import (
     command_context,
     error_envelope,
@@ -171,8 +172,12 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
     "host": {
-        "description": "Inspect, scaffold, or plan bootstrap for hosts.",
-        "usage": "infralink host [create|list|show|bootstrap]",
+        "description": "Inspect, scaffold, bootstrap, or apply hosts.",
+        "usage": "infralink host [create|list|show|bootstrap|apply]",
+    },
+    "operation": {
+        "description": "Inspect durable host apply operations.",
+        "usage": "infralink operation status OPERATION_ID",
     },
     "edge": {"description": "Inspect edges.", "usage": "infralink edge show <edge-id>"},
     "service": {
@@ -268,6 +273,28 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             {"name": "apply", "type": "boolean", "required": False},
         ],
         "examples": ["infralink host bootstrap host-1 --plan", "infralink host bootstrap host-1 --apply"],
+    },
+    ("host", "apply"): {
+        "description": "Apply one declared host through the control plane.",
+        "arguments": [{"name": "host", "type": "string", "required": True}],
+        "options": [
+            {"name": "dry_run", "type": "boolean", "required": False},
+            {"name": "wait", "type": "boolean", "required": False},
+            {"name": "timeout", "type": "integer", "required": False},
+        ],
+        "examples": ["infralink host apply relaxgg-db-es1", "infralink host apply relaxgg-db-es1 --wait"],
+    },
+    ("operation",): {
+        "description": "Inspect durable host apply operations.",
+        "arguments": [],
+        "options": [],
+        "examples": ["infralink operation status op_01J00000000000000000000000"],
+    },
+    ("operation", "status"): {
+        "description": "Get the current state of one durable host apply operation.",
+        "arguments": [{"name": "operation_id", "type": "string", "required": True}],
+        "options": [],
+        "examples": ["infralink operation status op_01J00000000000000000000000"],
     },
     ("edge",): {
         "description": "Inspect edges.",
@@ -889,6 +916,8 @@ def _load_command(name: str) -> click.Command | None:
         return services
     if name == "host":
         return host
+    if name == "operation":
+        return operation
     if name == "edge":
         return edge
     if name == "service":
@@ -1722,6 +1751,112 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         )
     )
     return 0 if readiness.ready or plan_only else 1
+
+
+@host.command(name="apply")
+@click.argument("host_ref")
+@click.option("--dry-run", is_flag=True, help="Validate host apply inputs without submitting work.")
+@click.option("--wait", "wait", is_flag=True, help="Wait for a terminal host apply result.")
+@click.option(
+    "--timeout",
+    type=click.IntRange(min=1, max=3600),
+    default=300,
+    show_default=True,
+    help="Maximum seconds to wait when --wait is set.",
+)
+@pass_context
+def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: int) -> int:
+    """Apply one declared host through the configured control plane."""
+    from infralink.cli.operations import (
+        operation_provider_from_environment,
+        resolve_apply_request,
+        wait_for_terminal,
+    )
+
+    target = ctx.registry.get(host_ref)
+    if target is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    request = resolve_apply_request(ctx.registry_path, target)
+    doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
+    if dry_run:
+        _emit(
+            ok_envelope(
+                _context_for(path=["host", "apply"]),
+                HostApplyResult(target=doctor_target, dry_run=True),
+                [
+                    action(
+                        "apply",
+                        [*_root_source_argv(ctx), "host", "apply", target.uuid],
+                        "Submit this host apply",
+                        safe=False,
+                    )
+                ],
+            )
+        )
+        return 0
+
+    provider = operation_provider_from_environment()
+    record = provider.submit(request)
+    if wait:
+        record = wait_for_terminal(provider, record.id, timeout_seconds=timeout)
+    result = HostApplyResult(
+        operation=OperationSummary(id=record.id, state=record.state), target=doctor_target
+    )
+    actions = []
+    if record.state in {"queued", "applying"}:
+        actions.append(
+            action(
+                "status",
+                [*_root_action_prefix(ctx), "operation", "status", record.id],
+                "Check host apply progress",
+            )
+        )
+    else:
+        actions.append(
+            action(
+                "doctor",
+                [*_root_source_argv(ctx), "doctor", "host", target.uuid],
+                "Inspect the host convergence result",
+            )
+        )
+    _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
+    return 0 if record.state == "converged" or not wait else 1
+
+
+@click.group()
+def operation() -> None:
+    """Inspect durable host apply operations."""
+
+
+@operation.command(name="status")
+@click.argument("operation_id")
+@pass_context
+def operation_status(ctx: Context, operation_id: str) -> int:
+    """Get the current state of one durable host apply operation."""
+    from infralink.cli.operations import operation_provider_from_environment
+
+    record = operation_provider_from_environment().status(operation_id)
+    target = (
+        DoctorTarget(**record.target)
+        if record.target is not None
+        else None
+    )
+    result = OperationStatusResult(
+        operation=OperationSummary(id=record.id, state=record.state), target=target
+    )
+    actions = []
+    if record.state in {"queued", "applying"}:
+        actions.append(
+            action(
+                "status",
+                [*_root_action_prefix(ctx), "operation", "status", record.id],
+                "Check host apply progress",
+            )
+        )
+    _emit(ok_envelope(_context_for(path=["operation", "status"]), result, actions))
+    return 0 if record.state != "failed" else 1
 
 
 @click.group()
