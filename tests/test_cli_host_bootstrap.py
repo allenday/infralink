@@ -60,6 +60,7 @@ def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) 
         "jq",
         "bws_cli",
         "bws_config",
+        "self_deploy_dependencies",
         "self_deploy_runtime",
         "self_deploy_timer",
     ]

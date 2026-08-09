@@ -13,6 +13,7 @@ def _probe(**overrides: object) -> HostReadinessProbe:
         "devops_account": False,
         "devops_authorized_access": False,
         "bws_config": False,
+        "self_deploy_dependencies": False,
         "self_deploy_runtime": False,
         "self_deploy_timer_enabled": False,
         "self_deploy_timer_active": False,
@@ -36,6 +37,7 @@ def test_readiness_is_fail_closed_and_derives_only_failed_baseline_actions() -> 
         "jq",
         "bws_cli",
         "bws_config",
+        "self_deploy_dependencies",
         "self_deploy_runtime",
         "self_deploy_timer",
     ]
@@ -46,6 +48,7 @@ def test_readiness_is_fail_closed_and_derives_only_failed_baseline_actions() -> 
         "jq",
         "bws_cli",
         "bws_config",
+        "self_deploy_dependencies",
         "self_deploy_runtime",
         "self_deploy_timer",
     ]

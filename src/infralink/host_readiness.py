@@ -27,6 +27,7 @@ class HostReadinessProbe:
     self_deploy_timer_active: bool
     error: str | None
     self_deploy_mode: str | None = None
+    self_deploy_dependencies: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,12 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
         "Configure Bitwarden Secrets Manager access.",
     ),
     BaselineRequirement(
+        "self_deploy_dependencies",
+        "Self-deploy Python dependencies are installed.",
+        "install_self_deploy_dependencies",
+        "Install the self-deploy Python dependencies.",
+    ),
+    BaselineRequirement(
         "self_deploy_runtime",
         "Self-deploy runtime is installed.",
         "install_self_deploy_runtime",
@@ -141,6 +148,10 @@ class HostReadinessEvaluator:
             "jq": (probe.reachable and probe.commands.get("jq", False), "jq_missing"),
             "bws_cli": (probe.reachable and probe.commands.get("bws", False), "bws_cli_missing"),
             "bws_config": (probe.reachable and probe.bws_config, "bws_config_missing"),
+            "self_deploy_dependencies": (
+                probe.reachable and probe.self_deploy_dependencies,
+                "self_deploy_dependencies_missing",
+            ),
             "self_deploy_runtime": (
                 probe.reachable
                 and probe.self_deploy_runtime
