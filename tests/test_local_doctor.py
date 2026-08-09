@@ -11,6 +11,7 @@ import pytest
 
 from infralink.host_readiness import HostReadinessProbe
 from infralink.local_doctor import (
+    LocalDoctorCheck,
     LocalDoctorCollector,
     LocalDoctorResult,
     LatestResultStore,
@@ -72,6 +73,47 @@ def test_latest_result_store_replaces_the_previous_result_atomically(tmp_path: P
     assert store.load() == unhealthy
     assert json.loads(path.read_text(encoding="utf-8"))["status"] == "unhealthy"
     assert not list(path.parent.glob(".latest.json.*"))
+
+
+@pytest.mark.parametrize("check_id", ["contains a space", "token=secret", "x" * 65])
+def test_result_rejects_unbounded_check_identifiers(check_id: str) -> None:
+    with pytest.raises(ValueError, match="check id"):
+        LocalDoctorCheck(id=check_id, required=True, passed=True)
+
+
+def test_result_rejects_duplicate_check_identifiers() -> None:
+    check = LocalDoctorCheck(id="docker", required=True, passed=True)
+
+    with pytest.raises(ValueError, match="duplicate"):
+        LocalDoctorResult(NOW, NOW + timedelta(seconds=60), "healthy", (check, check))
+
+
+def test_result_rejects_naive_timestamps() -> None:
+    naive = datetime(2026, 8, 9, 12, 0)
+
+    with pytest.raises(ValueError, match="timezone"):
+        LocalDoctorResult(naive, naive + timedelta(seconds=60), "healthy", ())
+
+
+def test_freshness_expires_at_its_declared_cutoff() -> None:
+    result = LocalDoctorResult.healthy(now=NOW, freshness_seconds=60)
+
+    assert result.is_fresh_healthy(now=NOW + timedelta(seconds=59))
+    assert not result.is_fresh_healthy(now=NOW + timedelta(seconds=60))
+
+
+def test_latest_result_store_syncs_its_parent_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import infralink.local_doctor as local_doctor
+
+    calls: list[int] = []
+    real_fsync = local_doctor.os.fsync
+    monkeypatch.setattr(local_doctor.os, "fsync", lambda descriptor: (calls.append(descriptor), real_fsync(descriptor))[1])
+
+    LatestResultStore(tmp_path / "latest.json").write(
+        LocalDoctorResult.healthy(now=NOW, freshness_seconds=60)
+    )
+
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(

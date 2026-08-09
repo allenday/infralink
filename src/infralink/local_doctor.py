@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from infralink.host_readiness import HostReadinessEvaluator, HostReadinessProbe
 SCHEMA_VERSION = "infralink.local-doctor/v1"
 LATEST_RESULT_PATH = "/v1/doctor/latest"
 LocalStatus = Literal["healthy", "unhealthy", "unknown"]
+_CHECK_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 def _timestamp(value: datetime) -> str:
@@ -35,11 +37,23 @@ def _parse_timestamp(value: object) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp must include a timezone")
+    return value.astimezone(timezone.utc)
+
+
 @dataclass(frozen=True)
 class LocalDoctorCheck:
     id: str
     required: bool
     passed: bool
+
+    def __post_init__(self) -> None:
+        if _CHECK_ID.fullmatch(self.id) is None:
+            raise ValueError("local Doctor check id is invalid")
+        if type(self.required) is not bool or type(self.passed) is not bool:
+            raise ValueError("local Doctor check booleans are invalid")
 
     def to_dict(self) -> dict[str, object]:
         return {"id": self.id, "required": self.required, "passed": self.passed}
@@ -51,6 +65,18 @@ class LocalDoctorResult:
     fresh_until: datetime
     status: LocalStatus
     checks: tuple[LocalDoctorCheck, ...]
+
+    def __post_init__(self) -> None:
+        observed_at = _utc(self.observed_at)
+        fresh_until = _utc(self.fresh_until)
+        if fresh_until < observed_at:
+            raise ValueError("local Doctor result expires before observation")
+        if self.status not in {"healthy", "unhealthy", "unknown"}:
+            raise ValueError("invalid local Doctor status")
+        if len({check.id for check in self.checks}) != len(self.checks):
+            raise ValueError("duplicate local Doctor check id")
+        object.__setattr__(self, "observed_at", observed_at)
+        object.__setattr__(self, "fresh_until", fresh_until)
 
     @classmethod
     def healthy(cls, *, now: datetime, freshness_seconds: int) -> LocalDoctorResult:
@@ -118,7 +144,7 @@ class LocalDoctorResult:
         }
 
     def is_fresh_healthy(self, *, now: datetime) -> bool:
-        return self.status == "healthy" and now.astimezone(timezone.utc) <= self.fresh_until
+        return self.status == "healthy" and _utc(now) < self.fresh_until
 
 
 class LocalDoctorCollector:
@@ -173,6 +199,7 @@ class LatestResultStore:
                 os.fsync(stream.fileno())
             os.chmod(temporary, 0o640)
             os.replace(temporary, self.path)
+            self._sync_parent()
         except BaseException:
             try:
                 os.unlink(temporary)
@@ -182,6 +209,17 @@ class LatestResultStore:
 
     def load(self) -> LocalDoctorResult:
         return LocalDoctorResult.from_dict(json.loads(self.path.read_text(encoding="utf-8")))
+
+    def _sync_parent(self) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        try:
+            descriptor = os.open(self.path.parent, flags)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def serve_latest_result(
