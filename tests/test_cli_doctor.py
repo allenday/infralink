@@ -159,6 +159,9 @@ def test_normal_doctor_never_claims_health_without_a_declared_live_observer(
     assert payload["result"]["evidence"][0]["adapter"] == "gatus"
     prefix = ["infralink", "--output", "json", *_sources()]
     assert all(action["argv"][: len(prefix)] == prefix for action in payload["next_actions"])
+    show = next(action for action in payload["next_actions"] if action["rel"] == "show")
+    assert show["argv"][-3:] == ["edge", "show", EDGE_ID]
+    assert CliRunner().invoke(cli, show["argv"][1:]).exit_code == 0
 
 
 def test_doctor_profile_resolves_declared_observation_profile_not_service_or_role_name(
@@ -209,6 +212,25 @@ def test_global_doctor_uses_supplied_observation_inputs(tmp_path: Path) -> None:
         "valid": True,
     }
     assert payload["result"]["evidence"][0]["id"] == OBSERVATION_ID
+
+
+def test_declared_dependency_edge_never_advertises_an_invalid_topology_show_action(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "edge",
+        OBSERVATION_ID,
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["target"]["id"] == OBSERVATION_ID
+    assert "show" not in {action["rel"] for action in payload["next_actions"]}
 
 
 def test_doctor_unknown_host_returns_a_bounded_canonical_discovery_action() -> None:

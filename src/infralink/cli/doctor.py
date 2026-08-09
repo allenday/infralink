@@ -413,16 +413,23 @@ def doctor(
         status="unknown",
         reason=reason,
     )
+    show_action = (
+        [
+            action(
+                "show",
+                [*_root_source_argv(ctx), target_type, "show", target.id],
+                f"Show {target_type}",
+            )
+        ]
+        if target_type != "profile"
+        and not (target_type == "edge" and ctx.edges.get(target_ref) is None)
+        else []
+    )
     actions = [
+        *show_action,
         *(
-            [
-                action(
-                    "show",
-                    [*_root_source_argv(ctx), target_type, "show", target_id],
-                    f"Show {target_type}",
-                )
-            ]
-            if target_type != "profile"
+            []
+            if show_action
             else [
                 action(
                     "help",
