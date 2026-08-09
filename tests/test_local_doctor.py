@@ -88,6 +88,16 @@ def test_result_rejects_duplicate_check_identifiers() -> None:
         LocalDoctorResult(NOW, NOW + timedelta(seconds=60), "healthy", (check, check))
 
 
+def test_result_rejects_healthy_status_with_a_failed_required_check() -> None:
+    with pytest.raises(ValueError, match="healthy"):
+        LocalDoctorResult(
+            NOW,
+            NOW + timedelta(seconds=60),
+            "healthy",
+            (LocalDoctorCheck(id="docker", required=True, passed=False),),
+        )
+
+
 def test_result_rejects_naive_timestamps() -> None:
     naive = datetime(2026, 8, 9, 12, 0)
 
@@ -168,6 +178,26 @@ def test_static_endpoint_never_runs_the_collector_for_requests(tmp_path: Path) -
                 f"http://127.0.0.1:{server.server_port}/not-found", timeout=2
             )  # noqa: S310 - local test server
         assert error.value.code == 404
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def test_static_endpoint_fails_closed_for_contradictory_persisted_result(tmp_path: Path) -> None:
+    store = LatestResultStore(tmp_path / "latest.json")
+    payload = LocalDoctorResult.healthy(now=NOW, freshness_seconds=60).to_dict()
+    payload["checks"] = [{"id": "docker", "required": True, "passed": False}]
+    store.path.write_text(json.dumps(payload), encoding="utf-8")
+    server = serve_latest_result("127.0.0.1", 0, store, clock=lambda: NOW)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(HTTPError) as error:
+            urlopen(
+                f"http://127.0.0.1:{server.server_port}/v1/doctor/latest", timeout=2
+            )  # noqa: S310 - local test server
+        assert error.value.code == 503
     finally:
         server.shutdown()
         thread.join(timeout=2)

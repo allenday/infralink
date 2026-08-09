@@ -75,6 +75,10 @@ class LocalDoctorResult:
             raise ValueError("invalid local Doctor status")
         if len({check.id for check in self.checks}) != len(self.checks):
             raise ValueError("duplicate local Doctor check id")
+        if self.status == "healthy" and any(
+            check.required and not check.passed for check in self.checks
+        ):
+            raise ValueError("healthy local Doctor result has a failed required check")
         object.__setattr__(self, "observed_at", observed_at)
         object.__setattr__(self, "fresh_until", fresh_until)
 
