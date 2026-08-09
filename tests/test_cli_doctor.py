@@ -198,6 +198,51 @@ def test_doctor_validate_requires_an_explicit_observation_plan() -> None:
     assert payload["error"]["details"] == {"source": "observation_plan"}
 
 
+def test_doctor_observation_inputs_use_environment_defaults_and_flags_override(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    alternate_plan = tmp_path / "alternate-plan.json"
+    alternate_bindings = tmp_path / "alternate-bindings.yml"
+    alternate_plan.write_text('{"dependencies": []}', encoding="utf-8")
+    alternate_bindings.write_text("bindings: []\n", encoding="utf-8")
+    environment = {
+        "INFRALINK_OBSERVATION_PLAN": str(plan),
+        "INFRALINK_ADAPTER_BINDINGS": str(bindings),
+    }
+
+    from_environment = CliRunner().invoke(
+        cli,
+        ["--output", "json", *_sources(), "doctor", "host", "database.example.com", "--validate"],
+        env=environment,
+    )
+    with_flags = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            *_sources(),
+            "doctor",
+            "--observation-plan",
+            str(alternate_plan),
+            "--adapter-bindings",
+            str(alternate_bindings),
+            "host",
+            "database.example.com",
+            "--validate",
+        ],
+        env=environment,
+    )
+
+    environment_payload = json.loads(from_environment.output)
+    override_payload = json.loads(with_flags.output)
+    assert from_environment.exit_code == with_flags.exit_code == 0
+    assert environment_payload["command"]["resolved"]["observation_plan"] == str(plan)
+    assert environment_payload["command"]["resolved"]["adapter_bindings"] == str(bindings)
+    assert override_payload["command"]["resolved"]["observation_plan"] == str(alternate_plan)
+    assert override_payload["command"]["resolved"]["adapter_bindings"] == str(alternate_bindings)
+
+
 def test_global_doctor_uses_supplied_observation_inputs(tmp_path: Path) -> None:
     plan, bindings = _observation_inputs(tmp_path)
     result = _invoke("--observation-plan", str(plan), "--adapter-bindings", str(bindings))

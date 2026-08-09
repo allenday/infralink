@@ -188,12 +188,20 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
 
     help_payload = yaml.safe_load(help_result.output)
     assert help_result.exit_code == listed.exit_code == compatibility.exit_code == 0
-    assert {child["name"] for child in help_payload["result"]["children"]} == {"list", "show"}
+    assert {child["name"] for child in help_payload["result"]["children"]} == {
+        "create",
+        "list",
+        "show",
+    }
     assert yaml.safe_load(listed.output)["result"] == yaml.safe_load(compatibility.output)["result"]
 
     bare_payload = yaml.safe_load(bare.output)
     assert bare.exit_code == 2
-    assert {action["argv"][-1] for action in bare_payload["next_actions"]} == {"list", "show"}
+    assert {action["argv"][-1] for action in bare_payload["next_actions"]} == {
+        "create",
+        "list",
+        "show",
+    }
     assert all(
         action["argv"][:3] == ["infralink", "help", "host"]
         for action in bare_payload["next_actions"]

@@ -16,6 +16,8 @@ from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, 
 from infralink.cli.output import ok_envelope
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
+OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
+ADAPTER_BINDINGS_ENVVAR = "INFRALINK_ADAPTER_BINDINGS"
 
 
 def _doctor_prefix(
@@ -69,7 +71,7 @@ def _configuration_required(ctx: Context, source: str) -> CliFailure:
         code=ErrorCode.CONFIGURATION_REQUIRED,
         message="Observation plan configuration is required",
         exit_code=ExitCode.USAGE_ERROR,
-        fix="Provide --observation-plan",
+        fix=f"Provide --observation-plan or set {OBSERVATION_PLAN_ENVVAR}",
         details={"source": source},
         next_actions=[
             action("help", [*_root_source_argv(ctx), "help", "doctor"], "Show doctor usage"),
@@ -296,13 +298,35 @@ def _coverage(
     )
 
 
-def _emit_result(ctx: Context, result: DoctorResult, path: list[str], actions: list[Any]) -> None:
-    _emit(ok_envelope(_context_for(path=path), result, actions))
+def _emit_result(
+    ctx: Context,
+    result: DoctorResult,
+    path: list[str],
+    actions: list[Any],
+    observation_plan: Path | None = None,
+    adapter_bindings: Path | None = None,
+) -> None:
+    command = _context_for(path=path)
+    if observation_plan is not None:
+        command.resolved["observation_plan"] = str(observation_plan)
+    if adapter_bindings is not None:
+        command.resolved["adapter_bindings"] = str(adapter_bindings)
+    _emit(ok_envelope(command, result, actions))
 
 
 @click.command(name="doctor")
-@click.option("--observation-plan", type=click.Path(path_type=Path), default=None)
-@click.option("--adapter-bindings", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--observation-plan",
+    type=click.Path(path_type=Path),
+    default=None,
+    envvar=OBSERVATION_PLAN_ENVVAR,
+)
+@click.option(
+    "--adapter-bindings",
+    type=click.Path(path_type=Path),
+    default=None,
+    envvar=ADAPTER_BINDINGS_ENVVAR,
+)
 @click.option(
     "--validate", "declaration_only", is_flag=True, help="Validate declarations without I/O"
 )
@@ -319,7 +343,7 @@ def doctor(
     target_type: DoctorKind | None,
     target_ref: str | None,
 ) -> int:
-    """Inspect declared topology and observer-provenance evidence."""
+    """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
     if target_type is None:
         if target_ref is not None:
             raise click.UsageError("a target type is required")
@@ -361,6 +385,8 @@ def doctor(
                 ),
                 action("list", [*_root_source_argv(ctx), "host", "list"], "List hosts"),
             ],
+            observation_plan,
+            adapter_bindings,
         )
         return 0
 
@@ -388,6 +414,8 @@ def doctor(
                     "Show observation input options",
                 )
             ],
+            observation_plan,
+            adapter_bindings,
         )
         return 0
 
@@ -457,5 +485,12 @@ def doctor(
             "Validate declared observer coverage",
         ),
     ]
-    _emit_result(ctx, result, ["doctor", target_type], actions)
+    _emit_result(
+        ctx,
+        result,
+        ["doctor", target_type],
+        actions,
+        observation_plan,
+        adapter_bindings,
+    )
     return 0
