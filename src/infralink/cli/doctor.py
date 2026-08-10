@@ -110,7 +110,7 @@ def _gatus_evidence(
 
 def _result_status(
     coverage: DoctorCoverage | None, evidence: list[DoctorEvidence], gatus_url: str | None
-) -> tuple[str, str | None]:
+) -> tuple[Literal["healthy", "unhealthy", "unavailable", "unknown"], str | None]:
     if gatus_url is None and any(item.adapter == "gatus" for item in evidence):
         return "unknown", "gatus_not_configured"
     if coverage is not None and not coverage.valid:
@@ -721,8 +721,8 @@ def doctor(
     )
     result = _apply_host_readiness(result, readiness)
     if readiness is not None and not readiness.ready:
-        actions.append(_bootstrap_plan_action(ctx, target.id))
-    manifest_state = _host_manifest_git_state(ctx, target.id) if target_type == "host" else None
+        actions.append(_bootstrap_plan_action(ctx, target_id))
+    manifest_state = _host_manifest_git_state(ctx, target_id) if target_type == "host" else None
     result = _apply_host_manifest_git_state(result, manifest_state)
     if manifest_state is not None and manifest_state.state == "local_uncommitted":
         actions.append(

@@ -12,15 +12,16 @@ import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import click
 import yaml
 
 from infralink import __version__
-from infralink.cli.actions import action
+from infralink.cli.actions import action, redact_argv
 from infralink.cli.contracts import (
+    Action,
     ArgumentDescriptor,
     Binding,
     CommandContext,
@@ -48,7 +49,6 @@ from infralink.cli.output import (
     command_context,
     error_envelope,
     ok_envelope,
-    redact_argv,
 )
 from infralink.host_transport import SshReadinessTransport
 
@@ -825,7 +825,7 @@ def _emit_help(path: tuple[str, ...], argv: list[str] | None = None) -> None:
     )
 
 
-def _usage_actions(path: list[str], artifact_command: str | None) -> list:
+def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action]:
     if artifact_command is not None:
         return [
             action(
@@ -834,11 +834,12 @@ def _usage_actions(path: list[str], artifact_command: str | None) -> list:
                 "Show command usage",
             )
         ]
-    canonical_alias = {
+    canonical_aliases: dict[tuple[str, ...], tuple[str, ...]] = {
         ("hosts",): ("host", "list"),
         ("services",): ("service", "list"),
         ("edges-list",): ("edge", "list"),
-    }.get(tuple(path))
+    }
+    canonical_alias = canonical_aliases.get(tuple(path))
     if canonical_alias is not None:
         return [
             action(
@@ -1268,7 +1269,7 @@ def _root_action_prefix(ctx: Context) -> list[str]:
     return argv
 
 
-def _compatibility_action(ctx: Context, path: list[str], canonical: list[str]) -> list:
+def _compatibility_action(ctx: Context, path: list[str], canonical: list[str]) -> list[Action]:
     if path == canonical:
         return []
     return [
@@ -1551,7 +1552,7 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     """Create a dry-run host manifest scaffold, or write it with --write."""
     address_field, normalized_address = _host_address(address)
     host_id = str(uuid4())
-    host_data = {
+    host_data: dict[str, Any] = {
         "canonical_name": name,
         "status": "provisioning",
         address_field: normalized_address,
@@ -1606,6 +1607,7 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     }
     actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
     if manifest_path is not None:
+        assert ctx.registry_path is not None
         git_worktree = ctx.registry_path.parent
         result["write_state"] = "local_uncommitted"
         result["git_worktree"] = str(git_worktree)
@@ -1828,7 +1830,11 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
     if wait:
         record = wait_for_terminal(provider, record.id, timeout_seconds=timeout)
     result = HostApplyResult(
-        operation=OperationSummary(id=record.id, state=record.state), target=doctor_target
+        operation=OperationSummary(
+            id=record.id,
+            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
+        ),
+        target=doctor_target,
     )
     actions = []
     if record.state in {"queued", "applying"}:
@@ -1864,9 +1870,13 @@ def operation_status(ctx: Context, operation_id: str) -> int:
     from infralink.cli.operations import operation_provider_from_environment
 
     record = operation_provider_from_environment().status(operation_id)
-    target = DoctorTarget(**record.target) if record.target is not None else None
+    target = DoctorTarget.model_validate(record.target) if record.target is not None else None
     result = OperationStatusResult(
-        operation=OperationSummary(id=record.id, state=record.state), target=target
+        operation=OperationSummary(
+            id=record.id,
+            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
+        ),
+        target=target,
     )
     actions = []
     if record.state in {"queued", "applying"}:
