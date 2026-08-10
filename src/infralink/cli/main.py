@@ -62,8 +62,15 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
-_MANUAL_BOOTSTRAP_ACTIONS = frozenset(
-    {"configure_bws", "install_self_deploy_runtime", "enable_self_deploy_timer"}
+BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
+    {
+        "create_devops_account",
+        "configure_devops_authorized_access",
+        "install_docker",
+        "install_jq",
+        "install_bws_cli",
+        "install_self_deploy_dependencies",
+    }
 )
 
 
@@ -1708,7 +1715,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     if plan_only == apply_changes:
         raise click.UsageError("pass exactly one of --plan or --apply")
     automated_actions = [
-        item.id for item in readiness.actions if item.id not in _MANUAL_BOOTSTRAP_ACTIONS
+        item.id for item in readiness.actions if item.id in BASELINE_EXECUTOR_ACTIONS
     ]
     if apply_changes and automated_actions:
         control_root = Path("/opt/infra")
