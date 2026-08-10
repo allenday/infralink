@@ -132,7 +132,7 @@ def test_host_bootstrap_help_marks_plan_required_and_shows_an_example() -> None:
 
 
 def test_real_module_apply_failure_emits_an_envelope_and_nonzero_exit() -> None:
-    environment = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    environment = {**os.environ, "PATH": "", "PYTHONPATH": str(ROOT / "src")}
     result = subprocess.run(
         [
             sys.executable,
@@ -201,6 +201,7 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monke
         "infralink.cli.main.subprocess.run",
         lambda *args, **kwargs: calls.append((args, kwargs)) or Completed(),
     )
+    monkeypatch.setattr("infralink.cli.main.Path.is_file", lambda _path: False)
     result = CliRunner().invoke(
         cli,
         [

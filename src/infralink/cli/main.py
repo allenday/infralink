@@ -1713,14 +1713,6 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     if apply_changes and automated_actions:
         control_root = Path("/opt/infra")
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
-        if not playbook.is_file():
-            raise CliFailure(
-                code=ErrorCode.CONFIGURATION_REQUIRED,
-                message="Bastion host-bootstrap capability is not installed",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Install the current infra-management host-bootstrap capability on Bastion",
-                details={"capability": "host_bootstrap"},
-            )
         address = target.tailscale_ip or target.public_ip
         if not address:
             raise CliFailure(
@@ -1730,28 +1722,37 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
                 fix="Declare a Tailscale or public address for the host",
                 details={"host": target.uuid},
             )
-        completed = subprocess.run(
-            [
-                "ansible-playbook",
-                "-i",
-                f"{address},",
-                "-u",
-                "root",
-                str(playbook),
-                "-e",
-                f"host_address={address}",
-                "-e",
-                f"host_uuid={target.uuid}",
-                "-e",
-                f"canonical_name={target.canonical_name}",
-                "-e",
-                json.dumps({"bootstrap_actions": automated_actions}),
-            ],
-            cwd=control_root,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    "ansible-playbook",
+                    "-i",
+                    f"{address},",
+                    "-u",
+                    "root",
+                    str(playbook),
+                    "-e",
+                    f"host_address={address}",
+                    "-e",
+                    f"host_uuid={target.uuid}",
+                    "-e",
+                    f"canonical_name={target.canonical_name}",
+                    "-e",
+                    json.dumps({"bootstrap_actions": automated_actions}),
+                ],
+                cwd=control_root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Host baseline apply failed",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
+                details={"host": target.uuid},
+            ) from None
         if completed.returncode != 0:
             raise CliFailure(
                 code=ErrorCode.PROVIDER_UNAVAILABLE,
