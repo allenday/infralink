@@ -113,6 +113,7 @@ def test_collect_verifies_runtime_config_and_writes_state_and_metrics_atomically
             "flags": ["--config", str(config), "--allowed-signers", str(allowed_signers)],
         },
     }
+    assert payload["next_actions"] == []
     assert payload["result"]["status"] == "healthy"
     state = LocalDoctorResult.from_dict(
         json.loads((tmp_path / "state" / "latest.json").read_text(encoding="utf-8"))

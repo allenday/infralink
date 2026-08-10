@@ -418,6 +418,7 @@ def _emit(
             "raw": shlex.join(argv),
             "parsed": {"path": path, "args": {}, "flags": flags},
         },
+        "next_actions": [],
     }
     if ok:
         payload["result"] = result or {}
