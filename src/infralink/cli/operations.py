@@ -28,7 +28,8 @@ _CHANNEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _UNIT = "self-deploy-v2-reconcile.service"
 _JOURNAL_SEPARATOR = "__INFRALINK_JOURNAL__"
 _DIAGNOSTIC_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
-_MAX_FAILURE_JOURNAL_LINES = 8
+_DIAGNOSTIC_STAGES = frozenset({"inspect", "validate", "plan", "apply", "verify", "record"})
+_MAX_FAILURE_JOURNAL_LINES = 6
 
 _START_REMOTE = """set -eu
 unit=$1
@@ -354,19 +355,31 @@ def _journal_diagnostics(values: dict[str, Any]) -> list[str]:
 
 
 def _sanitize_journal(records: object) -> list[str]:
-    """Return only explicitly structured, non-secret diagnostic codes."""
+    """Return only canonical producer failure fields, never raw journal values."""
     if not isinstance(records, list):
         return []
     sanitized: list[str] = []
     for record in records:
         if not isinstance(record, dict):
             continue
-        code = record.get("code")
-        if not isinstance(code, str) or _DIAGNOSTIC_CODE.fullmatch(code) is None:
+        if record.get("ok") is not False:
+            continue
+        code = record.get("error_code")
+        stage = record.get("error_stage")
+        retryable = record.get("retryable")
+        if (
+            not isinstance(code, str)
+            or _DIAGNOSTIC_CODE.fullmatch(code) is None
+            or not isinstance(stage, str)
+            or stage not in _DIAGNOSTIC_STAGES
+            or type(retryable) is not bool
+        ):
             continue
         sanitized.append(f"code: {code}")
-        if len(sanitized) == _MAX_FAILURE_JOURNAL_LINES:
-            break
+        sanitized.append(f"stage: {stage}")
+        sanitized.append(f"retryable: {str(retryable).lower()}")
+        if len(sanitized) >= _MAX_FAILURE_JOURNAL_LINES:
+            return sanitized[:_MAX_FAILURE_JOURNAL_LINES]
     return sanitized
 
 
