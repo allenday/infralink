@@ -332,6 +332,7 @@ def _pinned_known_hosts(request: ApplyRequest) -> Iterator[Path]:
     if scanned.returncode != 0 or not scanned.stdout:
         raise _provider_failure("Declared host SSH key is unavailable")
     matching = []
+    observed_fingerprints: set[str] = set()
     for line in scanned.stdout.splitlines():
         if not line or line.startswith("#"):
             continue
@@ -346,12 +347,16 @@ def _pinned_known_hosts(request: ApplyRequest) -> Iterator[Path]:
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
-        if fingerprint.returncode == 0 and request.host_key_fingerprint == _ssh_fingerprint(
-            fingerprint.stdout
-        ):
+        observed_fingerprint = _ssh_fingerprint(fingerprint.stdout)
+        if fingerprint.returncode == 0 and observed_fingerprint is not None:
+            observed_fingerprints.add(observed_fingerprint)
+        if fingerprint.returncode == 0 and request.host_key_fingerprint == observed_fingerprint:
             matching.append(line)
     if not matching:
-        raise _provider_failure("Declared host SSH key does not match its fingerprint")
+        raise _provider_failure(
+            "Declared host SSH key does not match its fingerprint",
+            details={"observed_fingerprints": sorted(observed_fingerprints)},
+        )
     with tempfile.TemporaryDirectory(prefix="infralink-known-hosts-") as directory:
         path = Path(directory) / "known_hosts"
         path.write_text("\n".join(matching) + "\n", encoding="utf-8")
@@ -396,10 +401,11 @@ def _usage_failure(message: str, operation_id: str) -> CliFailure:
     )
 
 
-def _provider_failure(message: str) -> CliFailure:
+def _provider_failure(message: str, *, details: dict[str, Any] | None = None) -> CliFailure:
     return CliFailure(
         code=ErrorCode.PROVIDER_UNAVAILABLE,
         message=message,
         exit_code=ExitCode.PROVIDER_ERROR,
         fix="Retry the host apply or inspect the host-local reconcile unit",
+        details=details or {},
     )
