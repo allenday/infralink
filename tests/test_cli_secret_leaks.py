@@ -293,6 +293,7 @@ selection:
         ),
         ("host", "bootstrap"): ([*source, "host", "bootstrap", TARGET_ID, "--plan"], 0, True),
         ("host", "apply"): ([*source, "host", "apply", TARGET_ID, "--dry-run"], 3, False),
+        ("host", "verifier"): ([*source, "host", "verifier", TARGET_ID], 3, False),
         ("info",): ([*source, "info"], 0, True),
         ("operation", "status"): (
             [

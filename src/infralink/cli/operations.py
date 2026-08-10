@@ -11,12 +11,18 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
+from urllib.parse import urlsplit
 
 import yaml
 
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
-from infralink.cli.operation_contracts import OperationFailure, OperationUnitFailure
+from infralink.cli.operation_contracts import (
+    AllowedSignerDiagnostic,
+    HostVerifierDiagnostic,
+    OperationFailure,
+    OperationUnitFailure,
+)
 
 _OPERATION_ID = re.compile(
     r"^ssh/(?P<host>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
@@ -30,6 +36,9 @@ _JOURNAL_SEPARATOR = "__INFRALINK_JOURNAL__"
 _DIAGNOSTIC_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _DIAGNOSTIC_STAGES = frozenset({"inspect", "validate", "plan", "apply", "verify", "record"})
 _MAX_FAILURE_JOURNAL_LINES = 6
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_SIGNER_PRINCIPAL = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _START_REMOTE = """set -eu
 unit=$1
@@ -42,6 +51,48 @@ invocation=$2
 systemctl show "$unit" -p InvocationID -p ActiveState -p Result -p ExecMainStatus
 printf '%s\n' '__INFRALINK_JOURNAL__'
 journalctl --quiet --no-pager --output=cat _SYSTEMD_INVOCATION_ID="$invocation" || true
+"""
+_VERIFIER_REMOTE = """set -eu
+bootstrap=/etc/infra-management/self-deploy-bootstrap.yml
+signers=/etc/infra-management/registry-allowed-signers
+registry=/var/lib/infralink/registry
+
+value() {
+    sed -n "s/^    $1: //p" "$bootstrap" | head -n 1 | sed 's/^"//; s/"$//'
+}
+remote=$(value remote)
+ref=$(value ref)
+runtime=$(systemctl show self-deploy-v2-reconcile.service -p Environment --value | tr ' ' '\\n' | sed -n 's#^SELF_DEPLOY_V2_RUNTIME_ROOT=/var/lib/self-deploy-v2/runtime/##p' | head -n 1)
+principal=$(awk 'NF >= 3 { print $1; exit }' "$signers")
+fingerprint=$(awk 'NF >= 3 { print $2 " " $3; exit }' "$signers" | ssh-keygen -lf - -E sha256 2>/dev/null | awk '{ print $2; exit }')
+digest=$(sha256sum "$signers" | awk '{ print $1 }')
+tip=$(GIT_CONFIG_NOSYSTEM=1 git -C "$registry" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)
+version=$(git --version | awk '{ print $3 }')
+major=${version%%.*}
+rest=${version#*.}
+minor=${rest%%.*}
+capable=false
+case "$major:$minor" in
+    '' | *[!0-9:]* ) ;;
+    * ) if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 34 ]; }; then capable=true; fi ;;
+esac
+verification=unavailable
+if [ "$capable" = true ] && [ -n "$tip" ]; then
+    if GIT_CONFIG_NOSYSTEM=1 git -C "$registry" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$signers" verify-commit "$tip" >/dev/null 2>&1; then
+        verification=passed
+    else
+        verification=failed
+    fi
+fi
+printf 'registry_remote=%s\\n' "$remote"
+printf 'registry_ref=%s\\n' "$ref"
+printf 'runtime_revision=%s\\n' "$runtime"
+printf 'allowed_signer_principal=%s\\n' "$principal"
+printf 'allowed_signer_fingerprint=%s\\n' "$fingerprint"
+printf 'allowed_signers_sha256=%s\\n' "$digest"
+printf 'git_ssh_signature_capable=%s\\n' "$capable"
+printf 'fetched_tip=%s\\n' "$tip"
+printf 'signature_verification=%s\\n' "$verification"
 """
 
 
@@ -101,10 +152,25 @@ class SshOperationProvider:
             failure=_failure_diagnostics(values, include_unit=False) if state == "failed" else None,
         )
 
+    def inspect_verifier(self, request: ApplyRequest) -> HostVerifierDiagnostic:
+        """Read only the fixed, public facts behind V2 Git signature verification."""
+        return _parse_verifier_diagnostics(self._run(request, _VERIFIER_REMOTE, verifier=True))
+
     def _run(
-        self, request: ApplyRequest, script: str, invocation: str | None = None
+        self,
+        request: ApplyRequest,
+        script: str,
+        invocation: str | None = None,
+        *,
+        verifier: bool = False,
     ) -> dict[str, Any]:
-        remote_args = [request.unit] if invocation is None else [request.unit, invocation]
+        remote_args = (
+            ["verifier"]
+            if verifier
+            else [request.unit]
+            if invocation is None
+            else [request.unit, invocation]
+        )
         try:
             with _pinned_known_hosts(request) as known_hosts:
                 completed = subprocess.run(
@@ -140,6 +206,8 @@ class SshOperationProvider:
             ) from None
         if completed.returncode != 0:
             raise _provider_failure("Declared host rejected the reconcile operation")
+        if verifier:
+            return _parse_verifier_output(completed.stdout)
         values = _parse_properties(completed.stdout)
         if not values.get("InvocationID"):
             raise _provider_failure("Declared host returned no reconcile run reference")
@@ -166,6 +234,11 @@ class SshOperationProvider:
 def operation_provider() -> OperationProvider:
     """Return the sole supported host-apply transport."""
     return SshOperationProvider()
+
+
+def inspect_verifier(request: ApplyRequest) -> HostVerifierDiagnostic:
+    """Return fixed, read-only V2 verifier facts over the declared SSH transport."""
+    return SshOperationProvider().inspect_verifier(request)
 
 
 def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
@@ -311,6 +384,105 @@ def _parse_properties(stdout: str) -> dict[str, Any]:
         if isinstance(document, dict):
             values["journal"].append(document)
     return values
+
+
+def _parse_verifier_output(stdout: str) -> dict[str, Any]:
+    """Accept only the fixed public facts emitted by the verifier probe."""
+    accepted = {
+        "registry_remote",
+        "registry_ref",
+        "runtime_revision",
+        "allowed_signer_principal",
+        "allowed_signer_fingerprint",
+        "allowed_signers_sha256",
+        "git_ssh_signature_capable",
+        "fetched_tip",
+        "signature_verification",
+    }
+    values: dict[str, Any] = {}
+    for line in stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in accepted and key not in values:
+            values[key] = value
+    return values
+
+
+def _parse_verifier_diagnostics(values: dict[str, Any]) -> HostVerifierDiagnostic:
+    """Validate public facts before they cross the CLI boundary."""
+    try:
+        remote = _required_text(values, "registry_remote")
+        parsed = urlsplit(remote)
+        if (
+            not parsed.scheme
+            or not parsed.hostname
+            or (
+                parsed.username is not None and (parsed.scheme != "ssh" or parsed.username != "git")
+            )
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or any(character.isspace() or ord(character) < 32 for character in remote)
+        ):
+            raise ValueError
+        capable = _required_text(values, "git_ssh_signature_capable")
+        if capable not in {"true", "false"}:
+            raise ValueError
+        registry_ref = _required_text(values, "registry_ref")
+        if registry_ref != "refs/heads/main":
+            raise ValueError
+        verification = _required_text(values, "signature_verification")
+        if verification not in {"passed", "failed", "unavailable"}:
+            raise ValueError
+        return HostVerifierDiagnostic(
+            registry_remote=remote,
+            registry_ref="refs/heads/main",
+            runtime_revision=_required_sha(values, "runtime_revision"),
+            allowed_signer=AllowedSignerDiagnostic(
+                principal=_required_signer_principal(values, "allowed_signer_principal"),
+                fingerprint=_required_fingerprint(values, "allowed_signer_fingerprint"),
+                sha256=_required_sha256(values, "allowed_signers_sha256"),
+            ),
+            git_ssh_signature_capable=capable == "true",
+            fetched_tip=_required_sha(values, "fetched_tip"),
+            signature_verification=cast(Literal["passed", "failed", "unavailable"], verification),
+        )
+    except (TypeError, ValueError):
+        raise _provider_failure("Declared host returned invalid verifier diagnostics") from None
+
+
+def _required_text(values: dict[str, Any], key: str) -> str:
+    value = values.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError
+    return value
+
+
+def _required_sha(values: dict[str, Any], key: str) -> str:
+    value = _required_text(values, key)
+    if _GIT_SHA.fullmatch(value) is None:
+        raise ValueError
+    return value
+
+
+def _required_sha256(values: dict[str, Any], key: str) -> str:
+    value = _required_text(values, key)
+    if _SHA256.fullmatch(value) is None:
+        raise ValueError
+    return value
+
+
+def _required_signer_principal(values: dict[str, Any], key: str) -> str:
+    value = _required_text(values, key)
+    if _SIGNER_PRINCIPAL.fullmatch(value) is None:
+        raise ValueError
+    return value
+
+
+def _required_fingerprint(values: dict[str, Any], key: str) -> str:
+    value = _required_text(values, key)
+    if _FINGERPRINT.fullmatch(value) is None:
+        raise ValueError
+    return value
 
 
 def _state(values: dict[str, Any]) -> str:

@@ -1,0 +1,393 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
+      "properties": {
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "AllowedSignerDiagnostic": {
+      "additionalProperties": false,
+      "description": "Public identity of the active Git SSH verification trust anchor.",
+      "properties": {
+        "fingerprint": {
+          "pattern": "^SHA256:[A-Za-z0-9+/]{43}$",
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "principal": {
+          "pattern": "^[A-Za-z0-9._-]{1,128}$",
+          "title": "Principal",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "principal",
+        "fingerprint",
+        "sha256"
+      ],
+      "title": "AllowedSignerDiagnostic",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "CommandContext": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw": {
+          "title": "Raw",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw",
+        "parsed",
+        "resolved"
+      ],
+      "title": "CommandContext",
+      "type": "object"
+    },
+    "DoctorTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Name"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "type": {
+          "enum": [
+            "global",
+            "host",
+            "service",
+            "edge",
+            "profile"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DoctorTarget",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "HostVerifierDiagnostic": {
+      "additionalProperties": false,
+      "description": "Bounded, public-only facts used by the host-local V2 verifier.",
+      "properties": {
+        "allowed_signer": {
+          "$ref": "#/$defs/AllowedSignerDiagnostic"
+        },
+        "fetched_tip": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Fetched Tip",
+          "type": "string"
+        },
+        "git_ssh_signature_capable": {
+          "title": "Git Ssh Signature Capable",
+          "type": "boolean"
+        },
+        "registry_ref": {
+          "const": "refs/heads/main",
+          "title": "Registry Ref",
+          "type": "string"
+        },
+        "registry_remote": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Registry Remote",
+          "type": "string"
+        },
+        "runtime_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Runtime Revision",
+          "type": "string"
+        },
+        "signature_verification": {
+          "enum": [
+            "passed",
+            "failed",
+            "unavailable"
+          ],
+          "title": "Signature Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_remote",
+        "registry_ref",
+        "runtime_revision",
+        "allowed_signer",
+        "git_ssh_signature_capable",
+        "fetched_tip",
+        "signature_verification"
+      ],
+      "title": "HostVerifierDiagnostic",
+      "type": "object"
+    },
+    "HostVerifierResult": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/DoctorTarget"
+        },
+        "verifier": {
+          "$ref": "#/$defs/HostVerifierDiagnostic"
+        }
+      },
+      "required": [
+        "target",
+        "verifier"
+      ],
+      "title": "HostVerifierResult",
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "Meta",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CommandContext"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HostVerifierResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "infralink.cli/v1",
+      "default": "infralink.cli/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "next_actions"
+  ],
+  "title": "Envelope[HostVerifierResult]",
+  "type": "object"
+}

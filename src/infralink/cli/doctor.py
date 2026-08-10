@@ -566,6 +566,14 @@ def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
     )
 
 
+def _verifier_action(ctx: Context, host_id: str) -> Any:
+    return action(
+        "verifier",
+        [*_root_source_argv(ctx), "host", "verifier", host_id],
+        "Inspect the read-only self-deploy verifier facts",
+    )
+
+
 @click.command(name="doctor")
 @click.option(
     "--observation-plan",
@@ -722,6 +730,8 @@ def doctor(
     result = _apply_host_readiness(result, readiness)
     if readiness is not None and not readiness.ready:
         actions.append(_bootstrap_plan_action(ctx, target_id))
+        if any(item.id == "inspect_self_deploy_reconcile" for item in readiness.actions):
+            actions.append(_verifier_action(ctx, target_id))
     manifest_state = _host_manifest_git_state(ctx, target_id) if target_type == "host" else None
     result = _apply_host_manifest_git_state(result, manifest_state)
     if manifest_state is not None and manifest_state.state == "local_uncommitted":

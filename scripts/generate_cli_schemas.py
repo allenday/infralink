@@ -42,7 +42,11 @@ from infralink.cli.observation_contracts import (
     ProjectSecretsResult,
     ProjectViewResult,
 )
-from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult
+from infralink.cli.operation_contracts import (
+    HostApplyResult,
+    HostVerifierResult,
+    OperationStatusResult,
+)
 
 ROOT = Path(__file__).parents[1]
 OUTPUT = ROOT / "src/infralink/schemas/cli/v1"
@@ -54,6 +58,7 @@ MODELS: dict[str, Any] = {
     "hosts": Envelope[HostListResult],
     "host-show": Envelope[HostShowResult],
     "host-bootstrap": Envelope[HostBootstrapPlanResult],
+    "host-verifier": Envelope[HostVerifierResult],
     "host-apply": Envelope[HostApplyResult],
     "operation-status": Envelope[OperationStatusResult],
     "services": Envelope[ServiceListResult],

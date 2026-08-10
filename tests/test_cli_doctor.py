@@ -525,6 +525,8 @@ def test_doctor_host_fails_closed_when_latest_v2_reconcile_failed(
     )
     assert check["passed"] is False
     assert check["detail"] == "exit-code:1"
+    verifier_action = next(item for item in payload["next_actions"] if item["rel"] == "verifier")
+    assert shlex.split(verifier_action["command"])[-3:] == ["host", "verifier", HOST_ID]
 
 
 def test_doctor_keeps_zero_service_provisioning_host_out_of_unhealthy_state() -> None:
