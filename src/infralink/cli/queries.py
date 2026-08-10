@@ -128,15 +128,17 @@ def edge_summary(edge: Edge) -> EdgeSummary:
     if port is not None:
         target["port"] = port
     refs = sorted({edge.secret_ref} if edge.secret_ref else set())
-    return EdgeSummary(
-        id=edge.id,
-        type=edge.type.value,
-        from_=source,
-        to=target,
-        protocol=edge.protocol,
-        secret_ref_count=len(refs),
-        secret_refs=refs[:32],
-        secret_refs_truncated=len(refs) > 32,
+    return EdgeSummary.model_validate(
+        {
+            "id": edge.id,
+            "type": edge.type.value,
+            "from": source,
+            "to": target,
+            "protocol": edge.protocol,
+            "secret_ref_count": len(refs),
+            "secret_refs": refs[:32],
+            "secret_refs_truncated": len(refs) > 32,
+        }
     )
 
 

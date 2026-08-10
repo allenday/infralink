@@ -124,12 +124,12 @@ class Host:
     @property
     def self_deploy_v2_registry_layout_enabled(self) -> bool:
         """Whether this host's declared migration policy requires the V2 checkout root."""
-        return bool(self._schema.model_extra.get("self_deploy_v2_registry_layout_enabled"))
+        return bool((self._schema.model_extra or {}).get("self_deploy_v2_registry_layout_enabled"))
 
     @property
     def self_deploy_v2_reconcile_enabled(self) -> bool:
         """Whether this host declares V2 reconciliation as an active requirement."""
-        return bool(self._schema.model_extra.get("self_deploy_v2_reconcile_enabled", True))
+        return bool((self._schema.model_extra or {}).get("self_deploy_v2_reconcile_enabled", True))
 
     @property
     def managed_services(self) -> dict[str, Any]:
