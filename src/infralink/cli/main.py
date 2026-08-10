@@ -70,6 +70,7 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
         "install_jq",
         "install_bws_cli",
         "install_self_deploy_dependencies",
+        "enable_self_deploy_timer",
     }
 )
 
