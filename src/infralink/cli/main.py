@@ -290,7 +290,7 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         ],
     },
     ("host", "apply"): {
-        "description": "Apply one declared host through the control plane.",
+        "description": "Start one declared host-local reconcile operation.",
         "arguments": [{"name": "host", "type": "string", "required": True}],
         "options": [
             {"name": "dry_run", "type": "boolean", "required": False},
@@ -303,16 +303,20 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         ],
     },
     ("operation",): {
-        "description": "Inspect durable host apply operations.",
+        "description": "Inspect declared host-local reconcile operations.",
         "arguments": [],
         "options": [],
-        "examples": ["infralink operation status op_01J00000000000000000000000"],
+        "examples": [
+            "infralink operation status ssh/32a3324f-c3d0-4a4f-9587-52c099bcb3fb/8d6c4ad6-0e4a-4b58-9fe3-5ad9e1760d56"
+        ],
     },
     ("operation", "status"): {
-        "description": "Get the current state of one durable host apply operation.",
+        "description": "Get the current state of one declared host-local reconcile operation.",
         "arguments": [{"name": "operation_id", "type": "string", "required": True}],
         "options": [],
-        "examples": ["infralink operation status op_01J00000000000000000000000"],
+        "examples": [
+            "infralink operation status ssh/32a3324f-c3d0-4a4f-9587-52c099bcb3fb/8d6c4ad6-0e4a-4b58-9fe3-5ad9e1760d56"
+        ],
     },
     ("edge",): {
         "description": "Inspect edges.",
@@ -1802,9 +1806,9 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
 )
 @pass_context
 def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: int) -> int:
-    """Apply one declared host through the configured control plane."""
+    """Start the declared host-local reconcile unit through SSH."""
     from infralink.cli.operations import (
-        operation_provider_from_environment,
+        operation_provider,
         resolve_apply_request,
         wait_for_terminal,
     )
@@ -1833,10 +1837,10 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         )
         return 0
 
-    provider = operation_provider_from_environment()
+    provider = operation_provider()
     record = provider.submit(request)
     if wait:
-        record = wait_for_terminal(provider, record.id, timeout_seconds=timeout)
+        record = wait_for_terminal(provider, record.id, request, timeout_seconds=timeout)
     result = HostApplyResult(
         operation=OperationSummary(
             id=record.id,
@@ -1874,10 +1878,27 @@ def operation() -> None:
 @click.argument("operation_id")
 @pass_context
 def operation_status(ctx: Context, operation_id: str) -> int:
-    """Get the current state of one durable host apply operation."""
-    from infralink.cli.operations import operation_provider_from_environment
+    """Get the current state of one declared host-local reconcile operation."""
+    from infralink.cli.operations import operation_provider, resolve_apply_request
 
-    record = operation_provider_from_environment().status(operation_id)
+    if operation_id.startswith("op_"):
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Legacy control-plane operation status is unavailable",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Start a new declared host-local apply operation",
+            details={"operation_id": operation_id},
+        )
+    parts = operation_id.split("/", 2)
+    host_ref = parts[1] if len(parts) == 3 and parts[0] == "ssh" else operation_id
+    target_host = ctx.registry.get(host_ref)
+    if target_host is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    record = operation_provider().status(
+        operation_id, resolve_apply_request(ctx.registry_path, target_host)
+    )
     target = DoctorTarget.model_validate(record.target) if record.target is not None else None
     result = OperationStatusResult(
         operation=OperationSummary(

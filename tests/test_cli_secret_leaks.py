@@ -295,8 +295,13 @@ selection:
         ("host", "apply"): ([*source, "host", "apply", TARGET_ID, "--dry-run"], 3, False),
         ("info",): ([*source, "info"], 0, True),
         ("operation", "status"): (
-            ["operation", "status", "op_01J00000000000000000000000"],
-            4,
+            [
+                *source,
+                "operation",
+                "status",
+                "ssh/32a3324f-c3d0-4a4f-9587-52c099bcb3fb/8d6c4ad6-0e4a-4b58-9fe3-5ad9e1760d56",
+            ],
+            3,
             False,
         ),
         ("resolve",): ([*source, "resolve", EDGE_ID], 0, True),
