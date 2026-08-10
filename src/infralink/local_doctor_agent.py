@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -402,14 +403,20 @@ def collect_and_persist(runtime: LocalDoctorRuntimeConfig) -> LocalDoctorResult:
 
 
 def _emit(
-    ok: bool, path: list[str], result: dict[str, object] | None = None, *, error: str | None = None
+    ok: bool,
+    path: list[str],
+    result: dict[str, object] | None = None,
+    *,
+    flags: list[str],
+    error: str | None = None,
 ) -> None:
+    argv = ["infralink-local-doctor", *path, *flags]
     payload: dict[str, object] = {
         "schema_version": AGENT_SCHEMA_VERSION,
         "ok": ok,
         "command": {
-            "raw": " ".join(["infralink-local-doctor", *path]),
-            "parsed": {"path": path, "args": {}, "flags": []},
+            "raw": shlex.join(argv),
+            "parsed": {"path": path, "args": {}, "flags": flags},
         },
     }
     if ok:
@@ -444,9 +451,19 @@ def collect(config: Path, allowed_signers: Path) -> None:
         runtime = _runtime_or_error(config, allowed_signers)
         result = collect_and_persist(runtime)
     except (OSError, ValueError) as error:
-        _emit(False, ["collect"], error=str(error))
+        _emit(
+            False,
+            ["collect"],
+            flags=["--config", str(config), "--allowed-signers", str(allowed_signers)],
+            error=str(error),
+        )
         raise click.exceptions.Exit(2) from error
-    _emit(True, ["collect"], {"status": result.status})
+    _emit(
+        True,
+        ["collect"],
+        {"status": result.status},
+        flags=["--config", str(config), "--allowed-signers", str(allowed_signers)],
+    )
 
 
 @main.command()
@@ -457,7 +474,12 @@ def serve(config: Path, allowed_signers: Path) -> NoReturn:
     try:
         runtime = _runtime_or_error(config, allowed_signers)
     except ValueError as error:
-        _emit(False, ["serve"], error=str(error))
+        _emit(
+            False,
+            ["serve"],
+            flags=["--config", str(config), "--allowed-signers", str(allowed_signers)],
+            error=str(error),
+        )
         raise click.exceptions.Exit(2) from error
     server = serve_latest_result(
         runtime.http_address,
