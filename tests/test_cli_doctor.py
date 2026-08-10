@@ -125,16 +125,18 @@ def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network
     assert payload["result"]["evidence"] == []
     assert payload["result"]["status"] == "unknown"
     assert payload["result"]["reason"] == "gatus_not_configured"
-    assert payload["result"]["evidence_summary"] == [{
-        "adapter": "gatus",
-        "configured": False,
-        "healthy": 0,
-        "unhealthy": 0,
-        "unavailable": 0,
-        "unknown": 1,
-        "live_observation_count": 0,
-        "latest_observed_at": None,
-    }]
+    assert payload["result"]["evidence_summary"] == [
+        {
+            "adapter": "gatus",
+            "configured": False,
+            "healthy": 0,
+            "unhealthy": 0,
+            "unavailable": 0,
+            "unknown": 1,
+            "live_observation_count": 0,
+            "latest_observed_at": None,
+        }
+    ]
     configure = next(item for item in payload["next_actions"] if item["rel"] == "configure-gatus")
     assert configure["description"] == "Set INFRALINK_GATUS_URL or pass --gatus-url"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/doctor.json").read_text())
@@ -299,49 +301,73 @@ def test_doctor_uses_gatus_statuses_only_outside_declaration_validation(
     calls: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
-        lambda url, token: calls.append((url, token))
-        or [{"name": OBSERVATION_ID, "results": [{"success": True, "timestamp": "2026-08-09T00:00:00Z"}]}],
+        lambda url, token: (
+            calls.append((url, token))
+            or [
+                {
+                    "name": OBSERVATION_ID,
+                    "results": [{"success": True, "timestamp": "2026-08-09T00:00:00Z"}],
+                }
+            ]
+        ),
     )
 
     live = _invoke(
-        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
-        "--gatus-url", "http://gatus.test", "edge", OBSERVATION_ID,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        OBSERVATION_ID,
     )
     live_payload = json.loads(live.output)
     assert live.exit_code == 0
     assert calls == [("http://gatus.test", None)]
     assert live_payload["result"]["status"] == "healthy"
     assert live_payload["result"]["evidence"] == []
-    assert live_payload["result"]["evidence_summary"] == [{
-        "adapter": "gatus",
-        "configured": True,
-        "healthy": 1,
-        "unhealthy": 0,
-        "unavailable": 0,
-        "unknown": 0,
-        "live_observation_count": 1,
-        "latest_observed_at": "2026-08-09T00:00:00Z",
-    }]
+    assert live_payload["result"]["evidence_summary"] == [
+        {
+            "adapter": "gatus",
+            "configured": True,
+            "healthy": 1,
+            "unhealthy": 0,
+            "unavailable": 0,
+            "unknown": 0,
+            "live_observation_count": 1,
+            "latest_observed_at": "2026-08-09T00:00:00Z",
+        }
+    ]
     verbose = live_payload["next_actions"][0]["command"]
     assert "--gatus-url http://gatus.test" in verbose
     assert "--gatus-token-env INFRALINK_GATUS_TOKEN" in verbose
 
     validated = _invoke(
-        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
-        "--gatus-url", "http://gatus.test", "--validate", "edge", OBSERVATION_ID,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "--validate",
+        "edge",
+        OBSERVATION_ID,
     )
     assert validated.exit_code == 0
     assert calls == [("http://gatus.test", None)]
-    assert json.loads(validated.output)["result"]["evidence_summary"] == [{
-        "adapter": "gatus",
-        "configured": True,
-        "healthy": 0,
-        "unhealthy": 0,
-        "unavailable": 0,
-        "unknown": 1,
-        "live_observation_count": 0,
-        "latest_observed_at": None,
-    }]
+    assert json.loads(validated.output)["result"]["evidence_summary"] == [
+        {
+            "adapter": "gatus",
+            "configured": True,
+            "healthy": 0,
+            "unhealthy": 0,
+            "unavailable": 0,
+            "unknown": 1,
+            "live_observation_count": 0,
+            "latest_observed_at": None,
+        }
+    ]
 
 
 def test_configured_unhealthy_required_gatus_evidence_is_nonzero(
@@ -350,11 +376,22 @@ def test_configured_unhealthy_required_gatus_evidence_is_nonzero(
     plan, bindings = _observation_inputs(tmp_path)
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
-        lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": False, "timestamp": "2026-08-09T00:00:00Z"}]}],
+        lambda url, token: [
+            {
+                "name": OBSERVATION_ID,
+                "results": [{"success": False, "timestamp": "2026-08-09T00:00:00Z"}],
+            }
+        ],
     )
     result = _invoke(
-        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
-        "--gatus-url", "http://gatus.test", "edge", OBSERVATION_ID,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        OBSERVATION_ID,
     )
     payload = json.loads(result.output)
 
@@ -402,8 +439,14 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
         lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": True}]}],
     )
     result = _invoke(
-        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
-        "--gatus-url", "http://gatus.test", "host", "database.example.com",
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "host",
+        "database.example.com",
     )
     payload = json.loads(result.output)
 
@@ -459,8 +502,14 @@ def test_doctor_host_fails_closed_when_latest_v2_reconcile_failed(
     )
 
     result = _invoke(
-        "--observation-plan", str(plan), "--adapter-bindings", str(bindings),
-        "--gatus-url", "http://gatus.test", "host", "database.example.com",
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "host",
+        "database.example.com",
     )
     payload = json.loads(result.output)
 
@@ -490,9 +539,7 @@ def test_doctor_keeps_zero_service_provisioning_host_out_of_unhealthy_state() ->
         status="unknown",
         reason="no_live_observation_evidence",
     )
-    readiness = HostReadinessResult(
-        transport="root_ssh", ready=False, checks=[], actions=[]
-    )
+    readiness = HostReadinessResult(transport="root_ssh", ready=False, checks=[], actions=[])
 
     updated = _apply_host_readiness(result, readiness)
 
@@ -513,9 +560,7 @@ def test_doctor_reports_ready_zero_service_provisioning_host_as_provisioning() -
         status="unknown",
         reason="no_live_observation_evidence",
     )
-    readiness = HostReadinessResult(
-        transport="root_ssh", ready=True, checks=[], actions=[]
-    )
+    readiness = HostReadinessResult(transport="root_ssh", ready=True, checks=[], actions=[])
 
     updated = _apply_host_readiness(result, readiness)
 

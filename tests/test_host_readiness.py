@@ -143,7 +143,10 @@ def test_provisioning_host_without_declared_reconcile_does_not_require_timer_or_
     assert timer.passed is True
     assert reconcile.required is False
     assert reconcile.passed is True
-    assert not any(action.check_id in {"self_deploy_timer", "self_deploy_reconcile"} for action in readiness.actions)
+    assert not any(
+        action.check_id in {"self_deploy_timer", "self_deploy_reconcile"}
+        for action in readiness.actions
+    )
 
 
 def test_v2_reconcile_never_started_fails_closed_despite_systemd_defaults() -> None:

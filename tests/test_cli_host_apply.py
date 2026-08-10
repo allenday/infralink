@@ -59,8 +59,7 @@ def _registry_checkout(tmp_path: Path) -> tuple[Path, str]:
         "channel: v2\n"
         "targets:\n"
         + "".join(
-            f"  - host_uuid: {host_id}\n"
-            f"    policy: hosts/{host_id}/operations/release-policy.yml\n"
+            f"  - host_uuid: {host_id}\n    policy: hosts/{host_id}/operations/release-policy.yml\n"
             for host_id, _ in HOSTS
         ),
         encoding="utf-8",
@@ -170,9 +169,7 @@ def test_operation_status_is_a_resumable_provider_poll(
             )
 
     monkeypatch.setattr(operations, "operation_provider_from_environment", lambda: Provider())
-    response = CliRunner().invoke(
-        cli, ["operation", "status", "op_01J00000000000000000000000"]
-    )
+    response = CliRunner().invoke(cli, ["operation", "status", "op_01J00000000000000000000000"])
 
     payload = yaml.safe_load(response.output)
     assert response.exit_code == 0

@@ -39,7 +39,11 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.host_readiness import evaluate_host_readiness
-from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult, OperationSummary
+from infralink.cli.operation_contracts import (
+    HostApplyResult,
+    OperationStatusResult,
+    OperationSummary,
+)
 from infralink.cli.output import (
     command_context,
     error_envelope,
@@ -272,7 +276,10 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             {"name": "plan", "type": "boolean", "required": False},
             {"name": "apply", "type": "boolean", "required": False},
         ],
-        "examples": ["infralink host bootstrap host-1 --plan", "infralink host bootstrap host-1 --apply"],
+        "examples": [
+            "infralink host bootstrap host-1 --plan",
+            "infralink host bootstrap host-1 --apply",
+        ],
     },
     ("host", "apply"): {
         "description": "Apply one declared host through the control plane.",
@@ -282,7 +289,10 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             {"name": "wait", "type": "boolean", "required": False},
             {"name": "timeout", "type": "integer", "required": False},
         ],
-        "examples": ["infralink host apply relaxgg-db-es1", "infralink host apply relaxgg-db-es1 --wait"],
+        "examples": [
+            "infralink host apply relaxgg-db-es1",
+            "infralink host apply relaxgg-db-es1 --wait",
+        ],
     },
     ("operation",): {
         "description": "Inspect durable host apply operations.",
@@ -1683,7 +1693,9 @@ def host_show(
     is_flag=True,
     help="Emit a read-only bootstrap plan.",
 )
-@click.option("--apply", "apply_changes", is_flag=True, help="Apply only failed host baseline actions.")
+@click.option(
+    "--apply", "apply_changes", is_flag=True, help="Apply only failed host baseline actions."
+)
 @pass_context
 def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: bool) -> int:
     """Plan required host bootstrap actions without applying them."""
@@ -1718,11 +1730,25 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
             )
         completed = subprocess.run(
             [
-                "ansible-playbook", "-i", f"{address},", "-u", "root", str(playbook),
-                "-e", f"host_address={address}", "-e", f"host_uuid={target.uuid}", "-e", f"canonical_name={target.canonical_name}",
-                "-e", json.dumps({"bootstrap_actions": automated_actions}),
+                "ansible-playbook",
+                "-i",
+                f"{address},",
+                "-u",
+                "root",
+                str(playbook),
+                "-e",
+                f"host_address={address}",
+                "-e",
+                f"host_uuid={target.uuid}",
+                "-e",
+                f"canonical_name={target.canonical_name}",
+                "-e",
+                json.dumps({"bootstrap_actions": automated_actions}),
             ],
-            cwd=control_root, text=True, capture_output=True, check=False,
+            cwd=control_root,
+            text=True,
+            capture_output=True,
+            check=False,
         )
         if completed.returncode != 0:
             raise CliFailure(
@@ -1838,11 +1864,7 @@ def operation_status(ctx: Context, operation_id: str) -> int:
     from infralink.cli.operations import operation_provider_from_environment
 
     record = operation_provider_from_environment().status(operation_id)
-    target = (
-        DoctorTarget(**record.target)
-        if record.target is not None
-        else None
-    )
+    target = DoctorTarget(**record.target) if record.target is not None else None
     result = OperationStatusResult(
         operation=OperationSummary(id=record.id, state=record.state), target=target
     )

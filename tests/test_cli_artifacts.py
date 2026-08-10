@@ -351,7 +351,9 @@ def test_artifact_continuation_action_is_executable_and_source_preserving(
             item for item in first_payload["next_actions"] if item["rel"] == "continue"
         )
         cursor = first_payload["result"]["artifacts"]["page"]["next_cursor"]
-        replay = [cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])]
+        replay = [
+            cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])
+        ]
         second = runner.invoke(cli, ["--output", "json", *replay[1:]])
     second_payload = _payload(second)
 

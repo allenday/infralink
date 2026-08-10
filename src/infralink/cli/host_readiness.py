@@ -41,9 +41,7 @@ def evaluate_host_readiness(
     requires_v2_registry_layout = bool(
         getattr(host, "self_deploy_v2_registry_layout_enabled", False)
     )
-    require_reconcile = bool(
-        getattr(host, "self_deploy_v2_reconcile_enabled", True)
-    )
+    require_reconcile = bool(getattr(host, "self_deploy_v2_reconcile_enabled", True))
     probe = replace(probe, requires_v2_registry_layout=requires_v2_registry_layout)
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name=canonical_name,

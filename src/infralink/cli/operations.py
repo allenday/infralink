@@ -79,7 +79,9 @@ class HttpOperationProvider:
         self._base_url = base_url.rstrip("/")
 
     def submit(self, request: ApplyRequest) -> OperationRecord:
-        return OperationRecord.from_payload(self._request("POST", "/operations", request.as_payload()))
+        return OperationRecord.from_payload(
+            self._request("POST", "/operations", request.as_payload())
+        )
 
     def status(self, operation_id: str) -> OperationRecord:
         if not _OPERATION_ID.fullmatch(operation_id):
@@ -175,7 +177,9 @@ def _git_revision(root: Path) -> str:
             text=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
-        raise _registry_failure("Host apply could not resolve the registry revision", root) from None
+        raise _registry_failure(
+            "Host apply could not resolve the registry revision", root
+        ) from None
     if not _REVISION.fullmatch(revision):
         raise _registry_failure("Host apply resolved an invalid registry revision", root)
     return revision

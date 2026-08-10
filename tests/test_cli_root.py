@@ -122,7 +122,10 @@ def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None
             "list",
         ],
     )
-    assert json.loads(json_result.output)["next_actions"][0]["command"] == "infralink --output json help validate"
+    assert (
+        json.loads(json_result.output)["next_actions"][0]["command"]
+        == "infralink --output json help validate"
+    )
 
 
 def test_bare_group_usage_preserves_explicit_json_output() -> None:
@@ -150,7 +153,9 @@ def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> Non
     payload = json.loads(result.output)
     show = next(action for action in payload["next_actions"] if action["rel"] == "show")
     host_id = payload["result"]["items"][0]
-    replay = CliRunner().invoke(cli, [host_id if value == "{id}" else value for value in shlex.split(show["command"])[1:]])
+    replay = CliRunner().invoke(
+        cli, [host_id if value == "{id}" else value for value in shlex.split(show["command"])[1:]]
+    )
 
     assert replay.exit_code == 0
     assert replay.output.startswith("{")
@@ -190,7 +195,10 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
         "list",
         "show",
     }
-    assert all(action["command"].startswith("infralink help host") for action in bare_payload["next_actions"])
+    assert all(
+        action["command"].startswith("infralink help host")
+        for action in bare_payload["next_actions"]
+    )
 
 
 def test_root_help_is_a_compact_generated_command_index() -> None:

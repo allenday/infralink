@@ -131,9 +131,7 @@ def ok_envelope(
     )
     payload = envelope.model_dump(mode="json")
     payload["next_actions"] = [
-        render_action(
-            item, context.resolved, inherited_options=_inherited_source_options(context)
-        )
+        render_action(item, context.resolved, inherited_options=_inherited_source_options(context))
         for item in cast(list[Action], next_actions)
     ]
     payload.pop("error", None)
@@ -220,9 +218,7 @@ def error_envelope(
     )
     payload = envelope.model_dump(mode="json")
     payload["next_actions"] = [
-        render_action(
-            item, context.resolved, inherited_options=_inherited_source_options(context)
-        )
+        render_action(item, context.resolved, inherited_options=_inherited_source_options(context))
         for item in failure.next_actions
     ]
     payload.pop("result", None)

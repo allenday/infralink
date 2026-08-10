@@ -111,9 +111,7 @@ def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) 
     )
     assert payload["next_actions"][0]["safe"] is True
 
-    follow_up = CliRunner().invoke(
-        cli, shlex.split(payload["next_actions"][0]["command"])[1:]
-    )
+    follow_up = CliRunner().invoke(cli, shlex.split(payload["next_actions"][0]["command"])[1:])
     assert follow_up.exit_code == 0
     assert json.loads(follow_up.output)["result"]["readiness"] == payload["result"]["readiness"]
 
@@ -140,9 +138,14 @@ def test_real_module_apply_failure_emits_an_envelope_and_nonzero_exit() -> None:
             sys.executable,
             "-m",
             "infralink",
-            "--registry", str(ROOT / "examples" / "registry.yml"),
-            "--edges", str(ROOT / "examples" / "edges.yml"),
-            "host", "bootstrap", "database.example.com", "--apply",
+            "--registry",
+            str(ROOT / "examples" / "registry.yml"),
+            "--edges",
+            str(ROOT / "examples" / "edges.yml"),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--apply",
         ],
         cwd=ROOT,
         env=environment,
@@ -175,7 +178,15 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monke
     monkeypatch.setattr(
         "infralink.cli.main.evaluate_host_readiness",
         lambda *_args: evaluate_readiness(
-            type("Host", (), {"canonical_name": "database.example.com", "tailscale_ip": "192.0.2.10", "public_ip": None})(),
+            type(
+                "Host",
+                (),
+                {
+                    "canonical_name": "database.example.com",
+                    "tailscale_ip": "192.0.2.10",
+                    "public_ip": None,
+                },
+            )(),
             type("Transport", (), {"probe": lambda _self, _address: readiness})(),
         ),
     )
@@ -193,9 +204,16 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monke
     result = CliRunner().invoke(
         cli,
         [
-            "--output", "json", "--registry", str(ROOT / "examples" / "registry.yml"),
-            "--edges", str(ROOT / "examples" / "edges.yml"),
-            "host", "bootstrap", "database.example.com", "--apply",
+            "--output",
+            "json",
+            "--registry",
+            str(ROOT / "examples" / "registry.yml"),
+            "--edges",
+            str(ROOT / "examples" / "edges.yml"),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--apply",
         ],
     )
 

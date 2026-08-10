@@ -29,14 +29,23 @@ def redact_argv(argv: list[str]) -> list[str]:
             if separator:
                 index += 1
                 continue
-            if index + 1 < len(argv) and argv[index + 1].partition("=")[0] not in _SENSITIVE_ARGV_OPTIONS:
+            if (
+                index + 1 < len(argv)
+                and argv[index + 1].partition("=")[0] not in _SENSITIVE_ARGV_OPTIONS
+            ):
                 redacted.append(_REDACTED)
                 index += 2
                 continue
             index += 1
             continue
         attached_short = next(
-            (short for short in _SENSITIVE_SHORT_OPTIONS if value.startswith(short) and len(value) > len(short) and not value.startswith("--")),
+            (
+                short
+                for short in _SENSITIVE_SHORT_OPTIONS
+                if value.startswith(short)
+                and len(value) > len(short)
+                and not value.startswith("--")
+            ),
             None,
         )
         if attached_short is not None:
@@ -47,9 +56,7 @@ def redact_argv(argv: list[str]) -> list[str]:
     return redacted
 
 
-def _inherits_resolved_option(
-    option: str, value: str, resolved: Mapping[str, Any]
-) -> bool:
+def _inherits_resolved_option(option: str, value: str, resolved: Mapping[str, Any]) -> bool:
     """Whether an action can inherit this exact option from its response context."""
     resolved_value = resolved.get(option.removeprefix("--").replace("-", "_"))
     return resolved_value is not None and str(resolved_value) == value
@@ -87,8 +94,7 @@ def render_action(
     if action_value.templated:
         rendered["templated"] = True
         rendered["bindings"] = {
-            name: binding.model_dump(mode="json")
-            for name, binding in action_value.bindings.items()
+            name: binding.model_dump(mode="json") for name, binding in action_value.bindings.items()
         }
     return rendered
 

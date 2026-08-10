@@ -49,7 +49,10 @@ def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
 
 
 def _gatus_evidence(
-    evidence: list[DoctorEvidence], bindings: dict[str, Any] | None, url: str | None, token: str | None
+    evidence: list[DoctorEvidence],
+    bindings: dict[str, Any] | None,
+    url: str | None,
+    token: str | None,
 ) -> list[DoctorEvidence]:
     if not url:
         return evidence
@@ -71,21 +74,37 @@ def _gatus_evidence(
     updated: list[DoctorEvidence] = []
     for item in evidence:
         binding = binding_by_identity.get(item.id)
-        status = by_identity.get(binding.get("output_identity")) if isinstance(binding, dict) else None
+        status = (
+            by_identity.get(binding.get("output_identity")) if isinstance(binding, dict) else None
+        )
         if item.adapter != "gatus" or item.reason != "no_live_observation_evidence":
             updated.append(item)
         elif status is None:
             updated.append(item.model_copy(update={"reason": "gatus_output_identity_missing"}))
         else:
             results = status.get("results")
-            latest = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else {}
+            latest = (
+                results[0]
+                if isinstance(results, list) and results and isinstance(results[0], dict)
+                else {}
+            )
             success = latest.get("success")
-            observed_at = latest.get("timestamp") if isinstance(latest.get("timestamp"), str) else None
-            updated.append(item.model_copy(update={
-                "status": "healthy" if success is True else "unhealthy" if success is False else "unknown",
-                "reason": None if isinstance(success, bool) else "gatus_result_missing",
-                "observed_at": observed_at,
-            }))
+            observed_at = (
+                latest.get("timestamp") if isinstance(latest.get("timestamp"), str) else None
+            )
+            updated.append(
+                item.model_copy(
+                    update={
+                        "status": "healthy"
+                        if success is True
+                        else "unhealthy"
+                        if success is False
+                        else "unknown",
+                        "reason": None if isinstance(success, bool) else "gatus_result_missing",
+                        "observed_at": observed_at,
+                    }
+                )
+            )
     return updated
 
 
@@ -593,10 +612,16 @@ def doctor(
         plan = _load_mapping(observation_plan, "observation_plan") if observation_plan else None
         bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
         coverage, evidence = _coverage(plan, bindings, None, "") if plan is not None else (None, [])
-        if not declaration_only and gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+        if (
+            not declaration_only
+            and gatus_url is None
+            and any(item.adapter == "gatus" for item in evidence)
+        ):
             raise _configuration_required(ctx, "gatus_url")
         if not declaration_only:
-            evidence = _gatus_evidence(evidence, bindings, gatus_url, os.environ.get(gatus_token_env))
+            evidence = _gatus_evidence(
+                evidence, bindings, gatus_url, os.environ.get(gatus_token_env)
+            )
         status, reason = _result_status(coverage, evidence, gatus_url)
 
         result = DoctorResult(
@@ -627,7 +652,11 @@ def doctor(
             observation_plan,
             adapter_bindings,
         )
-        return 0 if status == "healthy" or declaration_only and coverage is not None and coverage.valid else 1
+        return (
+            0
+            if status == "healthy" or declaration_only and coverage is not None and coverage.valid
+            else 1
+        )
 
     if target_ref is None:
         raise click.UsageError("a target reference is required")
@@ -647,7 +676,11 @@ def doctor(
         adapter_bindings,
     )
     coverage, evidence = _coverage(plan, bindings, target_type, target_id)
-    if not declaration_only and gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+    if (
+        not declaration_only
+        and gatus_url is None
+        and any(item.adapter == "gatus" for item in evidence)
+    ):
         raise _configuration_required(ctx, "gatus_url")
     if not declaration_only:
         evidence = _gatus_evidence(evidence, bindings, gatus_url, os.environ.get(gatus_token_env))
@@ -683,7 +716,9 @@ def doctor(
                 "Set INFRALINK_GATUS_URL or pass --gatus-url",
             )
         )
-    readiness = _host_readiness(ctx, target_ref, declaration_only) if target_type == "host" else None
+    readiness = (
+        _host_readiness(ctx, target_ref, declaration_only) if target_type == "host" else None
+    )
     result = _apply_host_readiness(result, readiness)
     if readiness is not None and not readiness.ready:
         actions.append(_bootstrap_plan_action(ctx, target.id))

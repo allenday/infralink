@@ -58,9 +58,7 @@ class Action(ContractModel):
     description: str
     safe: bool
     templated: bool = Field(default=False, exclude_if=lambda value: not value)
-    bindings: dict[str, Binding] = Field(
-        default_factory=dict, exclude_if=lambda value: not value
-    )
+    bindings: dict[str, Binding] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class CommandContext(ContractModel):

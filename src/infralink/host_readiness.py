@@ -216,8 +216,7 @@ class HostReadinessEvaluator:
             ReadinessCheck(
                 id=requirement.id,
                 required=require_reconcile
-                or requirement.id
-                not in {"self_deploy_timer", "self_deploy_reconcile"},
+                or requirement.id not in {"self_deploy_timer", "self_deploy_reconcile"},
                 passed=outcomes[requirement.id][0]
                 if require_reconcile
                 or requirement.id not in {"self_deploy_timer", "self_deploy_reconcile"}

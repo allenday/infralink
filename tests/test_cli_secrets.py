@@ -150,10 +150,17 @@ def test_inspect_ref_unions_locations_across_projects_and_pages(
     assert [item["project"] for item in first["result"]["references"]["items"]] == [PROJECT_A]
     assert first["result"]["references"]["page"]["total"] == 2
     assert first["result"]["locations"]["page"]["total"] == 2
-    continuation = next(item for item in first["next_actions"] if item.get("bindings", {}).get("cursor", {}).get("source") == "result.locations.page.next_cursor")
+    continuation = next(
+        item
+        for item in first["next_actions"]
+        if item.get("bindings", {}).get("cursor", {}).get("source")
+        == "result.locations.page.next_cursor"
+    )
     assert "secrets inspect --ref shared" in continuation["command"]
     cursor = first["result"]["locations"]["page"]["next_cursor"]
-    replay_argv = [cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])]
+    replay_argv = [
+        cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])
+    ]
     second = CliRunner().invoke(cli, replay_argv[1:])
     second_body = yaml.safe_load(second.output)
     assert second_body["result"]["locations"]["page"]["returned"] == 1

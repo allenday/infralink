@@ -53,5 +53,7 @@ def inspect_host_manifest(registry_root: Path, host_id: str) -> HostManifestGitS
     status = completed.stdout.strip()
     if not status:
         return HostManifestGitState("tracked_clean", None, manifest_path, git_worktree)
-    reason = "registry_manifest_untracked" if status.startswith("??") else "registry_manifest_modified"
+    reason = (
+        "registry_manifest_untracked" if status.startswith("??") else "registry_manifest_modified"
+    )
     return HostManifestGitState("local_uncommitted", reason, manifest_path, git_worktree)
