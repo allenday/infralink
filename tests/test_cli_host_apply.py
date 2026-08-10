@@ -444,7 +444,8 @@ def test_operation_status_reports_bounded_sanitized_terminal_failure_diagnostics
             "Result=exit-code\n"
             "ExecMainStatus=1\n"
             "__INFRALINK_JOURNAL__\n"
-            '{"ok":false,"code":"registry_revision_mismatch","token":"super-secret-value"}\n'
+            '{"ok":false,"error_code":"reconcile_launcher_process_failed",'
+            '"error_stage":"apply","retryable":true,"token":"super-secret-value"}\n'
         ),
     )
     monkeypatch.setattr(
@@ -463,9 +464,146 @@ def test_operation_status_reports_bounded_sanitized_terminal_failure_diagnostics
     assert payload["result"]["operation"] == {"id": operation_id, "state": "failed"}
     assert payload["result"]["failure"] == {
         "unit": {"active_state": "inactive", "result": "exit-code", "exec_main_status": 1},
-        "journal": ["code: registry_revision_mismatch"],
+        "journal": [
+            "code: reconcile_launcher_process_failed",
+            "stage: apply",
+            "retryable: true",
+        ],
     }
     assert "super-secret-value" not in response.output
+
+
+def test_host_apply_wait_projects_the_same_canonical_failure_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    responses = iter(
+        [
+            _completed(
+                f"InvocationID={INVOCATION}\n"
+                "ActiveState=activating\n"
+                "Result=success\n"
+                "ExecMainStatus=0\n"
+            ),
+            _completed(
+                f"InvocationID={INVOCATION}\n"
+                "ActiveState=failed\n"
+                "Result=exit-code\n"
+                "ExecMainStatus=1\n"
+                "__INFRALINK_JOURNAL__\n"
+                '{"ok":false,"error_code":"reconcile_launcher_process_failed",'
+                '"error_stage":"apply","retryable":true,"secret":"not-output"}\n'
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run", lambda *args, **kwargs: next(responses)
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+    monkeypatch.setattr("infralink.cli.operations.time.sleep", lambda _: None)
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--wait", "--timeout", "1"]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert_schema(payload, "host-apply")
+    assert payload["result"]["failure"]["journal"] == [
+        "code: reconcile_launcher_process_failed",
+        "stage: apply",
+        "retryable: true",
+    ]
+    assert "not-output" not in response.output
+
+
+@pytest.mark.parametrize(
+    "journal",
+    [
+        '{"ok":true,"code":"successful_but_irrelevant"}',
+        '{"code":"unscoped_legacy_code"}',
+        '{"ok":false,"code":"legacy_code_without_canonical_error_code"}',
+        '{"ok":false,"error_code":"missing_stage_and_retryable"}',
+        '{"ok":false,"error_code":"invalid_stage","error_stage":"unsafe","retryable":true}',
+        '{"ok":false,"error_code":"invalid_retryable","error_stage":"apply","retryable":"true"}',
+    ],
+)
+def test_operation_status_omits_noncanonical_journal_codes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, journal: str
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            f"InvocationID={INVOCATION}\n"
+            "ActiveState=inactive\n"
+            "Result=exit-code\n"
+            "ExecMainStatus=1\n"
+            "__INFRALINK_JOURNAL__\n"
+            f"{journal}\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(
+        cli,
+        ["--registry", str(registry), "operation", "status", f"ssh/{HOST_ID}/{INVOCATION}"],
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert payload["result"]["failure"]["journal"] == ["unstructured journal output omitted"]
+    assert "code:" not in response.output
+
+
+def test_operation_status_never_truncates_a_canonical_failure_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    journal = "\n".join(
+        (
+            '{"ok":false,"error_code":"first_failure","error_stage":"inspect","retryable":false}',
+            '{"ok":false,"error_code":"second_failure","error_stage":"apply","retryable":true}',
+            '{"ok":false,"error_code":"third_failure","error_stage":"record","retryable":false}',
+        )
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            f"InvocationID={INVOCATION}\n"
+            "ActiveState=inactive\n"
+            "Result=exit-code\n"
+            "ExecMainStatus=1\n"
+            "__INFRALINK_JOURNAL__\n"
+            f"{journal}\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(
+        cli,
+        ["--registry", str(registry), "operation", "status", f"ssh/{HOST_ID}/{INVOCATION}"],
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert payload["result"]["failure"]["journal"] == [
+        "code: first_failure",
+        "stage: inspect",
+        "retryable: false",
+        "code: second_failure",
+        "stage: apply",
+        "retryable: true",
+    ]
 
 
 def test_operation_status_uses_current_invocation_before_old_success_journal(
