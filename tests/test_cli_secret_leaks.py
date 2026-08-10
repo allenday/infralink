@@ -292,7 +292,13 @@ selection:
             True,
         ),
         ("host", "bootstrap"): ([*source, "host", "bootstrap", TARGET_ID, "--plan"], 0, True),
+        ("host", "apply"): ([*source, "host", "apply", TARGET_ID, "--dry-run"], 3, False),
         ("info",): ([*source, "info"], 0, True),
+        ("operation", "status"): (
+            ["operation", "status", "op_01J00000000000000000000000"],
+            4,
+            False,
+        ),
         ("resolve",): ([*source, "resolve", EDGE_ID], 0, True),
         ("secrets", "audit"): ([*source, "secrets", "audit"], 0, True),
         ("secrets", "inspect"): ([*source, "secrets", "inspect"], 0, True),
