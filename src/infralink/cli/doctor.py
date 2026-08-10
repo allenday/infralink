@@ -24,8 +24,8 @@ from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, pass_context
 from infralink.cli.output import ok_envelope
-from infralink.host_transport import SshReadinessTransport
 from infralink.host_registry_state import HostManifestGitState, inspect_host_manifest
+from infralink.host_transport import SshReadinessTransport
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"

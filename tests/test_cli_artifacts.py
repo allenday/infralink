@@ -3,8 +3,8 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
-import shlex
 import os
+import shlex
 import stat
 from pathlib import Path
 

@@ -10,7 +10,6 @@ from click.testing import CliRunner
 from infralink.cli.main import cli
 from tests.cli_helpers import assert_schema
 
-
 HOSTS = (
     ("32a3324f-c3d0-4a4f-9587-52c099bcb3fb", "relaxgg-db-es1"),
     ("7ffe46b7-0eb4-40cb-8e14-ea679b9948f4", "cyberstorm-watchtower"),

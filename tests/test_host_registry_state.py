@@ -5,7 +5,6 @@ from pathlib import Path
 
 from infralink.host_registry_state import inspect_host_manifest
 
-
 HOST_ID = "32a3324f-c3d0-4a4f-9587-52c099bcb3fb"
 
 

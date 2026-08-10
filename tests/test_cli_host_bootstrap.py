@@ -10,8 +10,8 @@ from pathlib import Path
 import yaml
 from click.testing import CliRunner
 
-from infralink.cli.main import cli
 from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_readiness
+from infralink.cli.main import cli
 from infralink.host_readiness import HostReadinessProbe
 
 ROOT = Path(__file__).resolve().parents[1]

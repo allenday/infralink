@@ -15,8 +15,8 @@ from infralink.cli.contracts import (
     EdgeShowResult,
     Envelope,
     HelpResult,
-    HostListResult,
     HostBootstrapPlanResult,
+    HostListResult,
     HostShowResult,
     InfoResult,
     PublisherRequestResult,
@@ -32,7 +32,6 @@ from infralink.cli.contracts import (
     ValidateResult,
     VersionResult,
 )
-from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult
 from infralink.cli.observation_contracts import (
     CapabilitiesResult,
     ExplainResult,
@@ -43,6 +42,7 @@ from infralink.cli.observation_contracts import (
     ProjectSecretsResult,
     ProjectViewResult,
 )
+from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult
 
 ROOT = Path(__file__).parents[1]
 OUTPUT = ROOT / "src/infralink/schemas/cli/v1"
