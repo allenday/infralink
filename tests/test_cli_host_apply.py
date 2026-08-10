@@ -432,6 +432,104 @@ def test_operation_status_reads_a_terminal_result_from_the_host_journal(
     assert payload["result"]["operation"] == {"id": operation_id, "state": "converged"}
 
 
+def test_operation_status_reports_bounded_sanitized_terminal_failure_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            f"InvocationID={INVOCATION}\n"
+            "ActiveState=inactive\n"
+            "Result=exit-code\n"
+            "ExecMainStatus=1\n"
+            "__INFRALINK_JOURNAL__\n"
+            '{"ok":false,"code":"registry_revision_mismatch","token":"super-secret-value"}\n'
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+    operation_id = f"ssh/{HOST_ID}/{INVOCATION}"
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "operation", "status", operation_id]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert_schema(payload, "operation-status")
+    assert payload["result"]["operation"] == {"id": operation_id, "state": "failed"}
+    assert payload["result"]["failure"] == {
+        "unit": {"active_state": "inactive", "result": "exit-code", "exec_main_status": 1},
+        "journal": ["code: registry_revision_mismatch"],
+    }
+    assert "super-secret-value" not in response.output
+
+
+def test_operation_status_uses_current_invocation_before_old_success_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            f"InvocationID={INVOCATION}\n"
+            "ActiveState=activating\n"
+            "Result=success\n"
+            "ExecMainStatus=0\n"
+            '{"ok":true,"run_id":"prior-success-is-not-terminal"}\n'
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+    operation_id = f"ssh/{HOST_ID}/{INVOCATION}"
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "operation", "status", operation_id]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert payload["result"]["operation"] == {"id": operation_id, "state": "applying"}
+    assert "failure" not in payload["result"]
+
+
+def test_operation_status_does_not_read_journal_properties_as_current_unit_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            f"InvocationID={INVOCATION}\n"
+            "ActiveState=activating\n"
+            "Result=success\n"
+            "ExecMainStatus=0\n"
+            "__INFRALINK_JOURNAL__\n"
+            "ActiveState=inactive\n"
+            "Result=success\n"
+            "ExecMainStatus=0\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+    operation_id = f"ssh/{HOST_ID}/{INVOCATION}"
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "operation", "status", operation_id]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert payload["result"]["operation"] == {"id": operation_id, "state": "applying"}
+
+
 def test_operation_status_refuses_a_run_reference_for_an_undeclared_host(tmp_path: Path) -> None:
     registry = _registry_checkout(tmp_path, declared=False)
 

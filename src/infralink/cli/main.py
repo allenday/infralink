@@ -1847,6 +1847,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
             state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
         ),
         target=doctor_target,
+        failure=record.failure,
     )
     actions = []
     if record.state in {"queued", "applying"}:
@@ -1906,6 +1907,7 @@ def operation_status(ctx: Context, operation_id: str) -> int:
             state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
         ),
         target=target,
+        failure=record.failure,
     )
     actions = []
     if record.state in {"queued", "applying"}:

@@ -174,6 +174,17 @@
           "title": "Dry Run",
           "type": "boolean"
         },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "operation": {
           "anyOf": [
             {
@@ -207,6 +218,32 @@
       "title": "Meta",
       "type": "object"
     },
+    "OperationFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "journal": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Journal",
+          "type": "array"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationUnitFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "OperationFailure",
+      "type": "object"
+    },
     "OperationSummary": {
       "additionalProperties": false,
       "properties": {
@@ -231,6 +268,30 @@
         "state"
       ],
       "title": "OperationSummary",
+      "type": "object"
+    },
+    "OperationUnitFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "active_state": {
+          "title": "Active State",
+          "type": "string"
+        },
+        "exec_main_status": {
+          "title": "Exec Main Status",
+          "type": "integer"
+        },
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "active_state",
+        "result",
+        "exec_main_status"
+      ],
+      "title": "OperationUnitFailure",
       "type": "object"
     }
   },

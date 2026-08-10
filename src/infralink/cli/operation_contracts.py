@@ -20,12 +20,25 @@ class OperationSummary(ContractModel):
     state: Literal["queued", "applying", "converged", "failed"]
 
 
+class OperationUnitFailure(ContractModel):
+    active_state: str
+    result: str
+    exec_main_status: int
+
+
+class OperationFailure(ContractModel):
+    unit: OperationUnitFailure | None = None
+    journal: list[str] = Field(default_factory=list, max_length=8)
+
+
 class HostApplyResult(ContractModel):
     operation: OperationSummary | None = Field(default=None, exclude_if=lambda value: value is None)
     target: DoctorTarget
     dry_run: bool = Field(default=False, exclude_if=lambda value: not value)
+    failure: OperationFailure | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class OperationStatusResult(ContractModel):
     operation: OperationSummary
     target: DoctorTarget | None = None
+    failure: OperationFailure | None = Field(default=None, exclude_if=lambda value: value is None)
