@@ -8,6 +8,7 @@ from typing import Any, cast, overload
 
 from pydantic import BaseModel
 
+from infralink.cli.actions import SENSITIVE_OPTIONS as SENSITIVE_OPTIONS
 from infralink.cli.actions import redact_argv, render_action
 from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
 from infralink.cli.errors import CliFailure
