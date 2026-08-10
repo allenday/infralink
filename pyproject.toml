@@ -64,6 +64,7 @@ bws = [
 
 [project.scripts]
 infralink = "infralink.cli.main:run"
+infralink-local-doctor = "infralink.local_doctor_agent:run"
 
 [project.entry-points."infralink.commands"]
 check = "infralink.cli.check:check"
