@@ -105,6 +105,10 @@ def test_collect_verifies_runtime_config_and_writes_state_and_metrics_atomically
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["ok"] is True
+    assert payload["command"] == {
+        "raw": "infralink-local-doctor collect",
+        "parsed": {"path": ["collect"], "args": {}, "flags": []},
+    }
     assert payload["result"]["status"] == "healthy"
     state = LocalDoctorResult.from_dict(
         json.loads((tmp_path / "state" / "latest.json").read_text(encoding="utf-8"))

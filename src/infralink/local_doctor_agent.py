@@ -407,7 +407,10 @@ def _emit(
     payload: dict[str, object] = {
         "schema_version": AGENT_SCHEMA_VERSION,
         "ok": ok,
-        "command": {"path": path},
+        "command": {
+            "raw": " ".join(["infralink-local-doctor", *path]),
+            "parsed": {"path": path, "args": {}, "flags": []},
+        },
     }
     if ok:
         payload["result"] = result or {}
