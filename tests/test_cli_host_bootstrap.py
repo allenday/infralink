@@ -267,3 +267,74 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(
 
 def test_baseline_executor_mirrors_the_v2_timer_capability() -> None:
     assert "enable_self_deploy_timer" in BASELINE_EXECUTOR_ACTIONS
+
+
+def test_host_bootstrap_apply_forwards_only_the_timer_action_when_it_alone_is_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    readiness = HostReadinessProbe(
+        reachable=True,
+        hostname="database.example.com",
+        machine_id="machine-id",
+        commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+        devops_account=True,
+        devops_authorized_access=True,
+        bws_config=True,
+        self_deploy_dependencies=True,
+        self_deploy_runtime=True,
+        self_deploy_timer_enabled=False,
+        self_deploy_timer_active=False,
+        error=None,
+    )
+    monkeypatch.setattr(
+        "infralink.cli.main.evaluate_host_readiness",
+        lambda *_args: evaluate_readiness(
+            type(
+                "Host",
+                (),
+                {
+                    "canonical_name": "database.example.com",
+                    "tailscale_ip": "192.0.2.10",
+                    "public_ip": None,
+                },
+            )(),
+            type("Transport", (), {"probe": lambda _self, _address: readiness})(),
+        ),
+    )
+    control_root = tmp_path / "control"
+    playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+    playbook.parent.mkdir(parents=True)
+    playbook.touch()
+    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: control_root)
+    calls: list[object] = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        "infralink.cli.main.subprocess.run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or Completed(),
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(ROOT / "examples" / "registry.yml"),
+            "--edges",
+            str(ROOT / "examples" / "edges.yml"),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--apply",
+        ],
+    )
+
+    # The executor succeeded, but this response still represents the pre-apply
+    # readiness probe and therefore remains negative until the next probe.
+    assert result.exit_code == 1
+    argv, _kwargs = calls[0]
+    assert json.loads(argv[0][-1])["bootstrap_actions"] == ["enable_self_deploy_timer"]
