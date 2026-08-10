@@ -95,10 +95,10 @@ def test_collect_verifies_runtime_config_and_writes_state_and_metrics_atomically
         main,
         [
             "collect",
-            "--config",
-            str(config),
             "--allowed-signers",
             str(allowed_signers),
+            "--config",
+            str(config),
         ],
     )
 
@@ -106,11 +106,11 @@ def test_collect_verifies_runtime_config_and_writes_state_and_metrics_atomically
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["command"] == {
-        "raw": f"infralink-local-doctor collect --config {config} --allowed-signers {allowed_signers}",
+        "raw": f"infralink-local-doctor collect --allowed-signers {allowed_signers} --config {config}",
         "parsed": {
             "path": ["collect"],
-            "args": {},
-            "flags": ["--config", str(config), "--allowed-signers", str(allowed_signers)],
+            "args": {"allowed_signers": str(allowed_signers), "config": str(config)},
+            "flags": ["--allowed-signers", "--config"],
         },
     }
     assert payload["next_actions"] == []

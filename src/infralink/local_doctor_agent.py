@@ -402,22 +402,36 @@ def collect_and_persist(runtime: LocalDoctorRuntimeConfig) -> LocalDoctorResult:
     return result
 
 
+class _AgentCommand(click.Command):
+    """Retain the command token order Click consumed for the response contract."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        ctx.meta["infralink_local_doctor_raw_args"] = list(args)
+        return super().parse_args(ctx, args)
+
+
+def _command_context(
+    ctx: click.Context, path: list[str], arguments: dict[str, str]
+) -> dict[str, object]:
+    raw_args = list(ctx.meta.get("infralink_local_doctor_raw_args", []))
+    flags = [argument.split("=", 1)[0] for argument in raw_args if argument.startswith("-")]
+    return {
+        "raw": shlex.join(["infralink-local-doctor", *path, *raw_args]),
+        "parsed": {"path": path, "args": arguments, "flags": flags},
+    }
+
+
 def _emit(
     ok: bool,
-    path: list[str],
+    command: dict[str, object],
     result: dict[str, object] | None = None,
     *,
-    flags: list[str],
     error: str | None = None,
 ) -> None:
-    argv = ["infralink-local-doctor", *path, *flags]
     payload: dict[str, object] = {
         "schema_version": AGENT_SCHEMA_VERSION,
         "ok": ok,
-        "command": {
-            "raw": shlex.join(argv),
-            "parsed": {"path": path, "args": {}, "flags": flags},
-        },
+        "command": command,
         "next_actions": [],
     }
     if ok:
@@ -443,10 +457,11 @@ def main() -> None:
     """Run host-local persisted Doctor evidence collection and serving."""
 
 
-@main.command()
+@main.command(cls=_AgentCommand)
 @click.option("--config", type=click.Path(path_type=Path), required=True)
 @click.option("--allowed-signers", type=click.Path(path_type=Path), required=True)
-def collect(config: Path, allowed_signers: Path) -> None:
+@click.pass_context
+def collect(ctx: click.Context, config: Path, allowed_signers: Path) -> None:
     """Verify runtime input, collect local readiness, then atomically persist it."""
     try:
         runtime = _runtime_or_error(config, allowed_signers)
@@ -454,31 +469,41 @@ def collect(config: Path, allowed_signers: Path) -> None:
     except (OSError, ValueError) as error:
         _emit(
             False,
-            ["collect"],
-            flags=["--config", str(config), "--allowed-signers", str(allowed_signers)],
+            _command_context(
+                ctx,
+                ["collect"],
+                {"config": str(config), "allowed_signers": str(allowed_signers)},
+            ),
             error=str(error),
         )
         raise click.exceptions.Exit(2) from error
     _emit(
         True,
-        ["collect"],
+        _command_context(
+            ctx,
+            ["collect"],
+            {"config": str(config), "allowed_signers": str(allowed_signers)},
+        ),
         {"status": result.status},
-        flags=["--config", str(config), "--allowed-signers", str(allowed_signers)],
     )
 
 
-@main.command()
+@main.command(cls=_AgentCommand)
 @click.option("--config", type=click.Path(path_type=Path), required=True)
 @click.option("--allowed-signers", type=click.Path(path_type=Path), required=True)
-def serve(config: Path, allowed_signers: Path) -> NoReturn:
+@click.pass_context
+def serve(ctx: click.Context, config: Path, allowed_signers: Path) -> NoReturn:
     """Serve persisted evidence only; collection remains a separate scheduled operation."""
     try:
         runtime = _runtime_or_error(config, allowed_signers)
     except ValueError as error:
         _emit(
             False,
-            ["serve"],
-            flags=["--config", str(config), "--allowed-signers", str(allowed_signers)],
+            _command_context(
+                ctx,
+                ["serve"],
+                {"config": str(config), "allowed_signers": str(allowed_signers)},
+            ),
             error=str(error),
         )
         raise click.exceptions.Exit(2) from error
