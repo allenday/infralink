@@ -11,7 +11,7 @@ import yaml
 from click.testing import CliRunner
 
 from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_readiness
-from infralink.cli.main import cli
+from infralink.cli.main import BASELINE_EXECUTOR_ACTIONS, cli
 from infralink.host_readiness import HostReadinessProbe
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -218,8 +218,14 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monke
     )
 
     assert result.exit_code == 1
+    payload = json.loads(result.output)
+    guidance = {item["id"] for item in payload["result"]["readiness"]["actions"]}
+    assert "migrate_v2_registry_layout" in guidance
     argv, _kwargs = calls[0]
     serialized = " ".join(str(item) for item in argv[0])
+    forwarded = json.loads(argv[0][-1])["bootstrap_actions"]
+    assert set(forwarded) <= BASELINE_EXECUTOR_ACTIONS
+    assert "migrate_v2_registry_layout" not in forwarded
     assert "install_bws_cli" in serialized
     assert "configure_bws" not in serialized
     assert "install_self_deploy_runtime" not in serialized
