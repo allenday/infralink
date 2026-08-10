@@ -2,14 +2,8 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
       "properties": {
-        "argv": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Argv",
-          "type": "array"
-        },
         "bindings": {
           "additionalProperties": {
             "$ref": "#/$defs/Binding"
@@ -41,7 +35,6 @@
       },
       "required": [
         "rel",
-        "argv",
         "command",
         "description",
         "safe"
@@ -133,82 +126,16 @@
       "properties": {
         "items": {
           "items": {
-            "$ref": "#/$defs/HostSummary"
+            "type": "string"
           },
           "title": "Items",
           "type": "array"
-        },
-        "page": {
-          "$ref": "#/$defs/PageInfo"
         }
       },
       "required": [
-        "items",
-        "page"
+        "items"
       ],
       "title": "HostListResult",
-      "type": "object"
-    },
-    "HostSummary": {
-      "additionalProperties": false,
-      "properties": {
-        "canonical_name": {
-          "title": "Canonical Name",
-          "type": "string"
-        },
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "project_count": {
-          "title": "Project Count",
-          "type": "integer"
-        },
-        "projects": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 64,
-          "title": "Projects",
-          "type": "array"
-        },
-        "projects_truncated": {
-          "title": "Projects Truncated",
-          "type": "boolean"
-        },
-        "service_count": {
-          "title": "Service Count",
-          "type": "integer"
-        },
-        "services": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 128,
-          "title": "Services",
-          "type": "array"
-        },
-        "services_truncated": {
-          "title": "Services Truncated",
-          "type": "boolean"
-        },
-        "status": {
-          "title": "Status",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "canonical_name",
-        "status",
-        "service_count",
-        "services",
-        "services_truncated",
-        "project_count",
-        "projects",
-        "projects_truncated"
-      ],
-      "title": "HostSummary",
       "type": "object"
     },
     "Meta": {
@@ -221,53 +148,6 @@
         }
       },
       "title": "Meta",
-      "type": "object"
-    },
-    "PageInfo": {
-      "additionalProperties": false,
-      "properties": {
-        "limit": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Limit",
-          "type": "integer"
-        },
-        "next_cursor": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Next Cursor"
-        },
-        "returned": {
-          "minimum": 0,
-          "title": "Returned",
-          "type": "integer"
-        },
-        "total": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Total"
-        }
-      },
-      "required": [
-        "limit",
-        "returned"
-      ],
-      "title": "PageInfo",
       "type": "object"
     }
   },

@@ -3,51 +3,75 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
+import re
+import subprocess
 import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
+from uuid import uuid4
 
 import click
+import yaml
 
 from infralink import __version__
-from infralink.cli.actions import action
+from infralink.cli.actions import action, redact_argv
 from infralink.cli.contracts import (
+    Action,
     ArgumentDescriptor,
     Binding,
     CommandContext,
     CommandDescriptor,
-    EdgeSummary,
+    DoctorTarget,
+    HelpNavigationAction,
     HelpResult,
-    HostSummary,
+    HelpSubcommand,
+    HostBootstrapPlanResult,
     InfoResult,
     InfoSources,
     InfoSummary,
     OptionDescriptor,
     RootResult,
-    ServiceSummary,
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
+from infralink.cli.host_readiness import evaluate_host_readiness
+from infralink.cli.operation_contracts import (
+    HostApplyResult,
+    OperationStatusResult,
+    OperationSummary,
+)
 from infralink.cli.output import (
     command_context,
     error_envelope,
     ok_envelope,
-    redact_argv,
 )
+from infralink.host_transport import SshReadinessTransport
 
-# Default paths (can be overridden)
-DEFAULT_REGISTRY = "examples/registry.yml"
-DEFAULT_EDGES = "examples/edges.yml"
+# Topology sources are intentionally explicit. Examples are demo/test fixtures,
+# never an implicit operational fallback.
+REGISTRY_ENVVAR = "INFRALINK_REGISTRY"
+EDGES_ENVVAR = "INFRALINK_EDGES"
 _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
+    {
+        "create_devops_account",
+        "configure_devops_authorized_access",
+        "install_docker",
+        "install_jq",
+        "install_bws_cli",
+        "install_self_deploy_dependencies",
+    }
+)
 
 
 class Context:
@@ -57,7 +81,7 @@ class Context:
         self.registry_path: Path | None = None
         self.edges_path: Path | None = None
         self.verbose: bool = False
-        self.output: str = "json"
+        self.output: str = "yaml"
         self.output_explicit: bool = False
         self._registry: Any = None
         self._edges: Any = None
@@ -68,8 +92,10 @@ class Context:
         if self._registry is None:
             from infralink.core.registry import Registry
 
+            if not self.registry_path:
+                raise configuration_required("registry")
             path = str(self.registry_path)
-            if not self.registry_path or not self.registry_path.exists():
+            if not self.registry_path.exists():
                 raise input_load_failed("registry", path)
             try:
                 if self.registry_path.is_dir():
@@ -88,8 +114,10 @@ class Context:
         if self._edges is None:
             from infralink.core.edges import EdgeSet
 
-            if self.edges_path and self.edges_path.exists():
+            if self.edges_path is not None:
                 path = str(self.edges_path)
+                if not self.edges_path.exists():
+                    raise input_load_failed("edges", path)
                 try:
                     self._edges = EdgeSet.load(self.edges_path)
                 except Exception:
@@ -102,17 +130,7 @@ class Context:
 
                 if self.registry_path and self.registry_path.exists():
                     if self.registry_path.is_dir():
-                        # For directory-based registry, we should probably look for a unified edges file
-                        # or just rely on EdgeSet initialization from the already-loaded registry.
-                        # Actually, EdgeSet.from_registry expects a dict.
-                        # I will check if registry is already loaded.
-                        if self._registry:
-                            # This is tricky because self._registry is a Registry object, not a dict.
-                            # But Registry has an applications property, etc.
-                            # For now, if it is a directory, we just default to empty if edges.yml is missing.
-                            self._edges = EdgeSet([])
-                        else:
-                            self._edges = EdgeSet([])
+                        raise configuration_required("edges")
                     else:
                         try:
                             with self.registry_path.open() as f:
@@ -121,7 +139,7 @@ class Context:
                         except Exception:
                             raise input_load_failed("registry", str(self.registry_path)) from None
                 else:
-                    self._edges = EdgeSet([])
+                    raise configuration_required("edges")
         return self._edges
 
 
@@ -142,6 +160,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "usage": "infralink analyze --output <directory>",
     },
     "check": {"description": "Run health checks for edges.", "usage": "infralink check"},
+    "doctor": {
+        "description": "Validate declared observation coverage and inspect declared evidence.",
+        "usage": "infralink doctor [host|service|edge|profile <ref>] [--validate]",
+    },
     "diagram": {
         "description": "Generate topology diagrams.",
         "usage": "infralink diagram --output <directory>",
@@ -160,10 +182,14 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     },
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
-    "hosts": {"description": "List all hosts.", "usage": "infralink hosts"},
-    "services": {"description": "List all services.", "usage": "infralink services"},
-    "edges-list": {"description": "List all edges.", "usage": "infralink edges-list"},
-    "host": {"description": "Inspect hosts.", "usage": "infralink host show <host-id>"},
+    "host": {
+        "description": "Inspect, scaffold, bootstrap, or apply hosts.",
+        "usage": "infralink host [create|list|show|bootstrap|apply]",
+    },
+    "operation": {
+        "description": "Inspect durable host apply operations.",
+        "usage": "infralink operation status OPERATION_ID",
+    },
     "edge": {"description": "Inspect edges.", "usage": "infralink edge show <edge-id>"},
     "service": {
         "description": "Inspect services.",
@@ -249,6 +275,43 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             {"name": "collection", "type": "string", "required": False},
         ],
         "examples": ["infralink host show host-1"],
+    },
+    ("host", "bootstrap"): {
+        "description": "Plan host bootstrap actions without applying them.",
+        "arguments": [{"name": "host_id", "type": "string", "required": True}],
+        "options": [
+            {"name": "plan", "type": "boolean", "required": False},
+            {"name": "apply", "type": "boolean", "required": False},
+        ],
+        "examples": [
+            "infralink host bootstrap host-1 --plan",
+            "infralink host bootstrap host-1 --apply",
+        ],
+    },
+    ("host", "apply"): {
+        "description": "Apply one declared host through the control plane.",
+        "arguments": [{"name": "host", "type": "string", "required": True}],
+        "options": [
+            {"name": "dry_run", "type": "boolean", "required": False},
+            {"name": "wait", "type": "boolean", "required": False},
+            {"name": "timeout", "type": "integer", "required": False},
+        ],
+        "examples": [
+            "infralink host apply relaxgg-db-es1",
+            "infralink host apply relaxgg-db-es1 --wait",
+        ],
+    },
+    ("operation",): {
+        "description": "Inspect durable host apply operations.",
+        "arguments": [],
+        "options": [],
+        "examples": ["infralink operation status op_01J00000000000000000000000"],
+    },
+    ("operation", "status"): {
+        "description": "Get the current state of one durable host apply operation.",
+        "arguments": [{"name": "operation_id", "type": "string", "required": True}],
+        "options": [],
+        "examples": ["infralink operation status op_01J00000000000000000000000"],
     },
     ("edge",): {
         "description": "Inspect edges.",
@@ -359,12 +422,22 @@ def _context_for(
     resolved = {
         "version": __version__,
         "cwd": os.getcwd(),
-        "registry": str(root_values.get("registry", DEFAULT_REGISTRY)),
-        "edges": str(root_values.get("edges", DEFAULT_EDGES)),
-        "output": root_values.get("output", "json"),
+        "registry": _source_value(root_values.get("registry")),
+        "edges": _source_value(root_values.get("edges")),
+        "output": root_values.get("output", "yaml"),
         "verbose": bool(root_values.get("verbose", False)),
     }
     resolved.update(_command_resolved_overrides(redacted_argv, parsed_path))
+    if parsed_path and parsed_path[0] == "doctor":
+        gatus_url = os.environ.get("INFRALINK_GATUS_URL")
+        for index, item in enumerate(redacted_argv):
+            if item.startswith("--gatus-url="):
+                gatus_url = item.split("=", 1)[1]
+            elif item == "--gatus-url" and index + 1 < len(redacted_argv):
+                gatus_url = redacted_argv[index + 1]
+        resolved["gatus_configured"] = bool(gatus_url)
+        if gatus_url:
+            resolved["gatus_url"] = gatus_url
     return command_context(
         ["infralink", *redacted_argv],
         path=path if path is not None else parsed_path,
@@ -408,11 +481,43 @@ def input_load_failed(source: str, path: str) -> CliFailure:
         next_actions=[
             action(
                 "help",
-                ["infralink", "help", "validate"],
+                [*_action_argv_prefix(), "help", "validate"],
                 "Show validation input options",
             )
         ],
     )
+
+
+def configuration_required(source: str) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.CONFIGURATION_REQUIRED,
+        message=f"{source.title()} configuration is required",
+        exit_code=ExitCode.USAGE_ERROR,
+        fix=f"Set {REGISTRY_ENVVAR if source == 'registry' else EDGES_ENVVAR} or provide --{source}",
+        details={"source": source},
+        next_actions=[
+            action(
+                "help",
+                [
+                    *_action_argv_prefix(),
+                    "help",
+                    *(["host", "list"] if source == "registry" else ["edge", "list"]),
+                ],
+                "Show topology input options",
+            )
+        ],
+    )
+
+
+def _source_value(path: Path | None) -> str | None:
+    return str(path) if path is not None else None
+
+
+def _action_argv_prefix() -> list[str]:
+    """Return an executable prefix that preserves an explicit output selection."""
+    if _output_from_argv(_INVOCATION_ARGS.get() or []) == "json":
+        return ["infralink", "--output", "json"]
+    return ["infralink"]
 
 
 def _protected_args(ctx: click.Context) -> list[str]:
@@ -536,11 +641,11 @@ def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
         return argv
 
     path, _, _ = _parse_invocation(redact_argv(argv[: argv.index("--help")]))
-    return ["help", *path]
+    return ["--output", _output_from_argv(argv), "help", *path]
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    serialized = json.dumps(payload, separators=(",", ":"))
+    serialized = _serialize(payload)
     _ENVELOPE_EMITTED.set(True)
     if _DEFER_ENVELOPE.get():
         _PENDING_ENVELOPE.set(serialized)
@@ -548,47 +653,157 @@ def _emit(payload: dict[str, Any]) -> None:
         click.echo(serialized)
 
 
+def _serialize(payload: dict[str, Any]) -> str:
+    """Serialize envelopes in the root invocation's selected output format."""
+    context = click.get_current_context(silent=True)
+    if context is not None:
+        root = context.find_root()
+        if isinstance(root.obj, Context):
+            output = root.obj.output
+        else:
+            output = _output_from_argv(_INVOCATION_ARGS.get() or [])
+    else:
+        incoming = _INVOCATION_ARGS.get()
+        # JsonGroup is reusable outside the public CLI. Preserve its historical
+        # JSON fallback when no Infralink root invocation established a format.
+        output = "json" if incoming is None else _output_from_argv(incoming)
+    if output == "json":
+        return json.dumps(payload, separators=(",", ":"))
+    return yaml.safe_dump(payload, sort_keys=False).rstrip("\n")
+
+
+def _output_from_argv(argv: list[str]) -> str:
+    """Read the root output option without re-entering Click command parsing."""
+    output = "yaml"
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--" or not token.startswith("-"):
+            break
+        if token in {"--registry", "--edges", "-r", "-e"}:
+            index += 2
+            continue
+        if token.startswith(("--registry=", "--edges=")):
+            index += 1
+            continue
+        if token in {"--output", "-o"}:
+            if index + 1 < len(argv):
+                output = argv[index + 1].lower()
+            index += 2
+            continue
+        if token.startswith("--output="):
+            output = token.partition("=")[2].lower()
+            index += 1
+            continue
+        if token.startswith("-") and not token.startswith("--"):
+            cluster = token[1:]
+            output_offset = cluster.find("o")
+            if output_offset >= 0:
+                attached = cluster[output_offset + 1 :]
+                if attached:
+                    output = attached.lower()
+                    index += 1
+                elif index + 1 < len(argv):
+                    output = argv[index + 1].lower()
+                    index += 2
+                else:
+                    index += 1
+                continue
+        index += 1
+    return output if output in {"json", "yaml"} else "yaml"
+
+
 def _help_result(path: tuple[str, ...]) -> HelpResult:
-    metadata = HELP_METADATA.get(path)
     command = _command_for_path(path)
-    if command is not None:
-        arguments = []
-        options = []
-        for parameter in command.params:
-            if isinstance(parameter, click.Argument):
-                arguments.append(
-                    ArgumentDescriptor(
-                        name=parameter.name or "",
-                        type=parameter.type.name,
-                        required=parameter.required,
-                    )
-                )
-            elif isinstance(parameter, click.Option):
-                long_option = next(
-                    (option for option in parameter.opts if option.startswith("--")),
-                    parameter.name or "",
-                )
-                options.append(
-                    OptionDescriptor(
-                        name=long_option.removeprefix("--").replace("-", "_"),
-                        type=parameter.type.name,
-                        required=parameter.required,
-                    )
-                )
-        root_metadata = COMMAND_METADATA.get(path[0], {}) if path else {}
-        metadata = {
-            "description": (
-                (metadata or {}).get("description")
-                or command.help
-                or root_metadata.get("description", "")
-            ),
-            "arguments": arguments,
-            "options": options,
-            "examples": (metadata or {}).get("examples", [root_metadata.get("usage", "infralink")]),
-        }
-    if metadata is None:
+    if command is None:
         raise click.UsageError("Unknown command path")
-    return HelpResult(path=list(path), **metadata)
+    arguments, options = _help_parameters(command)
+    return HelpResult(
+        path=list(path),
+        description=_command_description(command),
+        arguments=arguments,
+        options=options,
+        examples=list(HELP_METADATA.get(path, {}).get("examples", [])),
+        children=_help_children(path, command),
+    )
+
+
+def _help_parameters(
+    command: click.Command,
+) -> tuple[list[ArgumentDescriptor], list[OptionDescriptor]]:
+    arguments: list[ArgumentDescriptor] = []
+    options: list[OptionDescriptor] = []
+    for parameter in command.params:
+        if isinstance(parameter, click.Argument):
+            arguments.append(
+                ArgumentDescriptor(
+                    name=parameter.name or "",
+                    type=parameter.type.name,
+                    required=parameter.required,
+                )
+            )
+        elif isinstance(parameter, click.Option):
+            long_option = next(
+                (option for option in parameter.opts if option.startswith("--")),
+                parameter.name or "",
+            )
+            options.append(
+                OptionDescriptor(
+                    name=long_option.removeprefix("--").replace("-", "_"),
+                    type=parameter.type.name,
+                    required=parameter.required,
+                )
+            )
+    return arguments, options
+
+
+def _command_description(command: click.Command) -> str:
+    callback = command.callback
+    return (
+        command.help
+        or command.short_help
+        or (callback.__doc__ if callback is not None else "")
+        or ""
+    )
+
+
+def _help_children(path: tuple[str, ...], command: click.Command) -> list[HelpSubcommand]:
+    if not isinstance(command, click.Group):
+        return []
+    context = click.Context(command)
+    children: list[HelpSubcommand] = []
+    for name in command.list_commands(context):
+        child = command.get_command(context, name)
+        if child is None:
+            continue
+        argv = [*_help_argv_prefix(), *path, name]
+        action_value = HelpNavigationAction(command=" ".join(argv), argv=argv)
+        children.append(
+            HelpSubcommand(
+                name=name,
+                summary=_command_summary(child),
+                action=action_value,
+            )
+        )
+    return children
+
+
+def _command_summary(command: click.Command) -> str:
+    return next(
+        (line.strip() for line in _command_description(command).splitlines() if line.strip()),
+        "",
+    )
+
+
+def _help_argv_prefix() -> list[str]:
+    context = click.get_current_context(silent=True)
+    if context is not None:
+        root = context.find_root()
+        if isinstance(root.obj, Context) and root.obj.output_explicit:
+            return ["infralink", "--output", root.obj.output, "help"]
+    if _output_from_argv(_INVOCATION_ARGS.get() or []) == "json":
+        return ["infralink", "--output", "json", "help"]
+    return ["infralink", "help"]
 
 
 def _command_for_path(path: tuple[str, ...]) -> click.Command | None:
@@ -617,6 +832,42 @@ def _emit_help(path: tuple[str, ...], argv: list[str] | None = None) -> None:
     )
 
 
+def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action]:
+    if artifact_command is not None:
+        return [
+            action(
+                "help",
+                [*_help_argv_prefix(), artifact_command],
+                "Show command usage",
+            )
+        ]
+    canonical_aliases: dict[tuple[str, ...], tuple[str, ...]] = {
+        ("hosts",): ("host", "list"),
+        ("services",): ("service", "list"),
+        ("edges-list",): ("edge", "list"),
+    }
+    canonical_alias = canonical_aliases.get(tuple(path))
+    if canonical_alias is not None:
+        return [
+            action(
+                "help",
+                [*_help_argv_prefix(), *canonical_alias],
+                "Show canonical command help",
+            )
+        ]
+    command = _command_for_path(tuple(path))
+    if isinstance(command, click.Group):
+        return [
+            action(
+                f"help-{child.name}",
+                child.action.argv,
+                f"Show {child.name} command help",
+            )
+            for child in _help_children(tuple(path), command)
+        ]
+    return [action("help", _help_argv_prefix(), "Show command usage")]
+
+
 def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
     """Compatibility import for commands implemented before query extraction."""
     from infralink.cli.queries import entity_not_found as query_entity_not_found
@@ -637,6 +888,10 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.check import check
 
         return check
+    if name == "doctor":
+        from infralink.cli.doctor import doctor
+
+        return doctor
     if name == "diagram":
         from infralink.cli.diagram import diagram
 
@@ -679,6 +934,8 @@ def _load_command(name: str) -> click.Command | None:
         return services
     if name == "host":
         return host
+    if name == "operation":
+        return operation
     if name == "edge":
         return edge
     if name == "service":
@@ -760,17 +1017,7 @@ class JsonGroup(click.Group):
                         if artifact_command is not None
                         else "Run infralink help"
                     ),
-                    next_actions=[
-                        action(
-                            "help",
-                            [
-                                "infralink",
-                                "help",
-                                *([artifact_command] if artifact_command is not None else []),
-                            ],
-                            "Show command usage",
-                        )
-                    ],
+                    next_actions=_usage_actions(path, artifact_command),
                 )
                 if not continue_after_usage and not _ENVELOPE_EMITTED.get():
                     _emit(error_envelope(_context_for(incoming), usage_failure))
@@ -853,14 +1100,16 @@ def version_command() -> None:
     "-r",
     "--registry",
     type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_REGISTRY,
+    default=None,
+    envvar=REGISTRY_ENVVAR,
     help="Path to registry YAML file",
 )
 @click.option(
     "-e",
     "--edges",
     type=click.Path(exists=False, path_type=Path),
-    default=DEFAULT_EDGES,
+    default=None,
+    envvar=EDGES_ENVVAR,
     help="Path to edges YAML file",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose output")
@@ -868,12 +1117,14 @@ def version_command() -> None:
     "-o",
     "--output",
     type=click.Choice(["json", "yaml"], case_sensitive=False),
-    default="json",
+    default="yaml",
     show_default=True,
-    help="Output format (json = agent-first)",
+    help="Output format (yaml by default; json for explicit machine parsing)",
 )
 @pass_context
-def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -> None:
+def cli(
+    ctx: Context, registry: Path | None, edges: Path | None, verbose: bool, output: str
+) -> None:
     """
     Infralink - Infrastructure topology modeling.
 
@@ -911,9 +1162,9 @@ def cli(ctx: Context, registry: Path, edges: Path, verbose: bool, output: str) -
         _context_for(path=[]),
         command_tree,
         [
-            action("help", ["infralink", "help"], "Show available commands"),
-            action("list", ["infralink", "services"], "List declared services"),
-            action("version", ["infralink", "version"], "Show CLI version"),
+            action("help", _help_argv_prefix(), "Show available commands"),
+            action("list", [*_root_source_argv(ctx), "service", "list"], "List declared services"),
+            action("version", [*_root_action_prefix(ctx), "version"], "Show CLI version"),
         ],
     )
     _emit(payload)
@@ -1010,12 +1261,30 @@ def _attach_next_cursors(
 
 
 def _root_source_argv(ctx: Context) -> list[str]:
+    argv = _root_action_prefix(ctx)
+    if ctx.registry_path is not None:
+        argv.extend(["--registry", str(ctx.registry_path)])
+    if ctx.edges_path is not None:
+        argv.extend(["--edges", str(ctx.edges_path)])
+    return argv
+
+
+def _root_action_prefix(ctx: Context) -> list[str]:
+    argv = ["infralink"]
+    if ctx.output_explicit:
+        argv.extend(["--output", ctx.output])
+    return argv
+
+
+def _compatibility_action(ctx: Context, path: list[str], canonical: list[str]) -> list[Action]:
+    if path == canonical:
+        return []
     return [
-        "infralink",
-        "--registry",
-        str(ctx.registry_path),
-        "--edges",
-        str(ctx.edges_path),
+        action(
+            "canonical",
+            [*_root_action_prefix(ctx), *canonical],
+            f"Use canonical {' '.join(canonical)} command",
+        )
     ]
 
 
@@ -1025,49 +1294,40 @@ def _summary_detail_actions(
     path: list[str],
     command_argv: list[str],
 ) -> list[Any]:
-    summaries: list[Any]
-    scoped_app_id: str | None = None
-    if path in (["hosts"], ["services"], ["edges-list"]):
-        summaries = result.items
-    elif path == ["app", "show"]:
-        summaries = result.services.items
-        scoped_app_id = command_argv[2]
+    if path in (
+        ["hosts"],
+        ["services"],
+        ["edges-list"],
+        ["host", "list"],
+        ["service", "list"],
+        ["edge", "list"],
+    ):
+        entity = {
+            "hosts": "host",
+            "services": "service",
+            "edges-list": "edge",
+            "host list": "host",
+            "service list": "service",
+            "edge list": "edge",
+        }[" ".join(path)]
+    elif path == ["app", "list"]:
+        entity = "app"
     else:
         return []
-
-    actions = []
-    seen: set[tuple[str, str]] = set()
-    for summary in summaries:
-        if isinstance(summary, HostSummary):
-            truncated = summary.services_truncated or summary.projects_truncated
-            entity = "host"
-        elif isinstance(summary, ServiceSummary):
-            truncated = (
-                summary.hosts_truncated or summary.ports_truncated or summary.protocols_truncated
-            )
-            entity = "service"
-        elif isinstance(summary, EdgeSummary):
-            truncated = summary.secret_refs_truncated
-            entity = "edge"
-        else:
-            continue
-        identity = (entity, summary.id)
-        if not truncated or identity in seen:
-            continue
-        if scoped_app_id is not None and entity != "service":
-            continue
-        seen.add(identity)
-        command = [*_root_source_argv(ctx), entity, "show", summary.id]
-        if scoped_app_id is not None:
-            command.extend(["--app", scoped_app_id])
-        actions.append(
-            action(
-                "show",
-                command,
-                f"Show complete {entity} details",
-            )
+    return [
+        action(
+            "show",
+            [*_root_action_prefix(ctx), entity, "show", "{id}"],
+            f"Show one {entity}",
+            bindings={
+                "id": Binding(
+                    type="string",
+                    required=True,
+                    source="result.items[]",
+                )
+            },
         )
-    return actions
+    ]
 
 
 def _emit_query_result(
@@ -1076,7 +1336,7 @@ def _emit_query_result(
     path: list[str],
     command_argv: list[str],
     result: Any,
-    limit: int,
+    limit: int | None = None,
     extra_actions: list[Any] | None = None,
     resolved: dict[str, Any] | None = None,
     content_truncated: bool = False,
@@ -1102,18 +1362,24 @@ def _emit_query_result(
             page = getattr(result, name, None)
             if page is not None:
                 pages.append((name, page.page, f"result.{name}.page.next_cursor"))
-    actions = [action("help", ["infralink", "help", *path], f"Show {' '.join(path)} help")]
+    invocation_argv = [*_root_action_prefix(ctx), *command_argv]
+    actions = [
+        action(
+            "help",
+            [*_help_argv_prefix(), *path],
+            f"Show {' '.join(path)} help",
+        )
+    ]
     actions.extend(_summary_detail_actions(ctx, result, path, command_argv))
     actions.extend(extra_actions or [])
     for collection, page, source in pages:
-        if page.next_cursor is None:
+        if page.next_cursor is None or limit is None:
             continue
         actions.append(
             action(
                 "continue",
                 [
-                    *_root_source_argv(ctx),
-                    *command_argv,
+                    *invocation_argv,
                     "--collection",
                     collection,
                     "--cursor",
@@ -1151,52 +1417,28 @@ def _page_options(command: Any) -> Any:
     return click.option(
         "--limit",
         type=click.IntRange(1, 1000),
-        default=100,
+        default=20,
         show_default=True,
     )(command)
 
 
 @click.command()
-@_page_options
 @pass_context
-def services(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def services(ctx: Context) -> None:
     """List services declared by registry hosts."""
+    _emit_service_list(ctx, path=["services"])
+
+
+def _emit_service_list(ctx: Context, *, path: list[str]) -> None:
     from infralink.cli.queries import list_services
 
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=True)
-    offset = _page_offset(
-        command="services",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = list_services(
-        ctx.registry,
-        ctx.edges,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="services",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = list_services(ctx.registry, ctx.edges)
     _emit_query_result(
         ctx=ctx,
-        path=["services"],
-        command_argv=["services"],
+        path=path,
+        command_argv=path,
         result=result,
-        limit=limit,
+        extra_actions=_compatibility_action(ctx, path, ["service", "list"]),
     )
 
 
@@ -1208,7 +1450,7 @@ def info(ctx: Context) -> None:
 
     registry = ctx.registry
     edges = ctx.edges
-    service_count = list_services(registry, edges, limit=1).page.total
+    service_count = len(list_services(registry, edges).items)
     result = InfoResult(
         sources=InfoSources(
             registry=str(ctx.registry_path),
@@ -1224,102 +1466,180 @@ def info(ctx: Context) -> None:
         _context_for(path=["info"]),
         result,
         [
-            action("list", [*_root_source_argv(ctx), "hosts"], "List all hosts"),
-            action("list", [*_root_source_argv(ctx), "edges-list"], "List all edges"),
+            action("list", [*_root_source_argv(ctx), "host", "list"], "List all hosts"),
+            action("list", [*_root_source_argv(ctx), "edge", "list"], "List all edges"),
         ],
     )
     _emit(payload)
 
 
 @click.command()
-@_page_options
 @pass_context
-def hosts(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def hosts(ctx: Context) -> None:
     """List all hosts in registry."""
+    _emit_host_list(ctx, path=["hosts"])
+
+
+def _emit_host_list(
+    ctx: Context,
+    *,
+    path: list[str],
+) -> None:
     from infralink.cli.queries import list_hosts
 
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=True, include_edges=False)
-    offset = _page_offset(
-        command="hosts",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = list_hosts(
-        ctx.registry,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="hosts",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = list_hosts(ctx.registry)
     _emit_query_result(
         ctx=ctx,
-        path=["hosts"],
-        command_argv=["hosts"],
+        path=path,
+        command_argv=path,
         result=result,
-        limit=limit,
+        extra_actions=_compatibility_action(ctx, path, ["host", "list"]),
     )
 
 
 @click.command(name="edges-list")
-@_page_options
 @pass_context
-def edges_list(
-    ctx: Context,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
+def edges_list(ctx: Context) -> None:
     """List all declared edges."""
+    _emit_edge_list(ctx, path=["edges-list"])
+
+
+def _emit_edge_list(ctx: Context, *, path: list[str]) -> None:
     from infralink.cli.queries import list_edges
 
-    selected = _active_collection(collection, cursor, ("items",))
-    fingerprint = _topology_fingerprint(ctx, include_registry=False, include_edges=True)
-    offset = _page_offset(
-        command="edges-list",
-        collection=selected,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    result = list_edges(
-        ctx.edges,
-        limit=limit,
-        offset=offset,
-    )
-    _attach_next_cursors(
-        result,
-        command="edges-list",
-        collections=("items",),
-        selected=selected,
-        offset=offset,
-        limit=limit,
-        fingerprint=fingerprint,
-    )
+    result = list_edges(ctx.edges)
     _emit_query_result(
         ctx=ctx,
-        path=["edges-list"],
-        command_argv=["edges-list"],
+        path=path,
+        command_argv=path,
         result=result,
-        limit=limit,
+        extra_actions=_compatibility_action(ctx, path, ["edge", "list"]),
     )
 
 
 @click.group()
 def host() -> None:
-    """Inspect hosts."""
+    """Inspect or scaffold hosts."""
+
+
+_HOSTNAME_PATTERN = re.compile(
+    r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z"
+)
+
+
+def _host_address(value: str) -> tuple[str, str]:
+    try:
+        return "tailscale_ip", str(ipaddress.ip_address(value))
+    except ValueError:
+        if _HOSTNAME_PATTERN.fullmatch(value):
+            return "tailscale_name", value.lower()
+    raise click.BadParameter("must be an IP address or DNS hostname")
+
+
+def _host_create_failure(message: str, fix: str, details: dict[str, Any]) -> CliFailure:
+    return CliFailure(
+        code=ErrorCode.USAGE_ERROR,
+        message=message,
+        exit_code=ExitCode.USAGE_ERROR,
+        fix=fix,
+        details=details,
+        next_actions=[
+            action("help", ["infralink", "help", "host", "create"], "Show host create help")
+        ],
+    )
+
+
+@host.command(name="create")
+@click.option("--name", required=True, type=str, help="Canonical host name")
+@click.option("--address", required=True, type=str, help="IP address or DNS hostname")
+@click.option("--write", "write", is_flag=True, help="Write the scaffold into a directory registry")
+@pass_context
+def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
+    """Create a dry-run host manifest scaffold, or write it with --write."""
+    address_field, normalized_address = _host_address(address)
+    host_id = str(uuid4())
+    host_data: dict[str, Any] = {
+        "canonical_name": name,
+        "status": "provisioning",
+        address_field: normalized_address,
+    }
+
+    from infralink.core.schema import HostSchema
+
+    HostSchema(**host_data)
+    manifest = {"hosts": {host_id: host_data}}
+    manifest_path: Path | None = None
+    mode = "dry_run"
+
+    if write:
+        if ctx.registry_path is None or not ctx.registry_path.is_dir():
+            raise _host_create_failure(
+                "Host create --write requires a directory registry",
+                "Provide --registry pointing to a local hosts directory",
+                {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
+            )
+        registry = ctx.registry
+        if registry.get_by_name(name) is not None:
+            raise _host_create_failure(
+                "Host canonical name already exists",
+                "Choose a unique --name or update the existing host manifest",
+                {"name": name},
+            )
+        manifest_path = ctx.registry_path / host_id / "manifest.yml"
+        if manifest_path.parent.exists():
+            raise _host_create_failure(
+                "Generated host UUID already exists",
+                "Run host create again to generate a new host UUID",
+                {"host_id": host_id},
+            )
+        manifest_path.parent.mkdir(mode=0o755)
+        manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+        mode = "written"
+
+    result = {
+        "mode": mode,
+        "host_id": host_id,
+        "address": {
+            "field": address_field,
+            "value": normalized_address,
+            "reason": (
+                "input is an IP address"
+                if address_field == "tailscale_ip"
+                else "input is a DNS hostname and maps to tailscale_name"
+            ),
+        },
+        "manifest_path": str(manifest_path) if manifest_path is not None else None,
+        "manifest": manifest,
+    }
+    actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
+    if manifest_path is not None:
+        assert ctx.registry_path is not None
+        git_worktree = ctx.registry_path.parent
+        result["write_state"] = "local_uncommitted"
+        result["git_worktree"] = str(git_worktree)
+        actions.append(
+            action(
+                "show",
+                [*_root_source_argv(ctx), "host", "show", host_id],
+                "Show the created host",
+            )
+        )
+        actions.append(
+            action(
+                "git-status",
+                ["git", "-C", str(git_worktree), "status", "--short"],
+                "Inspect the uncommitted registry change",
+            )
+        )
+    _emit(ok_envelope(_context_for(path=["host", "create"]), result, actions))
+
+
+@host.command(name="list")
+@pass_context
+def host_list(ctx: Context) -> None:
+    """List all hosts in registry."""
+    _emit_host_list(ctx, path=["host", "list"])
 
 
 @host.command(name="show")
@@ -1333,6 +1653,7 @@ def host_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
+    """Show one host."""
     from infralink.cli.queries import show_host
 
     selected = _active_collection(collection, cursor, ("services", "projects"))
@@ -1373,9 +1694,220 @@ def host_show(
     )
 
 
+@host.command(name="bootstrap")
+@click.argument("host_id")
+@click.option(
+    "--plan",
+    "plan_only",
+    is_flag=True,
+    help="Emit a read-only bootstrap plan.",
+)
+@click.option(
+    "--apply", "apply_changes", is_flag=True, help="Apply only failed host baseline actions."
+)
+@pass_context
+def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: bool) -> int:
+    """Plan required host bootstrap actions without applying them."""
+    target = ctx.registry.get(host_id)
+    if target is None:
+        raise entity_not_found("host", host_id)
+    readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    if plan_only == apply_changes:
+        raise click.UsageError("pass exactly one of --plan or --apply")
+    automated_actions = [
+        item.id for item in readiness.actions if item.id in BASELINE_EXECUTOR_ACTIONS
+    ]
+    if apply_changes and automated_actions:
+        control_root = Path("/opt/infra")
+        playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+        if not playbook.is_file():
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Bastion host-bootstrap capability is not installed",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Install the current infra-management host-bootstrap capability on Bastion",
+                details={"capability": "host_bootstrap"},
+            )
+        address = target.tailscale_ip or target.public_ip
+        if not address:
+            raise CliFailure(
+                code=ErrorCode.CONFIGURATION_REQUIRED,
+                message="Host address is required for bootstrap",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Declare a Tailscale or public address for the host",
+                details={"host": target.uuid},
+            )
+        completed = subprocess.run(
+            [
+                "ansible-playbook",
+                "-i",
+                f"{address},",
+                "-u",
+                "root",
+                str(playbook),
+                "-e",
+                f"host_address={address}",
+                "-e",
+                f"host_uuid={target.uuid}",
+                "-e",
+                f"canonical_name={target.canonical_name}",
+                "-e",
+                json.dumps({"bootstrap_actions": automated_actions}),
+            ],
+            cwd=control_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Host baseline apply failed",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
+                details={"host": target.uuid},
+            )
+        readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    result = HostBootstrapPlanResult(
+        host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        readiness=readiness,
+    )
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "bootstrap"]),
+            result,
+            [
+                action(
+                    "reinspect-readiness",
+                    [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--plan"],
+                    "Reinspect live host readiness",
+                )
+            ],
+        )
+    )
+    return 0 if readiness.ready or plan_only else 1
+
+
+@host.command(name="apply")
+@click.argument("host_ref")
+@click.option("--dry-run", is_flag=True, help="Validate host apply inputs without submitting work.")
+@click.option("--wait", "wait", is_flag=True, help="Wait for a terminal host apply result.")
+@click.option(
+    "--timeout",
+    type=click.IntRange(min=1, max=3600),
+    default=300,
+    show_default=True,
+    help="Maximum seconds to wait when --wait is set.",
+)
+@pass_context
+def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: int) -> int:
+    """Apply one declared host through the configured control plane."""
+    from infralink.cli.operations import (
+        operation_provider_from_environment,
+        resolve_apply_request,
+        wait_for_terminal,
+    )
+
+    target = ctx.registry.get(host_ref)
+    if target is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    request = resolve_apply_request(ctx.registry_path, target)
+    doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
+    if dry_run:
+        _emit(
+            ok_envelope(
+                _context_for(path=["host", "apply"]),
+                HostApplyResult(target=doctor_target, dry_run=True),
+                [
+                    action(
+                        "apply",
+                        [*_root_source_argv(ctx), "host", "apply", target.uuid],
+                        "Submit this host apply",
+                        safe=False,
+                    )
+                ],
+            )
+        )
+        return 0
+
+    provider = operation_provider_from_environment()
+    record = provider.submit(request)
+    if wait:
+        record = wait_for_terminal(provider, record.id, timeout_seconds=timeout)
+    result = HostApplyResult(
+        operation=OperationSummary(
+            id=record.id,
+            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
+        ),
+        target=doctor_target,
+    )
+    actions = []
+    if record.state in {"queued", "applying"}:
+        actions.append(
+            action(
+                "status",
+                [*_root_action_prefix(ctx), "operation", "status", record.id],
+                "Check host apply progress",
+            )
+        )
+    else:
+        actions.append(
+            action(
+                "doctor",
+                [*_root_source_argv(ctx), "doctor", "host", target.uuid],
+                "Inspect the host convergence result",
+            )
+        )
+    _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
+    return 0 if record.state == "converged" or not wait else 1
+
+
+@click.group()
+def operation() -> None:
+    """Inspect durable host apply operations."""
+
+
+@operation.command(name="status")
+@click.argument("operation_id")
+@pass_context
+def operation_status(ctx: Context, operation_id: str) -> int:
+    """Get the current state of one durable host apply operation."""
+    from infralink.cli.operations import operation_provider_from_environment
+
+    record = operation_provider_from_environment().status(operation_id)
+    target = DoctorTarget.model_validate(record.target) if record.target is not None else None
+    result = OperationStatusResult(
+        operation=OperationSummary(
+            id=record.id,
+            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
+        ),
+        target=target,
+    )
+    actions = []
+    if record.state in {"queued", "applying"}:
+        actions.append(
+            action(
+                "status",
+                [*_root_action_prefix(ctx), "operation", "status", record.id],
+                "Check host apply progress",
+            )
+        )
+    _emit(ok_envelope(_context_for(path=["operation", "status"]), result, actions))
+    return 0 if record.state != "failed" else 1
+
+
 @click.group()
 def service() -> None:
     """Inspect services."""
+
+
+@service.command(name="list")
+@pass_context
+def service_list(ctx: Context) -> None:
+    """List services declared by registry hosts."""
+    _emit_service_list(ctx, path=["service", "list"])
 
 
 @service.command(name="show")
@@ -1391,6 +1923,7 @@ def service_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
+    """Show one service."""
     from infralink.cli.queries import show_service
 
     collections = ("hosts", "ports", "protocols", "edges")
@@ -1462,6 +1995,13 @@ def edge() -> None:
     """Inspect edges."""
 
 
+@edge.command(name="list")
+@pass_context
+def edge_list(ctx: Context) -> None:
+    """List all declared edges."""
+    _emit_edge_list(ctx, path=["edge", "list"])
+
+
 @edge.command(name="show")
 @click.argument("edge_id")
 @_page_options
@@ -1473,6 +2013,7 @@ def edge_show(
     cursor: str | None,
     collection: str | None,
 ) -> None:
+    """Show one edge."""
     from infralink.cli.queries import show_edge
 
     selected = _active_collection(collection, cursor, ("secret_refs",))

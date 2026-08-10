@@ -99,12 +99,12 @@ def test_observation_errors_are_typed_and_exact_exit_codes(tmp_path: Path) -> No
     assert invalid.stderr == missing.stderr == ""
 
 
-def test_legacy_validate_remains_json_after_new_command_invocation(tmp_path: Path) -> None:
+def test_legacy_validate_defaults_to_yaml_after_new_command_invocation(tmp_path: Path) -> None:
     runner = CliRunner()
     runner.invoke(cli, ["capabilities"])
     result = runner.invoke(cli, ["--registry", "missing.yml", "validate"])
 
-    assert json.loads(result.output)["schema_version"] == "infralink.cli/v1"
+    assert yaml.safe_load(result.output)["schema_version"] == "infralink.cli/v1"
 
 
 def test_generated_observation_schemas_validate_public_examples() -> None:
@@ -236,11 +236,11 @@ def test_observation_boundary_failure_honors_click_output_spellings(
     assert payload["error"]["code"] == "invocation-error"
 
 
-def test_legacy_boundary_failure_remains_json_with_default_output() -> None:
+def test_legacy_boundary_failure_defaults_to_yaml() -> None:
     result = CliRunner().invoke(cli, ["resolve"])
 
     assert result.exit_code == 2
-    assert json.loads(result.output)["schema_version"] == "infralink.cli/v1"
+    assert yaml.safe_load(result.output)["schema_version"] == "infralink.cli/v1"
 
 
 @pytest.mark.parametrize(

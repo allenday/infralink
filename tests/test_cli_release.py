@@ -138,8 +138,7 @@ def _attestation_v2(path: Path) -> Path:
 
 def _payload(result) -> dict[str, object]:
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
-    return json.loads(result.output)
+    return yaml.safe_load(result.output)
 
 
 def test_release_validate_candidate_preserves_manual_image_tag_sha_workflow(tmp_path: Path) -> None:

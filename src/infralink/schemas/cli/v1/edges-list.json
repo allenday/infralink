@@ -2,14 +2,8 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
       "properties": {
-        "argv": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Argv",
-          "type": "array"
-        },
         "bindings": {
           "additionalProperties": {
             "$ref": "#/$defs/Binding"
@@ -41,7 +35,6 @@
       },
       "required": [
         "rel",
-        "argv",
         "command",
         "description",
         "safe"
@@ -109,82 +102,16 @@
       "properties": {
         "items": {
           "items": {
-            "$ref": "#/$defs/EdgeSummary"
+            "type": "string"
           },
           "title": "Items",
           "type": "array"
-        },
-        "page": {
-          "$ref": "#/$defs/PageInfo"
         }
       },
       "required": [
-        "items",
-        "page"
+        "items"
       ],
       "title": "EdgeListResult",
-      "type": "object"
-    },
-    "EdgeSummary": {
-      "additionalProperties": false,
-      "properties": {
-        "from": {
-          "additionalProperties": true,
-          "title": "From",
-          "type": "object"
-        },
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "protocol": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Protocol"
-        },
-        "secret_ref_count": {
-          "title": "Secret Ref Count",
-          "type": "integer"
-        },
-        "secret_refs": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 32,
-          "title": "Secret Refs",
-          "type": "array"
-        },
-        "secret_refs_truncated": {
-          "title": "Secret Refs Truncated",
-          "type": "boolean"
-        },
-        "to": {
-          "additionalProperties": true,
-          "title": "To",
-          "type": "object"
-        },
-        "type": {
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "type",
-        "from",
-        "to",
-        "protocol",
-        "secret_ref_count",
-        "secret_refs",
-        "secret_refs_truncated"
-      ],
-      "title": "EdgeSummary",
       "type": "object"
     },
     "ErrorDetail": {
@@ -221,53 +148,6 @@
         }
       },
       "title": "Meta",
-      "type": "object"
-    },
-    "PageInfo": {
-      "additionalProperties": false,
-      "properties": {
-        "limit": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Limit",
-          "type": "integer"
-        },
-        "next_cursor": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Next Cursor"
-        },
-        "returned": {
-          "minimum": 0,
-          "title": "Returned",
-          "type": "integer"
-        },
-        "total": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Total"
-        }
-      },
-      "required": [
-        "limit",
-        "returned"
-      ],
-      "title": "PageInfo",
       "type": "object"
     }
   },

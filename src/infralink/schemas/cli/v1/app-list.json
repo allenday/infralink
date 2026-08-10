@@ -2,14 +2,8 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
       "properties": {
-        "argv": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Argv",
-          "type": "array"
-        },
         "bindings": {
           "additionalProperties": {
             "$ref": "#/$defs/Binding"
@@ -41,7 +35,6 @@
       },
       "required": [
         "rel",
-        "argv",
         "command",
         "description",
         "safe"
@@ -54,44 +47,16 @@
       "properties": {
         "items": {
           "items": {
-            "$ref": "#/$defs/AppSummary"
+            "type": "string"
           },
           "title": "Items",
           "type": "array"
-        },
-        "page": {
-          "$ref": "#/$defs/PageInfo"
         }
       },
       "required": [
-        "items",
-        "page"
+        "items"
       ],
       "title": "AppListResult",
-      "type": "object"
-    },
-    "AppSummary": {
-      "additionalProperties": false,
-      "properties": {
-        "edge_count": {
-          "title": "Edge Count",
-          "type": "integer"
-        },
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "service_count": {
-          "title": "Service Count",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "service_count",
-        "edge_count"
-      ],
-      "title": "AppSummary",
       "type": "object"
     },
     "Binding": {
@@ -183,53 +148,6 @@
         }
       },
       "title": "Meta",
-      "type": "object"
-    },
-    "PageInfo": {
-      "additionalProperties": false,
-      "properties": {
-        "limit": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Limit",
-          "type": "integer"
-        },
-        "next_cursor": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Next Cursor"
-        },
-        "returned": {
-          "minimum": 0,
-          "title": "Returned",
-          "type": "integer"
-        },
-        "total": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Total"
-        }
-      },
-      "required": [
-        "limit",
-        "returned"
-      ],
-      "title": "PageInfo",
       "type": "object"
     }
   },

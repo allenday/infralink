@@ -1,0 +1,514 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "description": "An internal action recipe with a compact public serialization.",
+      "properties": {
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Binding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "safe": {
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "templated": {
+          "default": false,
+          "title": "Templated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rel",
+        "command",
+        "description",
+        "safe"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required",
+        "source"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
+    "CommandContext": {
+      "additionalProperties": false,
+      "properties": {
+        "parsed": {
+          "additionalProperties": true,
+          "title": "Parsed",
+          "type": "object"
+        },
+        "raw": {
+          "title": "Raw",
+          "type": "string"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        }
+      },
+      "required": [
+        "raw",
+        "parsed",
+        "resolved"
+      ],
+      "title": "CommandContext",
+      "type": "object"
+    },
+    "DoctorTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Name"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "type": {
+          "enum": [
+            "global",
+            "host",
+            "service",
+            "edge",
+            "profile"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DoctorTarget",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "HostBootstrapAction": {
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "title": "Check Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "check_id",
+        "description"
+      ],
+      "title": "HostBootstrapAction",
+      "type": "object"
+    },
+    "HostBootstrapPlanResult": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/DoctorTarget"
+        },
+        "readiness": {
+          "$ref": "#/$defs/HostReadinessResult"
+        }
+      },
+      "required": [
+        "host",
+        "readiness"
+      ],
+      "title": "HostBootstrapPlanResult",
+      "type": "object"
+    },
+    "HostReadinessCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "required",
+        "passed",
+        "description"
+      ],
+      "title": "HostReadinessCheck",
+      "type": "object"
+    },
+    "HostReadinessResult": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/HostBootstrapAction"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/HostReadinessCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "registry_layout": {
+          "anyOf": [
+            {
+              "enum": [
+                "v2_managed",
+                "legacy_nested",
+                "missing",
+                "unsafe"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Layout"
+        },
+        "requires_v2_registry_layout": {
+          "default": false,
+          "title": "Requires V2 Registry Layout",
+          "type": "boolean"
+        },
+        "runtime_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "legacy_pull",
+                "v2_reconcile"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Mode"
+        },
+        "self_deploy_reconcile_active_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Active State"
+        },
+        "self_deploy_reconcile_exit_status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Exit Status"
+        },
+        "self_deploy_reconcile_exit_timestamp_monotonic": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Exit Timestamp Monotonic"
+        },
+        "self_deploy_reconcile_result": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Result"
+        },
+        "self_deploy_reconcile_sub_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Deploy Reconcile Sub State"
+        },
+        "transport": {
+          "enum": [
+            "root_ssh",
+            "declaration_only"
+          ],
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport",
+        "ready",
+        "checks",
+        "actions"
+      ],
+      "title": "HostReadinessResult",
+      "type": "object"
+    },
+    "Meta": {
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "Meta",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "not": {
+            "type": "null"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "properties": {
+        "error": {
+          "not": {
+            "type": "null"
+          }
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/CommandContext"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetail"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
+    "meta": {
+      "$ref": "#/$defs/Meta"
+    },
+    "next_actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HostBootstrapPlanResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": "infralink.cli/v1",
+      "default": "infralink.cli/v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "next_actions"
+  ],
+  "title": "Envelope[HostBootstrapPlanResult]",
+  "type": "object"
+}

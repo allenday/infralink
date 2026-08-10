@@ -50,13 +50,15 @@ class Binding(ContractModel):
 
 
 class Action(ContractModel):
+    """An internal action recipe with a compact public serialization."""
+
     rel: str
-    argv: list[str]
+    argv: list[str] = Field(exclude=True)
     command: str
     description: str
     safe: bool
-    templated: bool = False
-    bindings: dict[str, Binding] = Field(default_factory=dict)
+    templated: bool = Field(default=False, exclude_if=lambda value: not value)
+    bindings: dict[str, Binding] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class CommandContext(ContractModel):
@@ -398,6 +400,19 @@ class HelpResult(ContractModel):
     arguments: list[ArgumentDescriptor]
     options: list[OptionDescriptor]
     examples: list[str]
+    children: list[HelpSubcommand] = Field(default_factory=list)
+
+
+class HelpSubcommand(ContractModel):
+    name: str
+    summary: str
+    action: HelpNavigationAction
+
+
+class HelpNavigationAction(ContractModel):
+    rel: Literal["help"] = "help"
+    argv: list[str] = Field(exclude=True)
+    command: str
 
 
 class VersionResult(ContractModel):
@@ -411,8 +426,7 @@ class InfoResult(ContractModel):
 
 
 class HostListResult(ContractModel):
-    items: list[HostSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class HostShowResult(ContractModel):
@@ -422,8 +436,7 @@ class HostShowResult(ContractModel):
 
 
 class ServiceListResult(ContractModel):
-    items: list[ServiceSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class ServiceShowResult(ContractModel):
@@ -435,8 +448,7 @@ class ServiceShowResult(ContractModel):
 
 
 class EdgeListResult(ContractModel):
-    items: list[EdgeSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class EdgeShowResult(ContractModel):
@@ -464,9 +476,87 @@ class CheckCommandResult(ContractModel):
     summary: CheckSummary
 
 
+class DoctorTarget(ContractModel):
+    type: Literal["global", "host", "service", "edge", "profile"]
+    id: str | None = None
+    canonical_name: str | None = None
+
+
+class DoctorEvidence(ContractModel):
+    id: str
+    adapter: str | None = None
+    signal_refs: list[str]
+    status: Literal["healthy", "unhealthy", "unavailable", "unknown", "provisioning"]
+    reason: str | None = None
+    observed_at: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class DoctorCoverage(ContractModel):
+    required: int = Field(ge=0)
+    bound: int = Field(ge=0)
+    unbound: int = Field(ge=0)
+    unsupported: int = Field(ge=0)
+    valid: bool
+
+
+class DoctorEvidenceSummary(ContractModel):
+    adapter: str
+    configured: bool
+    healthy: int = Field(ge=0)
+    unhealthy: int = Field(ge=0)
+    unavailable: int = Field(ge=0)
+    unknown: int = Field(ge=0)
+    live_observation_count: int = Field(ge=0)
+    latest_observed_at: str | None = None
+
+
+class HostReadinessCheck(ContractModel):
+    id: str
+    required: bool
+    passed: bool
+    description: str
+    detail: str | None = None
+
+
+class HostBootstrapAction(ContractModel):
+    id: str
+    check_id: str
+    description: str
+
+
+class HostReadinessResult(ContractModel):
+    transport: Literal["root_ssh", "declaration_only"]
+    ready: bool
+    checks: list[HostReadinessCheck]
+    actions: list[HostBootstrapAction]
+    runtime_mode: Literal["legacy_pull", "v2_reconcile"] | None = None
+    registry_layout: Literal["v2_managed", "legacy_nested", "missing", "unsafe"] | None = None
+    requires_v2_registry_layout: bool = False
+    self_deploy_reconcile_result: str | None = None
+    self_deploy_reconcile_exit_status: int | None = None
+    self_deploy_reconcile_active_state: str | None = None
+    self_deploy_reconcile_sub_state: str | None = None
+    self_deploy_reconcile_exit_timestamp_monotonic: int | None = None
+
+
+class DoctorResult(ContractModel):
+    target: DoctorTarget
+    declared: dict[str, Any]
+    evidence: list[DoctorEvidence]
+    evidence_summary: list[DoctorEvidenceSummary]
+    coverage: DoctorCoverage | None = None
+    readiness: HostReadinessResult | None = None
+    status: Literal["healthy", "unhealthy", "unavailable", "unknown"]
+    reason: str | None = None
+
+
+class HostBootstrapPlanResult(ContractModel):
+    host: DoctorTarget
+    readiness: HostReadinessResult
+
+
 class AppListResult(ContractModel):
-    items: list[AppSummary]
-    page: PageInfo
+    items: list[str]
 
 
 class AppShowResult(ContractModel):

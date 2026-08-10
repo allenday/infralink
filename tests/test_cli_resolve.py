@@ -1,4 +1,5 @@
 import json
+import shlex
 from pathlib import Path
 
 import click
@@ -17,7 +18,7 @@ EDGE_ID = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
 
 
 def invoke(*args: str):
-    return CliRunner().invoke(cli, list(args))
+    return CliRunner().invoke(cli, ["--output", "json", *args])
 
 
 def resolve(*args: str):
@@ -63,6 +64,7 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
         "path": ["resolve"],
         "args": {"edge_id": EDGE_ID},
         "flags": [
+            "--output",
             "--registry",
             "--edges",
             "--user",
@@ -118,22 +120,20 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
     Draft202012Validator(schema).validate(payload)
 
     actions = {item["rel"]: item for item in payload["next_actions"]}
-    source = [
-        "infralink",
-        "--registry",
-        str(EXAMPLES / "registry.yml"),
-        "--edges",
-        str(EXAMPLES / "edges.yml"),
-    ]
-    assert actions["validate"]["argv"] == [*source, "validate", "--check-resolution"]
-    assert actions["check"]["argv"] == [*source, "check", "--edge", EDGE_ID]
-    assert all(item["safe"] and not item["templated"] for item in actions.values())
+    validate_command = shlex.split(actions["validate"]["command"])
+    check_command = shlex.split(actions["check"]["command"])
+    assert validate_command[-2:] == ["validate", "--check-resolution"]
+    assert check_command[-3:] == ["check", "--edge", EDGE_ID]
+    assert ["--registry", str(EXAMPLES / "registry.yml")] == validate_command[3:5]
+    assert all(item["safe"] and "templated" not in item for item in actions.values())
 
 
 def test_resolve_actions_are_executable_typed_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, payload = resolve()
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(EXAMPLES / "registry.yml"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(EXAMPLES / "edges.yml"))
     actions = {item["rel"]: item for item in payload["next_actions"]}
     monkeypatch.setattr(
         "infralink.cli.check.check_edge_health",
@@ -151,7 +151,7 @@ def test_resolve_actions_are_executable_typed_commands(
     )
 
     for rel, schema_name in (("validate", "validate"), ("check", "check")):
-        replay = invoke(*actions[rel]["argv"][1:])
+        replay = invoke(*shlex.split(actions[rel]["command"])[1:])
         assert replay.exit_code == 0, replay.output
         replay_payload = json.loads(replay.output)
         schema = json.loads(
@@ -162,8 +162,27 @@ def test_resolve_actions_are_executable_typed_commands(
         Draft202012Validator(schema).validate(replay_payload)
 
 
+@pytest.mark.parametrize(
+    "source_args",
+    [
+        [f"--registry={EXAMPLES / 'registry.yml'}", f"--edges={EXAMPLES / 'edges.yml'}"],
+        ["-r", str(EXAMPLES / "registry.yml"), "-e", str(EXAMPLES / "edges.yml")],
+    ],
+)
+def test_explicit_source_spellings_remain_replayable_in_actions(source_args: list[str]) -> None:
+    result = invoke(*source_args, "resolve", EDGE_ID)
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    action = next(item for item in payload["next_actions"] if item["rel"] == "validate")
+    assert "--registry" in action["command"]
+    assert "--edges" in action["command"]
+    replay = invoke(*shlex.split(action["command"])[1:])
+    assert replay.exit_code == 0, replay.output
+
+
 def test_missing_edge_action_preserves_custom_sources_and_is_executable(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry_path, edges_path = canary_topology(tmp_path, "missing-action-secret")
     result = invoke(
@@ -179,16 +198,12 @@ def test_missing_edge_action_preserves_custom_sources_and_is_executable(
     assert result.exit_code == 3
     assert payload["error"]["code"] == "entity_not_found"
     action = payload["next_actions"][0]
-    assert action["argv"] == [
-        "infralink",
-        "--registry",
-        str(registry_path),
-        "--edges",
-        str(edges_path),
-        "edges-list",
-    ]
+    assert shlex.split(action["command"])[-2:] == ["edge", "list"]
+    assert "--registry" in action["command"]
 
-    replay = invoke(*action["argv"][1:])
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry_path))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges_path))
+    replay = invoke(*shlex.split(action["command"])[1:])
     assert replay.exit_code == 0, replay.output
     replay_payload = json.loads(replay.output)
     schema = json.loads(
@@ -316,7 +331,7 @@ def test_resolve_resolution_error_is_safe_and_repairable(
     assert result.exit_code == 3
     assert payload["error"]["code"] == "input_load_failed"
     assert "provider-canary" not in result.output
-    assert payload["next_actions"][0]["argv"][-1] == "edges-list"
+    assert payload["next_actions"][0]["command"].endswith("edge list")
 
 
 def test_resolve_unexpected_error_is_json_internal_failure(

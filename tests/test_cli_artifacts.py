@@ -4,6 +4,7 @@ import errno
 import hashlib
 import json
 import os
+import shlex
 import stat
 from pathlib import Path
 
@@ -68,7 +69,7 @@ edges:
 def _invoke(root: Path, *args: str):
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=root):
-        result = runner.invoke(cli, list(args))
+        result = runner.invoke(cli, ["--output", "json", *args])
         cwd = Path.cwd()
         paths = {
             path.relative_to(cwd): path.read_bytes() for path in cwd.rglob("*") if path.is_file()
@@ -78,15 +79,14 @@ def _invoke(root: Path, *args: str):
 
 def _payload(result) -> dict:
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
-    return json.loads(result.output)
+    return yaml.safe_load(result.output)
 
 
 @pytest.mark.parametrize("command", ["analyze", "diagram", "docs"])
 def test_artifact_commands_require_explicit_output(tmp_path: Path, command: str) -> None:
     registry, edges = _write_topology(tmp_path)
     args = ["--registry", str(registry), "--edges", str(edges), command]
-    result = CliRunner().invoke(cli, args)
+    result = CliRunner().invoke(cli, ["--output", "json", *args])
     payload = _payload(result)
 
     assert result.exit_code == 2
@@ -122,7 +122,7 @@ def test_diagram_stdout_is_rejected_without_embedded_content(tmp_path: Path) -> 
 def test_artifact_help_marks_output_required_and_does_not_advertise_stdout(
     command: str,
 ) -> None:
-    result = CliRunner().invoke(cli, ["help", command])
+    result = CliRunner().invoke(cli, ["--output", "json", "help", command])
     payload = _payload(result)
     options = {option["name"]: option for option in payload["result"]["options"]}
 
@@ -323,9 +323,11 @@ def test_docs_does_not_overwrite_nested_artifact_symlink(tmp_path: Path) -> None
 
 
 def test_artifact_continuation_action_is_executable_and_source_preserving(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry, edges = _write_topology(tmp_path)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):
         first = runner.invoke(
@@ -349,19 +351,17 @@ def test_artifact_continuation_action_is_executable_and_source_preserving(
             item for item in first_payload["next_actions"] if item["rel"] == "continue"
         )
         cursor = first_payload["result"]["artifacts"]["page"]["next_cursor"]
-        replay = [cursor if item == "{cursor}" else item for item in continuation["argv"]]
-        second = runner.invoke(cli, replay[1:])
+        replay = [
+            cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])
+        ]
+        second = runner.invoke(cli, ["--output", "json", *replay[1:]])
     second_payload = _payload(second)
 
     assert second.exit_code == 0
     assert continuation["bindings"]["cursor"]["source"] == ("result.artifacts.page.next_cursor")
     assert continuation["safe"] is False
-    assert continuation["argv"][1:5] == [
-        "--registry",
-        str(registry),
-        "--edges",
-        str(edges),
-    ]
+    assert "--registry" in continuation["command"]
+    assert "--edges" in continuation["command"]
     assert second_payload["result"]["artifacts"]["page"]["returned"] == 1
     assert (
         second_payload["result"]["artifacts"]["items"][0]["path"]
@@ -544,15 +544,15 @@ def test_descriptor_relative_writer_contains_parent_symlink_swap(
     assert Path("detached/nested/result.txt").read_bytes() == b"bounded"
 
 
-def test_analyze_context_resolves_default_root_and_command_override_registry(
+def test_analyze_context_requires_explicit_registry_and_allows_command_override(
     tmp_path: Path,
 ) -> None:
-    from infralink.cli.main import DEFAULT_REGISTRY, _context_for
+    from infralink.cli.main import _context_for
 
     root_registry, edges = _write_topology(tmp_path)
     override = tmp_path / "override.yml"
     override.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
-    assert _context_for(path=["analyze"]).resolved["registry"] == DEFAULT_REGISTRY
+    assert _context_for(path=["analyze"]).resolved["registry"] is None
 
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):

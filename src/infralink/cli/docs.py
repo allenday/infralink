@@ -87,12 +87,12 @@ def docs(
                     code=ErrorCode.ENTITY_NOT_FOUND,
                     message="Host was not found",
                     exit_code=3,
-                    fix="Use infralink hosts to list available hosts",
+                    fix="Use infralink host list to list available hosts",
                     details={"entity_type": "host", "requested_id": host_filter},
                     next_actions=[
                         action(
                             "list",
-                            [*_root_source_argv(ctx), "hosts"],
+                            [*_root_source_argv(ctx), "host", "list"],
                             "List available hosts",
                         )
                     ],

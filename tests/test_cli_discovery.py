@@ -4,6 +4,7 @@ from pathlib import Path
 
 import click
 import pytest
+import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
@@ -17,7 +18,7 @@ EXAMPLES = ROOT / "examples"
 
 
 def invoke(*args: str):
-    return CliRunner().invoke(cli, list(args))
+    return CliRunner().invoke(cli, ["--output", "json", *args])
 
 
 def payload_for(*args: str) -> dict:
@@ -32,10 +33,10 @@ def assert_schema(payload: dict, name: str) -> None:
     Draft202012Validator(schema).validate(payload)
 
 
-def test_root_discovers_commands_as_json() -> None:
+def test_root_discovers_canonical_commands_as_json() -> None:
     payload = payload_for()
     assert payload["result"]["version"] == "0.4.0"
-    assert {"help", "version", "hosts", "services", "edges-list"} <= {
+    assert {"help", "version", "host", "service", "edge"} <= {
         item["name"] for item in payload["result"]["commands"]
     }
     assert_schema(payload, "root")
@@ -54,13 +55,13 @@ def test_help_is_json() -> None:
     assert payload["result"]["path"] == ["resolve"]
     assert payload["result"]["arguments"][0]["name"] == "edge_id"
     assert payload["result"]["options"]
-    assert payload["result"]["examples"]
+    assert payload["result"]["children"] == []
 
 
 def test_click_help_aliases_are_json() -> None:
     root_help = payload_for("--help")
     assert root_help["result"]["path"] == []
-    assert root_help["command"]["raw"] == "infralink --help"
+    assert root_help["command"]["raw"] == "infralink --output json --help"
     assert payload_for("resolve", "--help")["result"]["path"] == ["resolve"]
 
 
@@ -118,7 +119,7 @@ def test_version_is_json() -> None:
 def test_click_version_alias_is_json() -> None:
     payload = payload_for("--version")
     assert payload["result"]["version"] == "0.4.0"
-    assert payload["command"]["raw"] == "infralink --version"
+    assert payload["command"]["raw"] == "infralink --output json --version"
 
 
 @pytest.mark.parametrize(
@@ -274,7 +275,7 @@ def test_cli_failure_crosses_direct_and_public_boundaries(
 
     assert main(["explode"]) == 4
     captured = capsys.readouterr()
-    assert json.loads(captured.out)["error"]["code"] == "provider_unavailable"
+    assert yaml.safe_load(captured.out)["error"]["code"] == "provider_unavailable"
     assert captured.err == ""
 
 
@@ -295,7 +296,7 @@ def test_unexpected_exception_is_redacted_at_both_boundaries(
     assert main(["explode"]) == 70
     captured = capsys.readouterr()
     assert "canary-secret" not in captured.out
-    assert json.loads(captured.out)["error"]["code"] == "internal_error"
+    assert yaml.safe_load(captured.out)["error"]["code"] == "internal_error"
     assert captured.err == ""
 
 
@@ -340,8 +341,7 @@ def test_system_exit_integer_becomes_one_internal_error(
     assert main(["explode"]) == 70
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.count("\n") == 1
-    assert json.loads(captured.out)["error"]["code"] == "internal_error"
+    assert yaml.safe_load(captured.out)["error"]["code"] == "internal_error"
 
 
 @pytest.mark.parametrize("failure_kind", ["cli_failure", "runtime_error"])
@@ -365,7 +365,7 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
     expected_exit = 4 if failure_kind == "cli_failure" else 70
 
     def assert_expected_payload(output: str) -> None:
-        payload = json.loads(output)
+        payload = yaml.safe_load(output)
         if failure_kind == "cli_failure":
             assert payload == {"first": True}
         else:
@@ -381,7 +381,6 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
     assert main(["explode"]) == expected_exit
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.count("\n") == 1
     assert_expected_payload(captured.out)
 
     with pytest.raises(SystemExit) as caught:
@@ -389,12 +388,10 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
     assert caught.value.code == expected_exit
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.count("\n") == 1
     assert_expected_payload(captured.out)
 
     following = invoke("--version")
     assert following.exit_code == 0
-    assert following.output.count("\n") == 1
     assert json.loads(following.output)["result"]["version"] == "0.4.0"
 
 
@@ -450,6 +447,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         "version": {"version"},
         "analyze": {"analyze"},
         "check": {"check"},
+        "doctor": {"doctor"},
         "diagram": {"diagram"},
         "docs": {"docs"},
         "resolve": {"resolve"},
@@ -471,12 +469,10 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         },
         "app": {"app-list", "app-show"},
         "info": {"info"},
-        "hosts": {"hosts"},
-        "services": {"services"},
-        "edges-list": {"edges-list"},
-        "host": {"host-show"},
-        "edge": {"edge-show"},
-        "service": {"service-show"},
+        "host": {"hosts", "host-show", "host-bootstrap", "host-apply"},
+        "operation": {"operation-status"},
+        "edge": {"edges-list", "edge-show"},
+        "service": {"services", "service-show"},
     }
     live_commands = {item["name"] for item in payload_for()["result"]["commands"]}
     schema_names = {path.stem for path in (ROOT / "src/infralink/schemas/cli/v1").glob("*.json")}
@@ -511,15 +507,17 @@ def test_services_include_role_explicit_and_edge_target_identities() -> None:
         str(EXAMPLES / "registry.yml"),
         "--edges",
         str(EXAMPLES / "edges.yml"),
-        "services",
+        "service",
+        "list",
     )
-    service_ids = {item["id"] for item in payload["result"]["items"]}
+    service_ids = set(payload["result"]["items"])
     assert {"postgresql", "redis", "nginx", "node-exporter"} <= service_ids
-    assert payload["result"]["page"]["returned"] == len(payload["result"]["items"])
-    assert payload["result"]["page"]["returned"] == payload["result"]["page"]["total"]
+    assert "page" not in payload["result"]
+    show = next(action for action in payload["next_actions"] if action["rel"] == "show")
+    assert show["bindings"]["id"]["source"] == "result.items[]"
 
 
-def test_services_paginate_101_records_without_silent_truncation(tmp_path: Path) -> None:
+def test_services_list_all_declared_scalar_ids(tmp_path: Path) -> None:
     services = "\n".join(
         f"      service-{index}:\n        port: {10000 + index}\n" for index in range(101)
     )
@@ -532,13 +530,11 @@ def test_services_paginate_101_records_without_silent_truncation(tmp_path: Path)
         "    services:\n"
         f"{services}"
     )
-    payload = payload_for("--registry", str(registry), "services")
-    generated = [item for item in payload["result"]["items"] if item["id"].startswith("service-")]
-    assert len(generated) <= 100
-    assert payload["result"]["page"]["returned"] == 100
-    assert payload["result"]["page"]["total"] > payload["result"]["page"]["returned"]
-    assert payload["result"]["page"]["next_cursor"] is not None
-    assert payload["meta"]["truncated"] is True
+    payload = payload_for("--registry", str(registry), "service", "list")
+    generated = [item for item in payload["result"]["items"] if item.startswith("service-")]
+    assert len(generated) == 101
+    assert "page" not in payload["result"]
+    assert payload["meta"]["truncated"] is False
 
 
 @pytest.mark.parametrize(
@@ -571,5 +567,5 @@ def test_wrapper_and_click_object_have_identical_parse_errors(
     direct = invoke("--unknown")
     assert main(["--unknown"]) == direct.exit_code == 2
     captured = capsys.readouterr()
-    assert json.loads(captured.out)["error"]["code"] == "usage_error"
+    assert yaml.safe_load(captured.out)["error"]["code"] == "usage_error"
     assert captured.err == ""

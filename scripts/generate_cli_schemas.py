@@ -10,10 +10,12 @@ from infralink.cli.contracts import (
     AppShowResult,
     ArtifactResult,
     CheckCommandResult,
+    DoctorResult,
     EdgeListResult,
     EdgeShowResult,
     Envelope,
     HelpResult,
+    HostBootstrapPlanResult,
     HostListResult,
     HostShowResult,
     InfoResult,
@@ -40,6 +42,7 @@ from infralink.cli.observation_contracts import (
     ProjectSecretsResult,
     ProjectViewResult,
 )
+from infralink.cli.operation_contracts import HostApplyResult, OperationStatusResult
 
 ROOT = Path(__file__).parents[1]
 OUTPUT = ROOT / "src/infralink/schemas/cli/v1"
@@ -50,6 +53,9 @@ MODELS: dict[str, Any] = {
     "info": Envelope[InfoResult],
     "hosts": Envelope[HostListResult],
     "host-show": Envelope[HostShowResult],
+    "host-bootstrap": Envelope[HostBootstrapPlanResult],
+    "host-apply": Envelope[HostApplyResult],
+    "operation-status": Envelope[OperationStatusResult],
     "services": Envelope[ServiceListResult],
     "service-show": Envelope[ServiceShowResult],
     "edges-list": Envelope[EdgeListResult],
@@ -57,6 +63,7 @@ MODELS: dict[str, Any] = {
     "validate": Envelope[ValidateResult],
     "resolve": Envelope[ResolveResult],
     "check": Envelope[CheckCommandResult],
+    "doctor": Envelope[DoctorResult],
     "app-list": Envelope[AppListResult],
     "app-show": Envelope[AppShowResult],
     "analyze": Envelope[AnalyzeResult],
@@ -101,6 +108,14 @@ def render_schemas() -> dict[str, str]:
     rendered_schemas: dict[str, str] = {}
     for name, model in MODELS.items():
         schema = model.model_json_schema()
+        for definition in schema.get("$defs", {}).values():
+            if definition.get("title") not in {"Action", "HelpNavigationAction"}:
+                continue
+            definition.get("properties", {}).pop("argv", None)
+            if "required" in definition:
+                definition["required"] = [
+                    field for field in definition["required"] if field != "argv"
+                ]
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["oneOf"] = OUTCOME_INVARIANT
         rendered_schemas[f"{name}.json"] = json.dumps(schema, indent=2, sort_keys=True) + "\n"

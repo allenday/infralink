@@ -53,18 +53,22 @@ edges:
 
 ## CLI Contract
 
-Every invocation writes exactly one `infralink.cli/v1` JSON envelope to stdout.
-The envelope includes `ok`, a shallow parsed command view, a typed `result` or
-redacted `error`, and bounded `next_actions`. Lists use explicit limits and
-opaque cursors. Use `infralink help [command ...]` for machine-readable
-discovery.
+Every invocation writes exactly one structured envelope to stdout. YAML is the
+default for topology and offline observation commands; use `--output json` for
+explicit compact JSON. Envelopes include `ok`, a shallow parsed command view, a
+typed `result` or redacted `error`, and bounded next actions. Lists use explicit
+limits and opaque cursors. `infralink help` is a compact generated index of the
+currently registered immediate commands; `infralink help <command>` supplies
+that command's detailed arguments and options.
 
-Legacy topology commands retain their `infralink.cli/v1` JSON contract. Offline
-observation commands use `agent-cli.response.v1`, default to YAML, and accept
-explicit `--output json` or `--output yaml`:
+Topology commands use the `infralink.cli/v1` envelope and offline observation
+commands use `agent-cli.response.v1`:
 
 ```bash
 infralink capabilities
+infralink help
+infralink help resolve
+infralink --output json help resolve
 infralink validate --source examples/observation --as-of "$AS_OF"
 infralink project observation --source examples/observation --as-of "$AS_OF"
 infralink project secrets --source examples/observation --as-of "$AS_OF"
@@ -72,6 +76,11 @@ infralink project view service-overview --source examples/observation --as-of "$
 infralink project readiness ci-release --source examples/observation --as-of "$AS_OF"
 infralink explain schema-version-unsupported
 ```
+
+Topology commands require declared sources. Set `INFRALINK_REGISTRY` and
+`INFRALINK_EDGES` for an operator environment, or provide `--registry` and
+`--edges` per invocation; command-line flags take precedence. Packaged examples
+remain explicit demo and test inputs only.
 
 Observation documents declare `schema_version: infralink.observation/v1` and
 may be validated against the packaged schemas under

@@ -53,7 +53,7 @@ def resolve(
     edges = ctx.edges
     resolver = EdgeResolver(registry, edges)
     if edges.get(edge_id) is None:
-        discovery = [*_root_source_argv(ctx), "edges-list"]
+        discovery = [*_root_source_argv(ctx), "edge", "list"]
         raise CliFailure(
             code=ErrorCode.ENTITY_NOT_FOUND,
             message="Edge not found",
@@ -95,7 +95,7 @@ def resolve(
             fix="Verify the edge and its target host declarations",
             details={},
             next_actions=[
-                action("list", [*source, "edges-list"], "List all edges"),
+                action("list", [*source, "edge", "list"], "List all edges"),
             ],
         ) from None
 

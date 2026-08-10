@@ -10,6 +10,7 @@ from infralink.cli.main import cli
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
 from infralink.health.checks import HealthCheckResult
+from infralink.host_readiness import HostReadinessProbe
 from infralink.secrets import SecretAudit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,8 +81,7 @@ def _assert_no_canary(
     exception = result.exception
     assert result.exit_code == expected_exit, (label, output, repr(exception))
     assert stderr == "", label
-    assert output.count("\n") == 1, label
-    payload = json.loads(output)
+    payload = yaml.safe_load(output)
     assert payload["ok"] is expected_ok, label
     observables = (
         output,
@@ -121,6 +121,22 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
             criticality=edge.criticality.value,
             check_type="tcp",
             timestamp=0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.main.SshReadinessTransport.probe",
+        lambda self, address: HostReadinessProbe(
+            reachable=False,
+            hostname=None,
+            machine_id=None,
+            commands={},
+            devops_account=False,
+            devops_authorized_access=False,
+            bws_config=False,
+            self_deploy_runtime=False,
+            self_deploy_timer_enabled=False,
+            self_deploy_timer_active=False,
+            error="ssh_unreachable",
         ),
     )
     monkeypatch.setattr(
@@ -242,6 +258,7 @@ selection:
         ("app", "list"): ([*source, "app", "list"], 0, True),
         ("app", "show"): ([*source, "app", "show", "core"], 0, True),
         ("check",): ([*source, "check", "--edge", EDGE_ID], 0, True),
+        ("doctor",): ([*source, "doctor", "host", TARGET_ID], 2, False),
         ("diagram",): (
             [
                 *source,
@@ -266,15 +283,27 @@ selection:
             True,
         ),
         ("edge", "show"): ([*source, "edge", "show", EDGE_ID], 0, True),
-        ("edges-list",): ([*source, "edges-list"], 0, True),
+        ("edge", "list"): ([*source, "edge", "list"], 0, True),
         ("host", "show"): ([*source, "host", "show", TARGET_ID], 0, True),
-        ("hosts",): ([*source, "hosts"], 0, True),
+        ("host", "list"): ([*source, "host", "list"], 0, True),
+        ("host", "create"): (
+            ["host", "create", "--name", "secret-leak-test", "--address", "192.0.2.1"],
+            0,
+            True,
+        ),
+        ("host", "bootstrap"): ([*source, "host", "bootstrap", TARGET_ID, "--plan"], 0, True),
+        ("host", "apply"): ([*source, "host", "apply", TARGET_ID, "--dry-run"], 3, False),
         ("info",): ([*source, "info"], 0, True),
+        ("operation", "status"): (
+            ["operation", "status", "op_01J00000000000000000000000"],
+            4,
+            False,
+        ),
         ("resolve",): ([*source, "resolve", EDGE_ID], 0, True),
         ("secrets", "audit"): ([*source, "secrets", "audit"], 0, True),
         ("secrets", "inspect"): ([*source, "secrets", "inspect"], 0, True),
         ("service", "show"): ([*source, "service", "show", "postgresql"], 0, True),
-        ("services",): ([*source, "services"], 0, True),
+        ("service", "list"): ([*source, "service", "list"], 0, True),
         ("validate",): ([*source, "validate", "--check-resolution"], 0, True),
         ("version",): ([*source, "version"], 0, True),
         ("capabilities",): (["--output", "json", "capabilities"], 0, True),

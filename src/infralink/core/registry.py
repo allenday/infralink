@@ -115,6 +115,23 @@ class Host:
         return tuple(self._schema.bws_extra_projects)
 
     @property
+    def bootstrap_executor(self) -> dict[str, str] | None:
+        """Declared immutable executor for an explicit host baseline apply."""
+        if self._schema.bootstrap_executor is None:
+            return None
+        return self._schema.bootstrap_executor.model_dump()
+
+    @property
+    def self_deploy_v2_registry_layout_enabled(self) -> bool:
+        """Whether this host's declared migration policy requires the V2 checkout root."""
+        return bool((self._schema.model_extra or {}).get("self_deploy_v2_registry_layout_enabled"))
+
+    @property
+    def self_deploy_v2_reconcile_enabled(self) -> bool:
+        """Whether this host declares V2 reconciliation as an active requirement."""
+        return bool((self._schema.model_extra or {}).get("self_deploy_v2_reconcile_enabled", True))
+
+    @property
     def managed_services(self) -> dict[str, Any]:
         """Managed service configurations (in legacy docker-compose.yml.j2)."""
         # Prefer managed_services, fall back to services for backward compat

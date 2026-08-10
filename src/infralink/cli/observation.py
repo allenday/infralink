@@ -13,7 +13,7 @@ from uuid import uuid4
 import click
 import yaml
 
-from infralink.cli.actions import action
+from infralink.cli.actions import action, redact_argv, render_action
 from infralink.cli.contracts import Action, Binding
 from infralink.cli.observation_contracts import (
     CapabilitiesResult,
@@ -32,7 +32,6 @@ from infralink.cli.observation_contracts import (
     ProjectViewResult,
     SourceProvenanceResult,
 )
-from infralink.cli.output import redact_argv
 
 
 def _now() -> datetime:
@@ -71,6 +70,9 @@ def _emit(ctx: Any, envelope: ObservationEnvelope[Any]) -> None:
     from infralink.cli.main import _ENVELOPE_EMITTED
 
     payload = envelope.model_dump(mode="json")
+    payload["next_actions"] = [
+        render_action(item, envelope.command.resolved) for item in envelope.next_actions
+    ]
     _ENVELOPE_EMITTED.set(True)
     if _format(ctx) == "json":
         import json
