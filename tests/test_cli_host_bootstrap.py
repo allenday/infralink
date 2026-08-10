@@ -262,4 +262,8 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(
     assert "install_bws_cli" in serialized
     assert "configure_bws" not in serialized
     assert "install_self_deploy_runtime" not in serialized
-    assert "enable_self_deploy_timer" not in serialized
+    assert "enable_self_deploy_timer" in serialized
+
+
+def test_baseline_executor_mirrors_the_v2_timer_capability() -> None:
+    assert "enable_self_deploy_timer" in BASELINE_EXECUTOR_ACTIONS
