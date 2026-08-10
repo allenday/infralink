@@ -16,6 +16,12 @@ HOST_NAME = "relaxgg-db-es1"
 UNIT = "self-deploy-v2-reconcile.service"
 INVOCATION = "8d6c4ad60e4a4b589fe35ad9e1760d56"
 FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+MANIFEST_FINGERPRINT = "SHA256:Pnpjf51QfL7khY8GiWuWNp/5G9Twt321Dd5Dk8dB50w"
+CORE_HOSTS = (
+    ("9157ddeb-cb6d-4d55-8252-9db358f5d932", "cyberstorm-citadel", "100.73.228.90"),
+    ("7ffe46b7-0eb4-40cb-8e14-ea679b9948f4", "cyberstorm-watchtower", "100.123.0.63"),
+    (HOST_ID, HOST_NAME, "100.64.68.83"),
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -64,6 +70,115 @@ def _registry_checkout(tmp_path: Path, *, declared: bool = True) -> Path:
 
 def _completed(stdout: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+
+
+def _manifest_registry_checkout(tmp_path: Path) -> Path:
+    root = tmp_path / "registry"
+    for host_id, canonical_name, address in CORE_HOSTS:
+        host = root / "hosts" / host_id
+        host.mkdir(parents=True)
+        (host / "manifest.yml").write_text(
+            "hosts:\n"
+            f"  {host_id}:\n"
+            f"    canonical_name: {canonical_name}\n"
+            "    status: active\n"
+            f"    tailscale_ip: {address}\n"
+            f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {MANIFEST_FINGERPRINT}\n"
+            "    self_deploy_v2_promotion_channel: core-v2\n"
+            "    self_deploy_v2_promotion_policy_enabled: true\n"
+            "    self_deploy_v2_reconcile_enabled: true\n"
+            "    self_deploy_v2_reconcile_packaged: true\n",
+            encoding="utf-8",
+        )
+    _git(root, "init", "--quiet")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "Test")
+    _git(root, "add", ".")
+    _git(root, "commit", "--quiet", "-m", "manifest registry")
+    return root / "hosts"
+
+
+@pytest.mark.parametrize(("host_id", "canonical_name", "address"), CORE_HOSTS)
+def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
+    tmp_path: Path, host_id: str, canonical_name: str, address: str
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "apply", host_id, "--dry-run"]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert_schema(payload, "host-apply")
+    assert payload["result"] == {
+        "dry_run": True,
+        "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("tailscale_ip", "not an address"),
+        ("tailscale_ip", "192.0.2.1"),
+        ("self_deploy_v2_promotion_host_fingerprint", "ssh-rsa SHA256:short"),
+        ("self_deploy_v2_promotion_channel", "not valid"),
+        ("self_deploy_v2_reconcile_enabled", "false"),
+        ("self_deploy_v2_reconcile_packaged", "false"),
+    ),
+)
+def test_host_apply_refuses_malformed_or_disabled_manifest_declarations(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            {
+                "tailscale_ip": "tailscale_ip: 100.64.68.83",
+                "self_deploy_v2_promotion_host_fingerprint": (
+                    f"self_deploy_v2_promotion_host_fingerprint: ssh-rsa {MANIFEST_FINGERPRINT}"
+                ),
+                "self_deploy_v2_promotion_channel": "self_deploy_v2_promotion_channel: core-v2",
+                "self_deploy_v2_reconcile_enabled": "self_deploy_v2_reconcile_enabled: true",
+                "self_deploy_v2_reconcile_packaged": "self_deploy_v2_reconcile_packaged: true",
+            }[field],
+            f"{field}: {value}",
+        ),
+        encoding="utf-8",
+    )
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "malformed manifest")
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "input_load_failed"
+
+
+def test_host_apply_refuses_a_partial_v2_manifest_instead_of_using_legacy_contract(
+    tmp_path: Path,
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "    self_deploy_v2_reconcile_packaged: true\n",
+        encoding="utf-8",
+    )
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "partial v2 manifest")
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "input_load_failed"
 
 
 def test_host_apply_starts_only_declared_reconcile_unit_and_returns_opaque_run_reference(

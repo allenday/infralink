@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ _OPERATION_ID = re.compile(
 )
 _LEGACY_OPERATION_ID = re.compile(r"^op_[A-Za-z0-9_-]{8,128}$")
 _FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+_CHANNEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _UNIT = "self-deploy-v2-reconcile.service"
 
 _START_REMOTE = """set -eu
@@ -158,9 +160,66 @@ def operation_provider() -> OperationProvider:
 
 
 def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
-    """Resolve and validate the host's explicit SSH reconcile declaration."""
+    """Resolve a manifest-declared V2 SSH reconcile operation."""
     if not registry_path.is_dir():
         raise _registry_failure("Host apply requires a directory registry checkout", registry_path)
+    manifest_path = registry_path / host.uuid / "manifest.yml"
+    manifest = _read_mapping(manifest_path, "Host apply manifest is missing or invalid")
+    host_data = (
+        manifest.get("hosts", {}).get(host.uuid)
+        if isinstance(manifest.get("hosts"), dict)
+        else None
+    )
+    if not isinstance(host_data, dict) or host_data.get("canonical_name") != host.canonical_name:
+        raise _registry_failure("Host apply manifest does not match the target host", manifest_path)
+    manifest_request = _manifest_request(host.uuid, host.canonical_name, host_data, manifest_path)
+    if manifest_request is not None:
+        return manifest_request
+    return _contract_request(registry_path, host)
+
+
+def _manifest_request(
+    host_uuid: str, canonical_name: str, data: dict[str, Any], path: Path
+) -> ApplyRequest | None:
+    if not any(isinstance(field, str) and field.startswith("self_deploy_v2_") for field in data):
+        return None
+    if data.get("self_deploy_v2_reconcile_enabled") is not True:
+        raise _registry_failure("Host apply manifest does not enable V2 reconcile", path)
+    if data.get("self_deploy_v2_reconcile_packaged") is not True:
+        raise _registry_failure("Host apply manifest does not package V2 reconcile", path)
+    if data.get("self_deploy_v2_promotion_policy_enabled") is not True:
+        raise _registry_failure("Host apply manifest does not enable V2 promotion policy", path)
+    channel = data.get("self_deploy_v2_promotion_channel")
+    if not isinstance(channel, str) or _CHANNEL.fullmatch(channel) is None:
+        raise _registry_failure("Host apply manifest V2 promotion channel is invalid", path)
+    address = data.get("tailscale_ip")
+    if not isinstance(address, str):
+        raise _registry_failure("Host apply manifest Tailscale address is invalid", path)
+    try:
+        parsed_address = ipaddress.ip_address(address)
+    except ValueError:
+        raise _registry_failure("Host apply manifest Tailscale address is invalid", path) from None
+    if not isinstance(
+        parsed_address, ipaddress.IPv4Address
+    ) or parsed_address not in ipaddress.ip_network("100.64.0.0/10"):
+        raise _registry_failure(
+            "Host apply manifest Tailscale address is outside the tailnet range", path
+        )
+    fingerprint = _normalize_manifest_fingerprint(
+        data.get("self_deploy_v2_promotion_host_fingerprint")
+    )
+    if fingerprint is None:
+        raise _registry_failure("Host apply manifest SSH fingerprint is invalid", path)
+    reconcile = data.get("reconcile")
+    if reconcile is not None and (
+        not isinstance(reconcile, dict) or reconcile.get("unit") != _UNIT
+    ):
+        raise _registry_failure("Host apply manifest reconcile unit is invalid", path)
+    return ApplyRequest(host_uuid, canonical_name, address, 22, "root", fingerprint, _UNIT)
+
+
+def _contract_request(registry_path: Path, host: Any) -> ApplyRequest:
+    """Accept the pre-manifest operations contract for existing consumers."""
     contract_path = registry_path / host.uuid / "operations" / "contract.yml"
     contract = _read_mapping(contract_path, "Host apply requires a declared SSH reconcile contract")
     machine = contract.get("machine")
@@ -197,6 +256,15 @@ def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
             "Host apply contract SSH host key fingerprint is invalid", contract_path
         )
     return ApplyRequest(host.uuid, host.canonical_name, address, port, user, fingerprint, _UNIT)
+
+
+def _normalize_manifest_fingerprint(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    parts = value.split()
+    if len(parts) != 2 or parts[0] != "ssh-rsa" or _FINGERPRINT.fullmatch(parts[1]) is None:
+        return None
+    return parts[1]
 
 
 def wait_for_terminal(
