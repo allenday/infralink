@@ -16,6 +16,7 @@ from typing import Any, Protocol
 import yaml
 
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
+from infralink.cli.operation_contracts import OperationFailure, OperationUnitFailure
 
 _OPERATION_ID = re.compile(
     r"^ssh/(?P<host>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
@@ -25,6 +26,9 @@ _LEGACY_OPERATION_ID = re.compile(r"^op_[A-Za-z0-9_-]{8,128}$")
 _FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 _CHANNEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _UNIT = "self-deploy-v2-reconcile.service"
+_JOURNAL_SEPARATOR = "__INFRALINK_JOURNAL__"
+_DIAGNOSTIC_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_MAX_FAILURE_JOURNAL_LINES = 8
 
 _START_REMOTE = """set -eu
 unit=$1
@@ -35,6 +39,7 @@ _STATUS_REMOTE = """set -eu
 unit=$1
 invocation=$2
 systemctl show "$unit" -p InvocationID -p ActiveState -p Result -p ExecMainStatus
+printf '%s\n' '__INFRALINK_JOURNAL__'
 journalctl --quiet --no-pager --output=cat _SYSTEMD_INVOCATION_ID="$invocation" || true
 """
 
@@ -57,6 +62,7 @@ class OperationRecord:
     id: str
     state: str
     target: dict[str, str] | None = None
+    failure: OperationFailure | None = None
 
 
 class OperationProvider(Protocol):
@@ -91,6 +97,7 @@ class SshOperationProvider:
                 "id": request.host_uuid,
                 "canonical_name": request.canonical_name,
             },
+            failure=_failure_diagnostics(values, include_unit=False) if state == "failed" else None,
         )
 
     def _run(
@@ -151,6 +158,7 @@ class SshOperationProvider:
                 "id": request.host_uuid,
                 "canonical_name": request.canonical_name,
             },
+            failure=_failure_diagnostics(values) if state == "failed" else None,
         )
 
 
@@ -280,12 +288,21 @@ def wait_for_terminal(
 
 
 def _parse_properties(stdout: str) -> dict[str, Any]:
-    values: dict[str, Any] = {"journal": []}
+    values: dict[str, Any] = {"journal": [], "journal_text": []}
+    journal_started = False
     for line in stdout.splitlines():
+        if line == _JOURNAL_SEPARATOR:
+            journal_started = True
+            continue
         key, separator, value = line.partition("=")
-        if separator and key in {"InvocationID", "ActiveState", "Result", "ExecMainStatus"}:
+        if (
+            not journal_started
+            and separator
+            and key in {"InvocationID", "ActiveState", "Result", "ExecMainStatus"}
+        ):
             values[key] = value
             continue
+        values["journal_text"].append(line)
         try:
             document = yaml.safe_load(line)
         except yaml.YAMLError:
@@ -314,6 +331,54 @@ def _journal_state(records: object) -> str | None:
         if isinstance(record, dict) and type(record.get("ok")) is bool:
             return "converged" if record["ok"] else "failed"
     return None
+
+
+def _failure_diagnostics(values: dict[str, Any], *, include_unit: bool = True) -> OperationFailure:
+    unit: OperationUnitFailure | None = None
+    if include_unit:
+        unit = OperationUnitFailure(
+            active_state=_diagnostic_text(values.get("ActiveState")),
+            result=_diagnostic_text(values.get("Result")),
+            exec_main_status=_diagnostic_status(values.get("ExecMainStatus")),
+        )
+    return OperationFailure(unit=unit, journal=_journal_diagnostics(values))
+
+
+def _journal_diagnostics(values: dict[str, Any]) -> list[str]:
+    records = values.get("journal")
+    diagnostics = _sanitize_journal(records)
+    journal_text = values.get("journal_text")
+    if diagnostics or not isinstance(journal_text, list) or not journal_text:
+        return diagnostics
+    return ["unstructured journal output omitted"]
+
+
+def _sanitize_journal(records: object) -> list[str]:
+    """Return only explicitly structured, non-secret diagnostic codes."""
+    if not isinstance(records, list):
+        return []
+    sanitized: list[str] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        code = record.get("code")
+        if not isinstance(code, str) or _DIAGNOSTIC_CODE.fullmatch(code) is None:
+            continue
+        sanitized.append(f"code: {code}")
+        if len(sanitized) == _MAX_FAILURE_JOURNAL_LINES:
+            break
+    return sanitized
+
+
+def _diagnostic_text(value: object) -> str:
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def _diagnostic_status(value: object) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return -1
 
 
 @contextmanager
