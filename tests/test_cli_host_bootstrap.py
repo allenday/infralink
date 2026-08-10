@@ -161,7 +161,35 @@ def test_real_module_apply_failure_emits_an_envelope_and_nonzero_exit() -> None:
     assert payload["error"]["code"] == "provider_unavailable"
 
 
-def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monkeypatch) -> None:
+def test_host_bootstrap_apply_missing_bastion_executor_is_provider_unavailable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(ROOT / "examples" / "registry.yml"),
+            "--edges",
+            str(ROOT / "examples" / "edges.yml"),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--apply",
+        ],
+    )
+
+    assert result.exit_code == 4
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "provider_unavailable"
+    assert payload["error"]["details"] == {"capability": "host_bootstrap"}
+
+
+def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(
+    monkeypatch, tmp_path: Path
+) -> None:
     readiness = HostReadinessProbe(
         reachable=True,
         hostname="database.example.com",
@@ -190,6 +218,11 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(monke
             type("Transport", (), {"probe": lambda _self, _address: readiness})(),
         ),
     )
+    control_root = tmp_path / "control"
+    playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+    playbook.parent.mkdir(parents=True)
+    playbook.touch()
+    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: control_root)
     calls: list[object] = []
 
     class Completed:
