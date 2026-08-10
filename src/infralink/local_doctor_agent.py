@@ -32,6 +32,22 @@ _MAX_SIGNATURE_LENGTH = 4096
 
 
 @dataclass(frozen=True)
+class RuntimeOutputRoots:
+    """Fixed least-privilege filesystem roots owned by the local agent."""
+
+    state_root: Path
+    metrics_root: Path
+    runtime_root: Path
+
+
+DEFAULT_OUTPUT_ROOTS = RuntimeOutputRoots(
+    state_root=Path("/var/lib/infralink/local-doctor"),
+    metrics_root=Path("/var/lib/node-exporter/textfile_collector"),
+    runtime_root=Path("/etc/infralink/local-doctor"),
+)
+
+
+@dataclass(frozen=True)
 class RuntimeConfigTrustRoot:
     """Concrete SSH allowed-signers file used to verify generated runtime input."""
 
@@ -55,12 +71,13 @@ class LocalDoctorRuntimeConfig:
     firewall_declaration_path: Path
     firewall_allowed_signers_path: Path
     require_reconcile: bool
+    http_address: str
+    http_port: int
 
     @classmethod
     def from_dict(
-        cls, value: object, *, runtime_root: Path | None = None
+        cls, value: object, *, output_roots: RuntimeOutputRoots = DEFAULT_OUTPUT_ROOTS
     ) -> LocalDoctorRuntimeConfig:
-        del runtime_root  # Paths are signed artifact data; they need not share a filesystem root.
         if not isinstance(value, dict) or set(value) != {
             "canonical_name",
             "freshness_seconds",
@@ -69,6 +86,8 @@ class LocalDoctorRuntimeConfig:
             "firewall_declaration_path",
             "firewall_allowed_signers_path",
             "require_reconcile",
+            "http_address",
+            "http_port",
         }:
             raise ValueError("local Doctor runtime config is invalid")
         canonical_name = value["canonical_name"]
@@ -88,6 +107,18 @@ class LocalDoctorRuntimeConfig:
             or not 1 <= freshness_seconds <= 86_400
             or not all(isinstance(path, str) and Path(path).is_absolute() for path in path_values)
             or type(value["require_reconcile"]) is not bool
+            or not isinstance(value["http_address"], str)
+            or not value["http_address"]
+            or len(value["http_address"]) > 253
+            or any(character.isspace() for character in value["http_address"])
+            or type(value["http_port"]) is not int
+            or not 1 <= value["http_port"] <= 65_535
+            or not _within_root(Path(value["state_path"]), output_roots.state_root)
+            or not _within_root(Path(value["metrics_path"]), output_roots.metrics_root)
+            or not _within_root(Path(value["firewall_declaration_path"]), output_roots.runtime_root)
+            or not _within_root(
+                Path(value["firewall_allowed_signers_path"]), output_roots.runtime_root
+            )
         ):
             raise ValueError("local Doctor runtime config is invalid")
         return cls(
@@ -98,11 +129,24 @@ class LocalDoctorRuntimeConfig:
             firewall_declaration_path=Path(value["firewall_declaration_path"]),
             firewall_allowed_signers_path=Path(value["firewall_allowed_signers_path"]),
             require_reconcile=value["require_reconcile"],
+            http_address=value["http_address"],
+            http_port=value["http_port"],
         )
 
 
+def _within_root(path: Path, root: Path) -> bool:
+    """Accept only a file below a fixed root after resolving existing symlinks."""
+    try:
+        return path.resolve().is_relative_to(root.resolve()) and path.resolve() != root.resolve()
+    except OSError:
+        return False
+
+
 def load_signed_runtime_config(
-    path: Path, *, trust_root: RuntimeConfigTrustRoot
+    path: Path,
+    *,
+    trust_root: RuntimeConfigTrustRoot,
+    output_roots: RuntimeOutputRoots = DEFAULT_OUTPUT_ROOTS,
 ) -> LocalDoctorRuntimeConfig:
     """Verify a generated runtime artifact before accepting any local paths or settings."""
     if not trust_root.allowed_signers_path.is_file():
@@ -131,7 +175,7 @@ def load_signed_runtime_config(
     )
     if not _verify_ssh_signature(payload, signature, firewall_trust_root):
         raise ValueError("local Doctor runtime config signature is invalid")
-    return LocalDoctorRuntimeConfig.from_dict(config)
+    return LocalDoctorRuntimeConfig.from_dict(config, output_roots=output_roots)
 
 
 def collect_local_readiness_probe() -> HostReadinessProbe:
@@ -303,6 +347,60 @@ def write_prometheus_textfile(path: Path, result: LocalDoctorResult) -> None:
         raise
 
 
+def _snapshot(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_snapshot(path: Path, content: bytes | None) -> None:
+    if content is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.restore.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o640)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def collect_and_persist(runtime: LocalDoctorRuntimeConfig) -> LocalDoctorResult:
+    """Publish state and textfile as one recoverable collection operation."""
+    result = LocalDoctorCollector(
+        clock=lambda: datetime.now(timezone.utc), freshness_seconds=runtime.freshness_seconds
+    ).collect(
+        canonical_name=runtime.canonical_name,
+        probe=collect_local_readiness_probe(),
+        firewall_declaration_path=runtime.firewall_declaration_path,
+        firewall_trust_root=SshAllowedSignersTrustRoot(runtime.firewall_allowed_signers_path),
+        require_reconcile=runtime.require_reconcile,
+    )
+    state_store = LatestResultStore(runtime.state_path)
+    previous_state = _snapshot(runtime.state_path)
+    previous_metrics = _snapshot(runtime.metrics_path)
+    try:
+        state_store.write(result)
+        write_prometheus_textfile(runtime.metrics_path, result)
+    except BaseException:
+        _restore_snapshot(runtime.state_path, previous_state)
+        _restore_snapshot(runtime.metrics_path, previous_metrics)
+        raise
+    return result
+
+
 def _emit(
     ok: bool, path: list[str], result: dict[str, object] | None = None, *, error: str | None = None
 ) -> None:
@@ -322,7 +420,11 @@ def _emit(
 
 
 def _runtime_or_error(config: Path, allowed_signers: Path) -> LocalDoctorRuntimeConfig:
-    return load_signed_runtime_config(config, trust_root=RuntimeConfigTrustRoot(allowed_signers))
+    return load_signed_runtime_config(
+        config,
+        trust_root=RuntimeConfigTrustRoot(allowed_signers),
+        output_roots=DEFAULT_OUTPUT_ROOTS,
+    )
 
 
 @click.group()
@@ -337,17 +439,7 @@ def collect(config: Path, allowed_signers: Path) -> None:
     """Verify runtime input, collect local readiness, then atomically persist it."""
     try:
         runtime = _runtime_or_error(config, allowed_signers)
-        result = LocalDoctorCollector(
-            clock=lambda: datetime.now(timezone.utc), freshness_seconds=runtime.freshness_seconds
-        ).collect(
-            canonical_name=runtime.canonical_name,
-            probe=collect_local_readiness_probe(),
-            firewall_declaration_path=runtime.firewall_declaration_path,
-            firewall_trust_root=SshAllowedSignersTrustRoot(runtime.firewall_allowed_signers_path),
-            require_reconcile=runtime.require_reconcile,
-        )
-        LatestResultStore(runtime.state_path).write(result)
-        write_prometheus_textfile(runtime.metrics_path, result)
+        result = collect_and_persist(runtime)
     except (OSError, ValueError) as error:
         _emit(False, ["collect"], error=str(error))
         raise click.exceptions.Exit(2) from error
@@ -357,9 +449,7 @@ def collect(config: Path, allowed_signers: Path) -> None:
 @main.command()
 @click.option("--config", type=click.Path(path_type=Path), required=True)
 @click.option("--allowed-signers", type=click.Path(path_type=Path), required=True)
-@click.option("--address", default="127.0.0.1", show_default=True)
-@click.option("--port", default=9473, type=click.IntRange(1, 65535), show_default=True)
-def serve(config: Path, allowed_signers: Path, address: str, port: int) -> NoReturn:
+def serve(config: Path, allowed_signers: Path) -> NoReturn:
     """Serve persisted evidence only; collection remains a separate scheduled operation."""
     try:
         runtime = _runtime_or_error(config, allowed_signers)
@@ -367,8 +457,8 @@ def serve(config: Path, allowed_signers: Path, address: str, port: int) -> NoRet
         _emit(False, ["serve"], error=str(error))
         raise click.exceptions.Exit(2) from error
     server = serve_latest_result(
-        address,
-        port,
+        runtime.http_address,
+        runtime.http_port,
         LatestResultStore(runtime.state_path),
         clock=lambda: datetime.now(timezone.utc),
     )

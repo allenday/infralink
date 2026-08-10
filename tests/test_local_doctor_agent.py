@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from infralink.local_doctor import LocalDoctorResult
 from infralink.local_doctor_agent import (
     LocalDoctorRuntimeConfig,
     RuntimeConfigTrustRoot,
+    RuntimeOutputRoots,
     load_signed_runtime_config,
     main,
 )
@@ -24,9 +26,11 @@ def _runtime_payload(tmp_path: Path) -> dict[str, object]:
             "freshness_seconds": 120,
             "state_path": str(tmp_path / "state" / "latest.json"),
             "metrics_path": str(tmp_path / "metrics" / "doctor.prom"),
-            "firewall_declaration_path": str(tmp_path / "firewall.json"),
-            "firewall_allowed_signers_path": str(tmp_path / "firewall.allowed_signers"),
+            "firewall_declaration_path": str(tmp_path / "runtime" / "firewall.json"),
+            "firewall_allowed_signers_path": str(tmp_path / "runtime" / "firewall.allowed_signers"),
             "require_reconcile": True,
+            "http_address": "127.0.0.1",
+            "http_port": 9473,
         },
         "signature": "verified-signature",
     }
@@ -51,6 +55,14 @@ def test_collect_verifies_runtime_config_and_writes_state_and_metrics_atomically
     allowed_signers = tmp_path / "runtime.allowed_signers"
     allowed_signers.write_text("test signer\n", encoding="utf-8")
     monkeypatch.setattr("infralink.local_doctor_agent._verify_ssh_signature", lambda *args: True)
+    monkeypatch.setattr(
+        "infralink.local_doctor_agent.DEFAULT_OUTPUT_ROOTS",
+        RuntimeOutputRoots(
+            state_root=tmp_path / "state",
+            metrics_root=tmp_path / "metrics",
+            runtime_root=tmp_path / "runtime",
+        ),
+    )
     monkeypatch.setattr(
         "infralink.local_doctor_agent.collect_local_readiness_probe",
         lambda: HostReadinessProbe(
@@ -133,5 +145,73 @@ def test_runtime_config_rejects_relative_paths(tmp_path: Path) -> None:
                 **_runtime_payload(tmp_path)["config"],  # type: ignore[arg-type]
                 "state_path": "state/latest.json",
             },
-            runtime_root=tmp_path,
+            output_roots=RuntimeOutputRoots(
+                tmp_path / "state", tmp_path / "metrics", tmp_path / "runtime"
+            ),
         )
+
+
+def test_runtime_config_rejects_signed_paths_outside_approved_roots(tmp_path: Path) -> None:
+    config = dict(_runtime_payload(tmp_path)["config"])  # type: ignore[arg-type]
+    config["state_path"] = "/etc/infralink/local-doctor/latest.json"
+
+    with pytest.raises(ValueError, match="runtime config"):
+        LocalDoctorRuntimeConfig.from_dict(
+            config,
+            output_roots=RuntimeOutputRoots(
+                state_root=tmp_path / "state",
+                metrics_root=tmp_path / "metrics",
+                runtime_root=tmp_path / "runtime",
+            ),
+        )
+
+
+def test_collect_restores_previous_state_when_metric_publication_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "runtime.json"
+    config.write_text(json.dumps(_runtime_payload(tmp_path)), encoding="utf-8")
+    allowed_signers = tmp_path / "runtime.allowed_signers"
+    allowed_signers.write_text("test signer\n", encoding="utf-8")
+    monkeypatch.setattr("infralink.local_doctor_agent._verify_ssh_signature", lambda *args: True)
+    monkeypatch.setattr(
+        "infralink.local_doctor_agent.DEFAULT_OUTPUT_ROOTS",
+        RuntimeOutputRoots(tmp_path / "state", tmp_path / "metrics", tmp_path / "runtime"),
+    )
+    previous = LocalDoctorResult.healthy(now=datetime.now(timezone.utc), freshness_seconds=60)
+    from infralink.local_doctor import LatestResultStore
+
+    state_store = LatestResultStore(tmp_path / "state" / "latest.json")
+    state_store.write(previous)
+    previous = state_store.load()
+    monkeypatch.setattr(
+        "infralink.local_doctor_agent.write_prometheus_textfile",
+        lambda *args: (_ for _ in ()).throw(OSError("full")),
+    )
+    monkeypatch.setattr(
+        "infralink.local_doctor_agent.LocalDoctorCollector.collect",
+        lambda *args, **kwargs: LocalDoctorResult.unhealthy(
+            now=datetime.now(timezone.utc), freshness_seconds=60
+        ),
+    )
+
+    result = CliRunner().invoke(
+        main, ["collect", "--config", str(config), "--allowed-signers", str(allowed_signers)]
+    )
+
+    assert result.exit_code == 2
+    assert state_store.load() == previous
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("http_address", "not an address with spaces"), ("http_port", 0), ("http_port", 65536)],
+)
+def test_runtime_config_requires_a_declared_valid_http_binding(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    config = dict(_runtime_payload(tmp_path)["config"])  # type: ignore[arg-type]
+    config[field] = value
+
+    with pytest.raises(ValueError, match="runtime config"):
+        LocalDoctorRuntimeConfig.from_dict(config)
