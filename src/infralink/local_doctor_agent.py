@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from ipaddress import IPv4Address, ip_address, ip_network
 from pathlib import Path
 from typing import NoReturn
 
@@ -109,9 +110,7 @@ class LocalDoctorRuntimeConfig:
             or not all(isinstance(path, str) and Path(path).is_absolute() for path in path_values)
             or type(value["require_reconcile"]) is not bool
             or not isinstance(value["http_address"], str)
-            or not value["http_address"]
-            or len(value["http_address"]) > 253
-            or any(character.isspace() for character in value["http_address"])
+            or not _is_tailnet_address(value["http_address"])
             or type(value["http_port"]) is not int
             or not 1 <= value["http_port"] <= 65_535
             or not _within_root(Path(value["state_path"]), output_roots.state_root)
@@ -133,6 +132,14 @@ class LocalDoctorRuntimeConfig:
             http_address=value["http_address"],
             http_port=value["http_port"],
         )
+
+
+def _is_tailnet_address(value: str) -> bool:
+    try:
+        address = ip_address(value)
+    except ValueError:
+        return False
+    return isinstance(address, IPv4Address) and address in ip_network("100.64.0.0/10")
 
 
 def _within_root(path: Path, root: Path) -> bool:
@@ -426,6 +433,7 @@ def _emit(
     command: dict[str, object],
     result: dict[str, object] | None = None,
     *,
+    error_code: str = "runtime_config_invalid",
     error: str | None = None,
 ) -> None:
     payload: dict[str, object] = {
@@ -438,7 +446,7 @@ def _emit(
         payload["result"] = result or {}
     else:
         payload["error"] = {
-            "code": "runtime_config_invalid",
+            "code": error_code,
             "message": error or "runtime config invalid",
         }
     click.echo(json.dumps(payload, sort_keys=True, separators=(",", ":")))
@@ -507,12 +515,25 @@ def serve(ctx: click.Context, config: Path, allowed_signers: Path) -> NoReturn:
             error=str(error),
         )
         raise click.exceptions.Exit(2) from error
-    server = serve_latest_result(
-        runtime.http_address,
-        runtime.http_port,
-        LatestResultStore(runtime.state_path),
-        clock=lambda: datetime.now(timezone.utc),
-    )
+    try:
+        server = serve_latest_result(
+            runtime.http_address,
+            runtime.http_port,
+            LatestResultStore(runtime.state_path),
+            clock=lambda: datetime.now(timezone.utc),
+        )
+    except OSError as error:
+        _emit(
+            False,
+            _command_context(
+                ctx,
+                ["serve"],
+                {"config": str(config), "allowed_signers": str(allowed_signers)},
+            ),
+            error_code="runtime_bind_failed",
+            error="declared runtime binding is unavailable",
+        )
+        raise click.exceptions.Exit(2) from error
     server.serve_forever()
     raise AssertionError("unreachable")
 

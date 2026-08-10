@@ -18,7 +18,7 @@ Both operations require a generated JSON envelope:
     "firewall_declaration_path": "/etc/infralink/local-doctor/firewall.json",
     "firewall_allowed_signers_path": "/etc/infralink/local-doctor/firewall.allowed_signers",
     "require_reconcile": true,
-    "http_address": "127.0.0.1",
+    "http_address": "100.64.0.1",
     "http_port": 9473
   },
   "signature": "-----BEGIN SSH SIGNATURE-----..."
@@ -47,6 +47,6 @@ a completed collection even when the evidence is unhealthy; malformed or
 untrusted runtime input exits `2` with `runtime_config_invalid`.
 
 `serve` performs no collection. It serves the persisted result at
-`/v1/doctor/latest` and metrics at `/metrics`, using the signed HTTP binding.
+`/v1/doctor/latest` and metrics at `/metrics`, using the signed Tailnet HTTP binding.
 The result endpoint returns `200` only for fresh healthy evidence, otherwise
 `503`.

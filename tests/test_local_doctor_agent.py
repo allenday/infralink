@@ -29,7 +29,7 @@ def _runtime_payload(tmp_path: Path) -> dict[str, object]:
             "firewall_declaration_path": str(tmp_path / "runtime" / "firewall.json"),
             "firewall_allowed_signers_path": str(tmp_path / "runtime" / "firewall.allowed_signers"),
             "require_reconcile": True,
-            "http_address": "127.0.0.1",
+            "http_address": "100.64.0.1",
             "http_port": 9473,
         },
         "signature": "verified-signature",
@@ -214,7 +214,13 @@ def test_collect_restores_previous_state_when_metric_publication_fails(
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("http_address", "not an address with spaces"), ("http_port", 0), ("http_port", 65536)],
+    [
+        ("http_address", "0.0.0.0"),
+        ("http_address", "example.internal"),
+        ("http_address", "999.1.1.1"),
+        ("http_port", 0),
+        ("http_port", 65536),
+    ],
 )
 def test_runtime_config_requires_a_declared_valid_http_binding(
     tmp_path: Path, field: str, value: object
@@ -223,4 +229,44 @@ def test_runtime_config_requires_a_declared_valid_http_binding(
     config[field] = value
 
     with pytest.raises(ValueError, match="runtime config"):
-        LocalDoctorRuntimeConfig.from_dict(config)
+        LocalDoctorRuntimeConfig.from_dict(
+            config,
+            output_roots=RuntimeOutputRoots(
+                tmp_path / "state", tmp_path / "metrics", tmp_path / "runtime"
+            ),
+        )
+
+
+def test_serve_reports_a_structured_error_when_the_declared_binding_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = LocalDoctorRuntimeConfig(
+        canonical_name="node-1",
+        freshness_seconds=120,
+        state_path=tmp_path / "state" / "latest.json",
+        metrics_path=tmp_path / "metrics" / "doctor.prom",
+        firewall_declaration_path=tmp_path / "runtime" / "firewall.json",
+        firewall_allowed_signers_path=tmp_path / "runtime" / "firewall.allowed_signers",
+        require_reconcile=True,
+        http_address="100.64.0.1",
+        http_port=9473,
+    )
+    monkeypatch.setattr("infralink.local_doctor_agent._runtime_or_error", lambda *args: runtime)
+    monkeypatch.setattr(
+        "infralink.local_doctor_agent.serve_latest_result",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("address in use")),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "serve",
+            "--config",
+            str(tmp_path / "runtime.json"),
+            "--allowed-signers",
+            str(tmp_path / "signers"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["error"]["code"] == "runtime_bind_failed"
