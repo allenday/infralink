@@ -17,6 +17,10 @@ UNIT = "self-deploy-v2-reconcile.service"
 INVOCATION = "8d6c4ad60e4a4b589fe35ad9e1760d56"
 FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 MANIFEST_FINGERPRINT = "SHA256:Pnpjf51QfL7khY8GiWuWNp/5G9Twt321Dd5Dk8dB50w"
+OBSERVED_FINGERPRINTS = (
+    "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "SHA256:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+)
 CORE_HOSTS = (
     ("9157ddeb-cb6d-4d55-8252-9db358f5d932", "cyberstorm-citadel", "100.73.228.90"),
     ("7ffe46b7-0eb4-40cb-8e14-ea679b9948f4", "cyberstorm-watchtower", "100.123.0.63"),
@@ -115,6 +119,73 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
         "dry_run": True,
         "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
     }
+
+
+def test_host_apply_reports_only_normalized_observed_fingerprints_on_key_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[0] == "ssh-keyscan":
+            return _completed(
+                "100.64.68.83 ssh-ed25519 opaque-public-key-two\n"
+                "100.64.68.83 ssh-rsa opaque-public-key-one\n"
+                "100.64.68.83 ssh-ed25519 opaque-public-key-two\n"
+            )
+        if args[0] == "ssh-keygen":
+            key_line = str(kwargs["input"])
+            fingerprint = (
+                OBSERVED_FINGERPRINTS[0]
+                if "opaque-public-key-one" in key_line
+                else OBSERVED_FINGERPRINTS[1]
+            )
+            return _completed(f"256 {fingerprint} scanned-host (ED25519)\n")
+        raise AssertionError("host apply must not open an SSH session after a key mismatch")
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "apply", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"] == {
+        "code": "provider_unavailable",
+        "message": "Declared host SSH key does not match its fingerprint",
+        "details": {"observed_fingerprints": list(OBSERVED_FINGERPRINTS)},
+    }
+    assert "opaque-public-key" not in response.output
+    assert [call[0] for call in calls] == ["ssh-keyscan", "ssh-keygen", "ssh-keygen", "ssh-keygen"]
+
+
+def test_host_apply_rejects_a_nonzero_fingerprint_scan_even_when_stdout_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[0] == "ssh-keyscan":
+            return _completed("100.64.68.83 ssh-rsa opaque-public-key\n")
+        if args[0] == "ssh-keygen":
+            return subprocess.CompletedProcess(
+                args=[], returncode=1, stdout=f"256 {FINGERPRINT} scanned-host (RSA)\n", stderr=""
+            )
+        raise AssertionError(
+            "host apply must not open an SSH session after fingerprint validation fails"
+        )
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "apply", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "provider_unavailable"
+    assert payload["error"]["details"] == {"observed_fingerprints": []}
+    assert "opaque-public-key" not in response.output
+    assert [call[0] for call in calls] == ["ssh-keyscan", "ssh-keygen"]
 
 
 @pytest.mark.parametrize(
