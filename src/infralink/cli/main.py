@@ -1722,7 +1722,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
         if not playbook.is_file():
             raise CliFailure(
-                code=ErrorCode.CONFIGURATION_REQUIRED,
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
                 message="Bastion host-bootstrap capability is not installed",
                 exit_code=ExitCode.PROVIDER_ERROR,
                 fix="Install the current infra-management host-bootstrap capability on Bastion",
