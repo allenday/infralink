@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import click
@@ -78,6 +79,7 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
     }
 )
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
+_CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
 
 
 def _isolated_git_environment() -> dict[str, str]:
@@ -93,6 +95,17 @@ def _isolated_git_environment() -> dict[str, str]:
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_OPTIONAL_LOCKS": "0",
     }
+
+
+def _controller_remote_identity(remote: str) -> str:
+    """Compare HTTPS controller remotes without retaining embedded credentials."""
+    parsed = urlsplit(remote)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        return remote
+    host = parsed.hostname
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
 
 class Context:
@@ -1931,7 +1944,7 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
         check=False,
         env=_isolated_git_environment(),
     )
-    if status.returncode != 0 or status.stdout or present.returncode != 0:
+    if status.returncode != 0 or status.stdout:
         raise CliFailure(
             code=ErrorCode.PROVIDER_UNAVAILABLE,
             message="Bastion cannot materialize the selected immutable controller source",
@@ -1939,6 +1952,55 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
             fix="Clean and refresh the Bastion infra-management checkout at the selected revision",
             details={"capability": "controller_refresh", "required_revision": revision},
         )
+    if present.returncode != 0:
+        remote = subprocess.run(
+            ["git", "-C", str(control_root), "remote", "get-url", "origin"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_isolated_git_environment(),
+        )
+        if remote.returncode != 0 or _controller_remote_identity(
+            remote.stdout.strip()
+        ) != _controller_remote_identity(_CONTROLLER_REFRESH_SOURCE_REMOTE):
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Bastion cannot fetch the selected immutable controller source",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Configure the expected infra-management origin and rerun host bootstrap --apply",
+                details={"capability": "controller_refresh", "required_revision": revision},
+            )
+        fetched = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(control_root),
+                "fetch",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "origin",
+                revision,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_isolated_git_environment(),
+        )
+        present = subprocess.run(
+            ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_isolated_git_environment(),
+        )
+        if fetched.returncode != 0 or present.returncode != 0:
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Bastion cannot fetch the selected immutable controller source",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
+                details={"capability": "controller_refresh", "required_revision": revision},
+            )
     with tempfile.TemporaryDirectory(prefix="infralink-controller-refresh-") as temporary:
         source = Path(temporary) / "source"
         created = subprocess.run(
