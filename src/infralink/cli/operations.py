@@ -40,6 +40,15 @@ _MAX_FAILURE_JOURNAL_LINES = 6
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SIGNER_PRINCIPAL = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_MANIFEST_V2_APPLY_FIELDS = frozenset(
+    {
+        "self_deploy_v2_reconcile_enabled",
+        "self_deploy_v2_reconcile_packaged",
+        "self_deploy_v2_promotion_policy_enabled",
+        "self_deploy_v2_promotion_channel",
+        "self_deploy_v2_promotion_host_fingerprint",
+    }
+)
 
 _START_REMOTE = """set -eu
 unit=$1
@@ -264,7 +273,7 @@ def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
 def _manifest_request(
     host_uuid: str, canonical_name: str, data: dict[str, Any], path: Path
 ) -> ApplyRequest | None:
-    if not any(isinstance(field, str) and field.startswith("self_deploy_v2_") for field in data):
+    if _MANIFEST_V2_APPLY_FIELDS.isdisjoint(data):
         return None
     if data.get("self_deploy_v2_reconcile_enabled") is not True:
         raise _registry_failure("Host apply manifest does not enable V2 reconcile", path)
@@ -316,10 +325,10 @@ def _contract_request(registry_path: Path, host: Any) -> ApplyRequest:
         )
     if not isinstance(transport, dict) or transport.get("kind") != "ssh":
         raise _registry_failure("Host apply contract must declare SSH transport", contract_path)
-    if not isinstance(reconcile, dict) or reconcile.get("unit") != _UNIT:
-        raise _registry_failure(
-            "Host apply contract must declare the supported reconcile unit", contract_path
-        )
+    if reconcile is not None and (
+        not isinstance(reconcile, dict) or reconcile.get("unit") != _UNIT
+    ):
+        raise _registry_failure("Host apply contract reconcile unit is invalid", contract_path)
     address = transport.get("host")
     port = transport.get("port")
     user = transport.get("user")
