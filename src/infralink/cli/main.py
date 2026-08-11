@@ -2175,6 +2175,7 @@ def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[st
         "self_deploy_v2_promotion_bws_project_id",
         "self_deploy_v2_registry_read_identity_secret_uuid",
         "self_deploy_v2_promotion_host_fingerprint",
+        "self_deploy_v2_target_ssh_host_fingerprint",
         "self_deploy_v2_promotion_allowed_signers",
         "self_deploy_v2_promotion_channel",
         "self_deploy_registry_origin",

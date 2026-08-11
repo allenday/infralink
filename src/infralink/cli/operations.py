@@ -47,6 +47,7 @@ _MANIFEST_V2_APPLY_FIELDS = frozenset(
         "self_deploy_v2_promotion_policy_enabled",
         "self_deploy_v2_promotion_channel",
         "self_deploy_v2_promotion_host_fingerprint",
+        "self_deploy_v2_target_ssh_host_fingerprint",
     }
 )
 _VERIFIER_UNAVAILABLE_FACTS: tuple[VerifierUnavailableFact, ...] = (
@@ -548,7 +549,7 @@ def _manifest_request(
             "Host apply manifest Tailscale address is outside the tailnet range", path
         )
     fingerprint = _normalize_manifest_fingerprint(
-        data.get("self_deploy_v2_promotion_host_fingerprint")
+        data.get("self_deploy_v2_target_ssh_host_fingerprint")
     )
     if fingerprint is None:
         raise _registry_failure("Host apply manifest SSH fingerprint is invalid", path)

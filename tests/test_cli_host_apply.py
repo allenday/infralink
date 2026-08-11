@@ -18,6 +18,7 @@ UNIT = "self-deploy-v2-reconcile.service"
 INVOCATION = "8d6c4ad60e4a4b589fe35ad9e1760d56"
 FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 MANIFEST_FINGERPRINT = "SHA256:Pnpjf51QfL7khY8GiWuWNp/5G9Twt321Dd5Dk8dB50w"
+TARGET_HOST_FINGERPRINT = "SHA256:KdpS7oRVMZ2t0JRHDp/K6xEqQoiZeHuVlDn/gG5veFA"
 OBSERVED_FINGERPRINTS = (
     "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     "SHA256:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
@@ -89,6 +90,7 @@ def _manifest_registry_checkout(tmp_path: Path) -> Path:
             "    status: active\n"
             f"    tailscale_ip: {address}\n"
             f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {MANIFEST_FINGERPRINT}\n"
+            f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {TARGET_HOST_FINGERPRINT}\n"
             "    self_deploy_v2_promotion_channel: core-v2\n"
             "    self_deploy_v2_promotion_policy_enabled: true\n"
             "    self_deploy_v2_reconcile_enabled: true\n"
@@ -101,6 +103,22 @@ def _manifest_registry_checkout(tmp_path: Path) -> Path:
     _git(root, "add", ".")
     _git(root, "commit", "--quiet", "-m", "manifest registry")
     return root / "hosts"
+
+
+def test_manifest_v2_apply_uses_the_declared_target_host_fingerprint(tmp_path: Path) -> None:
+    """Registry server trust must never double as the target SSH transport key."""
+    from infralink.cli.operations import resolve_apply_request
+
+    registry = _manifest_registry_checkout(tmp_path)
+    target = type(
+        "Target",
+        (),
+        {"uuid": HOST_ID, "canonical_name": HOST_NAME},
+    )()
+
+    request = resolve_apply_request(registry, target)
+
+    assert request.host_key_fingerprint == TARGET_HOST_FINGERPRINT
 
 
 def _release_admission_layout(registry: Path, host_id: str = HOST_ID) -> None:
@@ -706,7 +724,7 @@ def test_host_apply_rejects_a_nonzero_fingerprint_scan_even_when_stdout_matches(
     (
         ("tailscale_ip", "not an address"),
         ("tailscale_ip", "192.0.2.1"),
-        ("self_deploy_v2_promotion_host_fingerprint", "ssh-rsa SHA256:short"),
+        ("self_deploy_v2_target_ssh_host_fingerprint", "ssh-rsa SHA256:short"),
         ("self_deploy_v2_promotion_channel", "not valid"),
         ("self_deploy_v2_reconcile_enabled", "false"),
         ("self_deploy_v2_reconcile_packaged", "false"),
@@ -723,6 +741,9 @@ def test_host_apply_refuses_malformed_or_disabled_manifest_declarations(
                 "tailscale_ip": "tailscale_ip: 100.64.68.83",
                 "self_deploy_v2_promotion_host_fingerprint": (
                     f"self_deploy_v2_promotion_host_fingerprint: ssh-rsa {MANIFEST_FINGERPRINT}"
+                ),
+                "self_deploy_v2_target_ssh_host_fingerprint": (
+                    f"self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {TARGET_HOST_FINGERPRINT}"
                 ),
                 "self_deploy_v2_promotion_channel": "self_deploy_v2_promotion_channel: core-v2",
                 "self_deploy_v2_reconcile_enabled": "self_deploy_v2_reconcile_enabled: true",

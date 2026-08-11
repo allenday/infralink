@@ -779,6 +779,7 @@ def test_host_bootstrap_apply_forwards_a_bounded_v2_request_for_es1_layout_runti
         "    self_deploy_v2_promotion_allowed_signers: infra ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEjV/Mqc501uHt3OiM0aYthhtAHO1htXrDuEYh4UQOXI\n"
         "    self_deploy_v2_promotion_bws_project_id: 11111111-1111-4111-8111-111111111111\n"
         f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
+        f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
         "    self_deploy_v2_promotion_channel: core-v2\n"
         "    self_deploy_v2_promotion_policy_enabled: true\n"
         "    self_deploy_v2_promotion_registry_remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
@@ -849,6 +850,7 @@ def test_host_bootstrap_apply_forwards_a_bounded_v2_request_for_es1_layout_runti
         "self_deploy_v2_promotion_bws_project_id",
         "self_deploy_v2_promotion_channel",
         "self_deploy_v2_promotion_host_fingerprint",
+        "self_deploy_v2_target_ssh_host_fingerprint",
         "self_deploy_v2_promotion_policy_enabled",
         "self_deploy_v2_promotion_registry_remote",
         "self_deploy_v2_reconcile_enabled",
@@ -992,6 +994,7 @@ def test_host_bootstrap_apply_refreshes_only_the_pinned_controller_runtime(
         f"    canonical_name: {HOST_NAME}\n"
         "    tailscale_ip: 100.64.68.83\n"
         f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
+        f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
         "    self_deploy_v2_promotion_channel: core-v2\n"
         "    self_deploy_v2_promotion_policy_enabled: true\n"
         "    self_deploy_v2_reconcile_enabled: true\n"
@@ -1089,6 +1092,7 @@ def test_host_bootstrap_plan_reports_the_selected_controller_refresh_without_run
         f"    canonical_name: {HOST_NAME}\n"
         "    tailscale_ip: 100.64.68.83\n"
         f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
+        f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
         "    self_deploy_v2_promotion_channel: core-v2\n"
         "    self_deploy_v2_promotion_policy_enabled: true\n"
         "    self_deploy_v2_reconcile_enabled: true\n"
@@ -1149,6 +1153,7 @@ def test_host_bootstrap_controller_refresh_failure_does_not_reprobe_or_start_ser
         f"    canonical_name: {HOST_NAME}\n"
         "    tailscale_ip: 100.64.68.83\n"
         f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
+        f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
         "    self_deploy_v2_promotion_channel: core-v2\n"
         "    self_deploy_v2_promotion_policy_enabled: true\n"
         "    self_deploy_v2_reconcile_enabled: true\n"
