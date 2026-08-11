@@ -475,7 +475,9 @@ def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
     manifest_request = _manifest_request(host.uuid, host.canonical_name, host_data, manifest_path)
     if manifest_request is not None:
         return replace(manifest_request, verifier_source="active")
-    return _with_legacy_verifier_layout(_contract_request(registry_path, host), registry_path, host.uuid)
+    return _with_legacy_verifier_layout(
+        _contract_request(registry_path, host), registry_path, host.uuid
+    )
 
 
 def _manifest_request(
