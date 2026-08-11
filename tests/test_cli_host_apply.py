@@ -183,6 +183,88 @@ def test_host_verifier_reports_only_public_v2_trust_facts(
     assert "systemctl start" not in script
 
 
+def test_host_verifier_retains_valid_partial_facts_and_names_unavailable_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    partial_output = "\n".join(
+        (
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "registry_ref=refs/heads/main",
+            "allowed_signer_principal=infra",
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "allowed_signers_sha256=" + "c" * 64,
+            "git_ssh_signature_capable=true",
+            "fetched_tip=" + "d" * 40,
+            "signature_verification=failed",
+        )
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(partial_output),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert_schema(payload, "host-verifier")
+    assert payload["result"] == {
+        "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
+        "verifier": {
+            "registry_remote": "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "registry_ref": "refs/heads/main",
+            "allowed_signer": {
+                "principal": "infra",
+                "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                "sha256": "c" * 64,
+            },
+            "git_ssh_signature_capable": True,
+            "fetched_tip": "d" * 40,
+            "signature_verification": "failed",
+            "unavailable": ["runtime_revision"],
+        },
+    }
+
+
+def test_host_verifier_rejects_a_malformed_public_fact_instead_of_marking_it_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    malformed = "NOT-A-GIT-REVISION"
+    remote_output = "\n".join(
+        (
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "registry_ref=refs/heads/main",
+            f"runtime_revision={malformed}",
+            "allowed_signer_principal=infra",
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "allowed_signers_sha256=" + "c" * 64,
+            "git_ssh_signature_capable=true",
+            "fetched_tip=" + "d" * 40,
+            "signature_verification=failed",
+        )
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run", lambda *args, **kwargs: _completed(remote_output)
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "provider_unavailable"
+    assert malformed not in response.output
+
+
 def test_host_verifier_rejects_and_omits_a_remote_with_secret_material(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -199,6 +281,41 @@ def test_host_verifier_rejects_and_omits_a_remote_with_secret_material(
             "git_ssh_signature_capable=true",
             "fetched_tip=" + "d" * 40,
             "signature_verification=failed",
+        )
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run", lambda *args, **kwargs: _completed(remote_output)
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "provider_unavailable"
+    assert secret not in response.output
+
+
+def test_host_verifier_rejects_duplicate_public_fact_with_secret_material(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    secret = "DUPLICATE-REGISTRY-TOKEN"
+    remote_output = "\n".join(
+        (
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            f"registry_remote=https://{secret}@gitea.example.invalid/relaxgg/infra-registry.git",
+            "registry_ref=refs/heads/main",
+            "runtime_revision=" + "a" * 40,
+            "allowed_signer_principal=infra",
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "allowed_signers_sha256=" + "c" * 64,
+            "git_ssh_signature_capable=true",
+            "fetched_tip=" + "d" * 40,
+            "signature_verification=passed",
         )
     )
     monkeypatch.setattr(
