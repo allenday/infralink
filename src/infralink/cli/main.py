@@ -90,14 +90,19 @@ _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-manag
 
 
 def _isolated_git_environment() -> dict[str, str]:
-    """Run controller-source Git commands without user/global replacement state."""
+    """Run controller Git with only the managed root credential store enabled."""
     return {
         "PATH": "/usr/bin:/bin",
-        "HOME": "/nonexistent",
+        "HOME": "/root",
         "LANG": "C",
         "LC_ALL": "C",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "credential.helper",
+        "GIT_CONFIG_VALUE_0": "store",
+        "GIT_CONFIG_KEY_1": "credential.useHttpPath",
+        "GIT_CONFIG_VALUE_1": "true",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_OPTIONAL_LOCKS": "0",

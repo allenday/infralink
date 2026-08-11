@@ -165,6 +165,12 @@ def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revi
     assert isinstance(fetch_env, dict)
     assert fetch_env["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert fetch_env["HOME"] == "/root"
+    assert fetch_env["GIT_CONFIG_COUNT"] == "2"
+    assert fetch_env["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert fetch_env["GIT_CONFIG_VALUE_0"] == "store"
+    assert fetch_env["GIT_CONFIG_KEY_1"] == "credential.useHttpPath"
+    assert fetch_env["GIT_CONFIG_VALUE_1"] == "true"
 
 
 def test_controller_refresh_does_not_fetch_a_raw_selected_revision(
