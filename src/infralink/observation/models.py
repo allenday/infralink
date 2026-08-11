@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -302,6 +302,7 @@ class Host(StrictModel):
     id: HostId
     display_name: Annotated[str, Field(min_length=1)] | None = None
     baseline_capabilities: list[HostBaselineCapability] = Field(default_factory=list)
+    self_deploy_v2_reconcile_enabled: bool = False
 
     @field_validator("baseline_capabilities")
     @classmethod
@@ -445,7 +446,24 @@ class OperationsViewSection(StrictModel):
 class OperationsView(StrictModel):
     id: CanonicalId
     purpose: Annotated[str, Field(min_length=1)]
-    sections: Annotated[list[OperationsViewSection], Field(min_length=1)]
+    sections: list[OperationsViewSection]
+    kind: Literal["standard", "fleet_convergence"] = "standard"
+    freshness_seconds: PositiveSeconds | None = None
+    datasource_binding_id: CanonicalId | None = None
+
+    @model_validator(mode="after")
+    def validate_kind(self) -> OperationsView:
+        if self.kind == "standard":
+            if (
+                not self.sections
+                or self.freshness_seconds is not None
+                or self.datasource_binding_id is not None
+            ):
+                raise ValueError("standard view cannot declare fleet convergence fields")
+            return self
+        if self.sections or self.freshness_seconds is None or self.datasource_binding_id is None:
+            raise ValueError("fleet convergence view has an invalid declaration")
+        return self
 
 
 class SuiteMember(StrictModel):
