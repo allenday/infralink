@@ -34,6 +34,8 @@ from infralink.cli.contracts import (
     HelpResult,
     HelpSubcommand,
     HostBootstrapPlanResult,
+    HostBootstrapRequest,
+    HostBootstrapV2State,
     InfoResult,
     InfoSources,
     InfoSummary,
@@ -76,7 +78,12 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
         "install_bws_cli",
         "install_self_deploy_dependencies",
         "enable_self_deploy_timer",
+        "migrate_v2_registry_layout",
+        "install_self_deploy_runtime",
     }
+)
+_V2_BOOTSTRAP_ACTIONS: frozenset[str] = frozenset(
+    {"migrate_v2_registry_layout", "install_self_deploy_runtime"}
 )
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
@@ -1755,8 +1762,19 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     readiness = evaluate_host_readiness(target, SshReadinessTransport())
     if plan_only == apply_changes:
         raise click.UsageError("pass exactly one of --plan or --apply")
+    v2_bootstrap_declared = bool(getattr(target, "self_deploy_v2_registry_layout_enabled", False))
+    required_v2_actions = (
+        [item.id for item in readiness.actions if item.id in _V2_BOOTSTRAP_ACTIONS]
+        if v2_bootstrap_declared
+        else []
+    )
+    if required_v2_actions:
+        _bootstrap_apply_request(ctx, target, required_v2_actions)
     automated_actions = [
-        item.id for item in readiness.actions if item.id in BASELINE_EXECUTOR_ACTIONS
+        item.id
+        for item in readiness.actions
+        if item.id in BASELINE_EXECUTOR_ACTIONS
+        and (item.id not in _V2_BOOTSTRAP_ACTIONS or v2_bootstrap_declared)
     ]
     refresh_controller = any(
         item.id == "inspect_self_deploy_reconcile" for item in readiness.actions
@@ -1773,6 +1791,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         _apply_controller_refresh(ctx, target, controller_runtime_revision)
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
     elif apply_changes and automated_actions:
+        request = _bootstrap_apply_request(ctx, target, automated_actions)
         control_root = _CONTROL_ROOT
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
         if not playbook.is_file():
@@ -1783,31 +1802,16 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
                 fix="Install the current infra-management host-bootstrap capability on Bastion",
                 details={"capability": "host_bootstrap"},
             )
-        address = target.tailscale_ip or target.public_ip
-        if not address:
-            raise CliFailure(
-                code=ErrorCode.CONFIGURATION_REQUIRED,
-                message="Host address is required for bootstrap",
-                exit_code=ExitCode.INPUT_ERROR,
-                fix="Declare a Tailscale or public address for the host",
-                details={"host": target.uuid},
-            )
         completed = subprocess.run(
             [
                 "ansible-playbook",
                 "-i",
-                f"{address},",
+                f"{request.host_address},",
                 "-u",
                 "root",
                 str(playbook),
                 "-e",
-                f"host_address={address}",
-                "-e",
-                f"host_uuid={target.uuid}",
-                "-e",
-                f"canonical_name={target.canonical_name}",
-                "-e",
-                json.dumps({"bootstrap_actions": automated_actions}),
+                json.dumps(request.ansible_extra_vars(), sort_keys=True),
             ],
             cwd=control_root,
             text=True,
@@ -1819,8 +1823,8 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
                 code=ErrorCode.PROVIDER_UNAVAILABLE,
                 message="Host baseline apply failed",
                 exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
-                details={"host": target.uuid},
+                fix="Verify the declared bootstrap executor and rerun host bootstrap --apply",
+                details=_bootstrap_failure_details(target.uuid, completed),
             )
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
     actions = [
@@ -1859,6 +1863,83 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         )
     )
     return 0 if readiness.ready or plan_only else 1
+
+
+def _bootstrap_apply_request(
+    ctx: Context, target: Any, automated_actions: list[str]
+) -> HostBootstrapRequest:
+    """Resolve a bounded executor request before any remote mutation begins."""
+    address = target.tailscale_ip or target.public_ip
+    if not address:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host address is required for bootstrap",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare a Tailscale or public address for the host",
+            details={"host": target.uuid},
+        )
+    try:
+        v2: HostBootstrapV2State | None = None
+        if _V2_BOOTSTRAP_ACTIONS & set(automated_actions):
+            if ctx.registry_path is None or not ctx.registry_path.is_dir():
+                raise CliFailure(
+                    code=ErrorCode.CONFIGURATION_REQUIRED,
+                    message="V2 bootstrap actions require a directory registry checkout",
+                    exit_code=ExitCode.INPUT_ERROR,
+                    fix="Provide the selected registry hosts directory with its operations lock",
+                    details={"host": target.uuid},
+                )
+            runtime_revision, desired = _controller_refresh_extra_vars(ctx.registry_path, target)
+            v2 = HostBootstrapV2State.model_validate(
+                {
+                    "self_deploy_v2_runtime_revision": runtime_revision,
+                    **{
+                        name: value
+                        for name, value in desired.items()
+                        if name
+                        not in {
+                            "uuid",
+                            "canonical_name",
+                            "self_deploy_v2_runtime_revision",
+                        }
+                    },
+                }
+            )
+        return HostBootstrapRequest.model_validate(
+            {
+                "host_address": str(address),
+                "host_uuid": target.uuid,
+                "canonical_name": target.canonical_name,
+                "bootstrap_actions": automated_actions,
+                "v2": v2,
+            }
+        )
+    except CliFailure:
+        raise
+    except ValueError:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Selected host declaration is incomplete for bootstrap",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare complete V2 bootstrap state and rerun host bootstrap --plan",
+            details={"host": target.uuid},
+        ) from None
+
+
+def _bootstrap_failure_details(
+    host_uuid: str, completed: subprocess.CompletedProcess[str]
+) -> dict[str, Any]:
+    """Expose bounded execution shape only, never controller-rendered task names."""
+    task_count = min(len(re.findall(r"^TASK \[[^\]]+\]", completed.stdout, re.MULTILINE)), 8)
+    details: dict[str, Any] = {
+        "host": host_uuid,
+        "executor": "host_baseline",
+        "return_code": completed.returncode,
+    }
+    if task_count:
+        details["task_count"] = task_count
+        details["task_output_redacted"] = True
+    return details
 
 
 def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str | None) -> None:

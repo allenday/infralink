@@ -445,6 +445,54 @@ def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) 
     assert json.loads(follow_up.output)["result"]["readiness"] == payload["result"]["readiness"]
 
 
+def test_host_bootstrap_plan_rejects_required_v2_action_with_incomplete_v2_declaration(
+    monkeypatch, tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    self_deploy_v2_registry_layout_enabled: true\n",
+        encoding="utf-8",
+    )
+    readiness = HostReadinessResult(
+        transport="root_ssh",
+        ready=False,
+        checks=[],
+        actions=[
+            HostBootstrapAction(
+                id="install_self_deploy_runtime",
+                check_id="self_deploy_runtime",
+                description="Install the self-deploy runtime.",
+            )
+        ],
+    )
+    monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--plan",
+        ],
+    )
+
+    assert result.exit_code == 3
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "configuration_required"
+    assert payload["error"]["details"]["path"].endswith("operations/infra-management.lock")
+
+
 def test_host_bootstrap_links_verifier_when_reconcile_failed(monkeypatch) -> None:
     monkeypatch.setattr(
         "infralink.cli.main.SshReadinessTransport.probe",
@@ -711,6 +759,224 @@ def test_host_bootstrap_apply_forwards_only_the_timer_action_when_it_alone_is_mi
     assert result.exit_code == 1
     argv, _kwargs = calls[0]
     assert json.loads(argv[0][-1])["bootstrap_actions"] == ["enable_self_deploy_timer"]
+
+
+def test_host_bootstrap_apply_forwards_a_bounded_v2_request_for_es1_layout_runtime_and_timer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The ES1-shaped plan must reach the baseline with its required V2 state."""
+    registry_root = tmp_path / "registry"
+    registry = registry_root / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    self_deploy_legacy_cron_enabled: false\n"
+        "    self_deploy_v2_registry_layout_enabled: true\n"
+        "    self_deploy_v2_promotion_allowed_signers: infra ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEjV/Mqc501uHt3OiM0aYthhtAHO1htXrDuEYh4UQOXI\n"
+        "    self_deploy_v2_promotion_bws_project_id: 11111111-1111-4111-8111-111111111111\n"
+        f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
+        "    self_deploy_v2_promotion_channel: core-v2\n"
+        "    self_deploy_v2_promotion_policy_enabled: true\n"
+        "    self_deploy_v2_promotion_registry_remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+        "    self_deploy_v2_reconcile_enabled: true\n"
+        "    self_deploy_v2_reconcile_packaged: true\n"
+        "    self_deploy_v2_registry_read_identity_secret_uuid: 22222222-2222-4222-8222-222222222222\n"
+        "    self_deploy_registry_origin: http://100.73.228.90:3000/relaxgg/infra-registry.git\n",
+        encoding="utf-8",
+    )
+    runtime_revision = "b" * 40
+    operations = registry_root / "operations"
+    operations.mkdir()
+    (operations / "infra-management.lock").write_text(runtime_revision + "\n", encoding="utf-8")
+    readiness = HostReadinessResult(
+        transport="root_ssh",
+        ready=False,
+        checks=[],
+        actions=[
+            HostBootstrapAction(
+                id="migrate_v2_registry_layout",
+                check_id="registry_layout",
+                description="Migrate the host registry checkout to the V2-owned root.",
+            ),
+            HostBootstrapAction(
+                id="install_self_deploy_runtime",
+                check_id="self_deploy_runtime",
+                description="Install the self-deploy runtime.",
+            ),
+            HostBootstrapAction(
+                id="enable_self_deploy_timer",
+                check_id="self_deploy_timer",
+                description="Enable and start the self-deploy timer.",
+            ),
+        ],
+    )
+    monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+    control_root = tmp_path / "control"
+    playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+    playbook.parent.mkdir(parents=True)
+    playbook.touch()
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(
+        "infralink.cli.main.subprocess.run",
+        lambda args, **kwargs: (
+            calls.append((args, kwargs))
+            or subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(registry), "host", "bootstrap", HOST_ID, "--apply"],
+    )
+
+    assert result.exit_code == 1
+    ansible_calls = [call for call in calls if call[0][0] == "ansible-playbook"]
+    assert len(ansible_calls) == 1
+    extra_vars = json.loads(ansible_calls[0][0][-1])
+    assert set(extra_vars) == {
+        "bootstrap_actions",
+        "canonical_name",
+        "host_address",
+        "host_uuid",
+        "self_deploy_legacy_cron_enabled",
+        "self_deploy_registry_origin",
+        "self_deploy_v2_promotion_allowed_signers",
+        "self_deploy_v2_promotion_bws_project_id",
+        "self_deploy_v2_promotion_channel",
+        "self_deploy_v2_promotion_host_fingerprint",
+        "self_deploy_v2_promotion_policy_enabled",
+        "self_deploy_v2_promotion_registry_remote",
+        "self_deploy_v2_reconcile_enabled",
+        "self_deploy_v2_reconcile_packaged",
+        "self_deploy_v2_registry_read_identity_secret_uuid",
+        "self_deploy_v2_runtime_revision",
+    }
+    assert extra_vars["bootstrap_actions"] == [
+        "migrate_v2_registry_layout",
+        "install_self_deploy_runtime",
+        "enable_self_deploy_timer",
+    ]
+    assert extra_vars["host_uuid"] == HOST_ID
+    assert extra_vars["self_deploy_v2_runtime_revision"] == runtime_revision
+    assert (
+        extra_vars["self_deploy_registry_origin"]
+        == "http://100.73.228.90:3000/relaxgg/infra-registry.git"
+    )
+
+
+def test_host_bootstrap_apply_rejects_incomplete_v2_state_before_starting_ansible(
+    monkeypatch, tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    self_deploy_v2_registry_layout_enabled: true\n",
+        encoding="utf-8",
+    )
+    readiness = HostReadinessResult(
+        transport="root_ssh",
+        ready=False,
+        checks=[],
+        actions=[
+            HostBootstrapAction(
+                id="install_self_deploy_runtime",
+                check_id="self_deploy_runtime",
+                description="Install the self-deploy runtime.",
+            )
+        ],
+    )
+    monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", tmp_path / "missing-controller")
+    monkeypatch.setattr(
+        "infralink.cli.main.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("incomplete V2 state must not start Ansible"),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(registry), "host", "bootstrap", HOST_ID, "--apply"],
+    )
+
+    assert result.exit_code == 3
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "configuration_required"
+    assert "host" not in payload["error"]["details"]
+    assert payload["error"]["details"]["path"].endswith("operations/infra-management.lock")
+
+
+def test_host_bootstrap_apply_failure_returns_only_bounded_redacted_task_count(
+    monkeypatch, tmp_path: Path
+) -> None:
+    readiness = HostReadinessResult(
+        transport="root_ssh",
+        ready=False,
+        checks=[],
+        actions=[
+            HostBootstrapAction(
+                id="install_jq",
+                check_id="jq",
+                description="Install jq.",
+            )
+        ],
+    )
+    monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+    control_root = tmp_path / "control"
+    playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+    playbook.parent.mkdir(parents=True)
+    playbook.touch()
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
+    monkeypatch.setattr(
+        "infralink.cli.main.subprocess.run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(
+            args=args,
+            returncode=2,
+            stdout=(
+                "TASK [Install jq] ********************************************************\n"
+                'fatal: [host]: FAILED! => {"msg": "token=not-for-output"}\n'
+                "TASK [Read BWS secret] ***************************************************\n"
+            ),
+            stderr="credential=not-for-output",
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(ROOT / "examples" / "registry.yml"),
+            "--edges",
+            str(ROOT / "examples" / "edges.yml"),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--apply",
+        ],
+    )
+
+    assert result.exit_code == 4
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "provider_unavailable"
+    assert payload["error"]["details"] == {
+        "host": HOST_ID,
+        "executor": "host_baseline",
+        "return_code": 2,
+        "task_count": 2,
+        "task_output_redacted": True,
+    }
+    assert "Install jq" not in result.output
+    assert "not-for-output" not in result.output
 
 
 def test_host_bootstrap_apply_refreshes_only_the_pinned_controller_runtime(

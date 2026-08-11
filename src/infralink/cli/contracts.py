@@ -61,6 +61,75 @@ class Action(ContractModel):
     bindings: dict[str, Binding] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
+BootstrapActionId = Literal[
+    "create_devops_account",
+    "configure_devops_authorized_access",
+    "install_docker",
+    "install_jq",
+    "install_bws_cli",
+    "install_self_deploy_dependencies",
+    "migrate_v2_registry_layout",
+    "install_self_deploy_runtime",
+    "enable_self_deploy_timer",
+]
+
+
+class HostBootstrapV2State(ContractModel):
+    """The declared V2 state that a baseline executor may materialize."""
+
+    self_deploy_v2_runtime_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    self_deploy_legacy_cron_enabled: Literal[False]
+    self_deploy_registry_origin: str = Field(
+        pattern=r"^https?://[^/@:?#\s\[\]]+(?::[0-9]{1,5})?/[^?#\s]*$"
+    )
+    self_deploy_v2_promotion_allowed_signers: str = Field(min_length=1, max_length=4096)
+    self_deploy_v2_promotion_bws_project_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    self_deploy_v2_promotion_channel: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    self_deploy_v2_promotion_host_fingerprint: str = Field(min_length=1, max_length=1024)
+    self_deploy_v2_promotion_policy_enabled: Literal[True]
+    self_deploy_v2_promotion_registry_remote: str = Field(min_length=1, max_length=1024)
+    self_deploy_v2_reconcile_enabled: Literal[True]
+    self_deploy_v2_reconcile_packaged: Literal[True]
+    self_deploy_v2_registry_read_identity_secret_uuid: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+
+
+class HostBootstrapRequest(ContractModel):
+    """Bounded control-plane input for one declared baseline executor invocation."""
+
+    host_address: str = Field(min_length=1, max_length=255)
+    host_uuid: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    canonical_name: str = Field(min_length=1, max_length=255)
+    bootstrap_actions: list[BootstrapActionId] = Field(min_length=1, max_length=9)
+    v2: HostBootstrapV2State | None = None
+
+    @model_validator(mode="after")
+    def require_v2_state_for_v2_materialization(self) -> HostBootstrapRequest:
+        if (
+            {"migrate_v2_registry_layout", "install_self_deploy_runtime"}
+            & set(self.bootstrap_actions)
+        ) and self.v2 is None:
+            raise ValueError("V2 bootstrap actions require declared V2 state")
+        return self
+
+    def ansible_extra_vars(self) -> dict[str, Any]:
+        """Flatten the exact approved input shape expected by the executor."""
+        values: dict[str, Any] = {
+            "host_address": self.host_address,
+            "host_uuid": self.host_uuid,
+            "canonical_name": self.canonical_name,
+            "bootstrap_actions": self.bootstrap_actions,
+        }
+        if self.v2 is not None:
+            values.update(self.v2.model_dump())
+        return values
+
+
 class CommandContext(ContractModel):
     raw: str
     parsed: dict[str, Any]
