@@ -445,6 +445,54 @@ def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) 
     assert json.loads(follow_up.output)["result"]["readiness"] == payload["result"]["readiness"]
 
 
+def test_host_bootstrap_plan_rejects_required_v2_action_with_incomplete_v2_declaration(
+    monkeypatch, tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    self_deploy_v2_registry_layout_enabled: true\n",
+        encoding="utf-8",
+    )
+    readiness = HostReadinessResult(
+        transport="root_ssh",
+        ready=False,
+        checks=[],
+        actions=[
+            HostBootstrapAction(
+                id="install_self_deploy_runtime",
+                check_id="self_deploy_runtime",
+                description="Install the self-deploy runtime.",
+            )
+        ],
+    )
+    monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--plan",
+        ],
+    )
+
+    assert result.exit_code == 3
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "configuration_required"
+    assert payload["error"]["details"]["path"].endswith("operations/infra-management.lock")
+
+
 def test_host_bootstrap_links_verifier_when_reconcile_failed(monkeypatch) -> None:
     monkeypatch.setattr(
         "infralink.cli.main.SshReadinessTransport.probe",
@@ -866,7 +914,7 @@ def test_host_bootstrap_apply_rejects_incomplete_v2_state_before_starting_ansibl
     assert payload["error"]["details"]["path"].endswith("operations/infra-management.lock")
 
 
-def test_host_bootstrap_apply_failure_returns_only_bounded_safe_task_context(
+def test_host_bootstrap_apply_failure_returns_only_bounded_redacted_task_count(
     monkeypatch, tmp_path: Path
 ) -> None:
     readiness = HostReadinessResult(
@@ -924,8 +972,10 @@ def test_host_bootstrap_apply_failure_returns_only_bounded_safe_task_context(
         "host": HOST_ID,
         "executor": "host_baseline",
         "return_code": 2,
-        "failed_task_context": ["Install jq"],
+        "task_count": 2,
+        "task_output_redacted": True,
     }
+    assert "Install jq" not in result.output
     assert "not-for-output" not in result.output
 
 

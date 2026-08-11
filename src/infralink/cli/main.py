@@ -1763,6 +1763,13 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     if plan_only == apply_changes:
         raise click.UsageError("pass exactly one of --plan or --apply")
     v2_bootstrap_declared = bool(getattr(target, "self_deploy_v2_registry_layout_enabled", False))
+    required_v2_actions = (
+        [item.id for item in readiness.actions if item.id in _V2_BOOTSTRAP_ACTIONS]
+        if v2_bootstrap_declared
+        else []
+    )
+    if required_v2_actions:
+        _bootstrap_apply_request(ctx, target, required_v2_actions)
     automated_actions = [
         item.id
         for item in readiness.actions
@@ -1922,21 +1929,16 @@ def _bootstrap_apply_request(
 def _bootstrap_failure_details(
     host_uuid: str, completed: subprocess.CompletedProcess[str]
 ) -> dict[str, Any]:
-    """Expose only bounded Ansible task labels, never raw controller output."""
-    task_labels = [
-        match.group(1)
-        for match in re.finditer(r"^TASK \[([^\]]+)\]", completed.stdout, flags=re.MULTILINE)
-        if not re.search(
-            r"(?:secret|token|password|credential|authorization)", match.group(1), re.I
-        )
-    ]
+    """Expose bounded execution shape only, never controller-rendered task names."""
+    task_count = min(len(re.findall(r"^TASK \[[^\]]+\]", completed.stdout, re.MULTILINE)), 8)
     details: dict[str, Any] = {
         "host": host_uuid,
         "executor": "host_baseline",
         "return_code": completed.returncode,
     }
-    if task_labels:
-        details["failed_task_context"] = task_labels[-8:]
+    if task_count:
+        details["task_count"] = task_count
+        details["task_output_redacted"] = True
     return details
 
 
