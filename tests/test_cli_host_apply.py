@@ -516,6 +516,75 @@ def test_host_apply_refuses_a_partial_v2_manifest_instead_of_using_legacy_contra
     assert payload["error"]["code"] == "input_load_failed"
 
 
+def test_host_verifier_uses_legacy_contract_for_a_shadow_only_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "    self_deploy_v2_shadow_enabled: true\n",
+        encoding="utf-8",
+    )
+    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract.write_text(
+        contract.read_text(encoding="utf-8").replace(f"reconcile:\n  unit: {UNIT}\n", ""),
+        encoding="utf-8",
+    )
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "legacy shadow contract")
+
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _completed(
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+            "registry_ref=refs/heads/main\n"
+            "runtime_revision=" + "a" * 40 + "\n"
+            "allowed_signer_principal=infra\n"
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+            "allowed_signers_sha256=" + "c" * 64 + "\n"
+            "git_ssh_signature_capable=true\n"
+            "fetched_tip=" + "d" * 40 + "\n"
+            "signature_verification=passed\n"
+        )
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert_schema(payload, "host-verifier")
+    assert calls[0][-5:] == ["root@100.64.68.83", "sh", "-s", "--", "verifier"]
+
+
+def test_host_apply_rejects_a_legacy_contract_with_a_different_reconcile_unit(
+    tmp_path: Path,
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract.write_text(
+        contract.read_text(encoding="utf-8").replace(UNIT, "not-the-supported-unit.service"),
+        encoding="utf-8",
+    )
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "invalid legacy unit")
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"]
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "input_load_failed"
+    assert "reconcile unit" in payload["error"]["message"].lower()
+
+
 def test_host_apply_starts_only_declared_reconcile_unit_and_returns_opaque_run_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
