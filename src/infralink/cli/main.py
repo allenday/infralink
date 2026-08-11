@@ -2145,26 +2145,42 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
 
 
 def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[str, dict[str, Any]]:
-    """Read only the selected candidate declaration and its locked runtime SHA."""
-    lock = registry_path.parent / "operations" / "infra-management.lock"
-    try:
-        runtime_revision = lock.read_text(encoding="utf-8").strip()
-    except OSError:
-        runtime_revision = ""
-    if re.fullmatch(r"[0-9a-f]{40}", runtime_revision) is None:
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Selected candidate does not bind an exact controller runtime revision",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Publish a selected registry candidate with operations/infra-management.lock",
-            details={"path": str(lock)},
-        )
+    """Read the host controller revision, falling back to the fleet lock."""
     manifest_path = registry_path / target.uuid / "manifest.yml"
     try:
         document = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
         declaration = document["hosts"][target.uuid]
     except (OSError, KeyError, TypeError, yaml.YAMLError):
         declaration = None
+    deployment_path = registry_path / target.uuid / "operations" / "deployment.yml"
+    if os.path.lexists(deployment_path):
+        if deployment_path.is_file():
+            try:
+                deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+                runtime_revision = deployment["infra_management"]["revision"]
+            except (OSError, KeyError, TypeError, yaml.YAMLError):
+                runtime_revision = ""
+        else:
+            runtime_revision = ""
+        revision_source = deployment_path
+    else:
+        lock = registry_path.parent / "operations" / "infra-management.lock"
+        try:
+            runtime_revision = lock.read_text(encoding="utf-8").strip()
+        except OSError:
+            runtime_revision = ""
+        revision_source = lock
+    if (
+        not isinstance(runtime_revision, str)
+        or re.fullmatch(r"[0-9a-f]{40}", runtime_revision) is None
+    ):
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Selected host does not bind an exact controller runtime revision",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare infra_management.revision in the host deployment or publish a valid fleet fallback lock",
+            details={"path": str(revision_source)},
+        )
     required_true = (
         "self_deploy_v2_reconcile_enabled",
         "self_deploy_v2_reconcile_packaged",

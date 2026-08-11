@@ -1221,3 +1221,52 @@ def test_host_bootstrap_controller_refresh_failure_does_not_reprobe_or_start_ser
     assert payload["error"]["code"] == "provider_unavailable"
     assert payload["error"]["details"]["host"] == HOST_ID
     assert probes == 1
+
+
+def test_controller_refresh_prefers_the_explicit_host_runtime_over_global_lock(
+    tmp_path: Path,
+) -> None:
+    """A host declaration may advance without changing the fleet-wide fallback."""
+    from infralink.cli.main import _controller_refresh_extra_vars
+
+    registry_root = tmp_path / "registry"
+    registry = registry_root / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    self_deploy_v2_reconcile_enabled: true\n"
+        "    self_deploy_v2_reconcile_packaged: true\n"
+        "    self_deploy_v2_promotion_policy_enabled: true\n"
+        "    self_deploy_legacy_cron_enabled: false\n"
+        "    self_deploy_v2_promotion_registry_remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+        "    self_deploy_v2_promotion_bws_project_id: 11111111-1111-4111-8111-111111111111\n"
+        "    self_deploy_v2_registry_read_identity_secret_uuid: 22222222-2222-4222-8222-222222222222\n"
+        f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
+        "    self_deploy_v2_promotion_allowed_signers: infra ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEjV/Mqc501uHt3OiM0aYthhtAHO1htXrDuEYh4UQOXI\n"
+        "    self_deploy_v2_promotion_channel: core-v2\n"
+        "    self_deploy_registry_origin: http://100.64.68.83:3000/relaxgg/infra-registry.git\n",
+        encoding="utf-8",
+    )
+    explicit_revision = "b" * 40
+    deployment = registry / HOST_ID / "operations" / "deployment.yml"
+    deployment.parent.mkdir()
+    deployment.write_text(f"infra_management:\n  revision: {explicit_revision}\n", encoding="utf-8")
+    lock = registry_root / "operations" / "infra-management.lock"
+    lock.parent.mkdir()
+    lock.write_text("a" * 40 + "\n", encoding="utf-8")
+    target = type("Target", (), {"uuid": HOST_ID, "canonical_name": HOST_NAME})()
+
+    runtime_revision, _ = _controller_refresh_extra_vars(registry, target)
+
+    assert runtime_revision == explicit_revision
+
+    deployment.unlink()
+    deployment.mkdir()
+    with pytest.raises(CliFailure) as malformed:
+        _controller_refresh_extra_vars(registry, target)
+
+    assert malformed.value.code == ErrorCode.CONFIGURATION_REQUIRED
+    assert malformed.value.details == {"path": str(deployment)}
