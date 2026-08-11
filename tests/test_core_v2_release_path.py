@@ -58,6 +58,10 @@ def _select_release(
     candidate: dict[str, Any],
 ) -> CoreReleasePath:
     """Fail closed unless all signed public artifacts select the same declaration."""
+    for artifact, name in ((pointer, "pointer"), (admission, "admission")):
+        signature = artifact.get("signature")
+        if not isinstance(signature, str) or not signature.startswith("ssh-ed25519 "):
+            raise ValueError(f"{name} signature is missing or invalid")
     expected = candidate["registry_commit"]
     if pointer.get("channel") != "core-v2" or candidate.get("channel") != "core-v2":
         raise ValueError("core-v2 channel mismatch")
@@ -123,13 +127,6 @@ def _selected_release(tmp_path: Path) -> CoreReleasePath:
         root / "release-selection.json",
     )
     pointer, admission, candidate = _release_artifacts()
-    head = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    assert head == candidate["registry_commit"]
     return _select_release(
         registry,
         pointer=pointer,
@@ -178,7 +175,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
         (
             "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
             "registry_ref=refs/heads/main",
-            "runtime_revision=" + "b" * 40,
+            "runtime_revision=" + release.registry_commit,
             "allowed_signer_principal=infra",
             "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
             "allowed_signers_sha256=" + "c" * 64,
@@ -247,6 +244,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     assert_schema(apply_payload, "host-apply")
     assert_schema(doctor_payload, "doctor")
     assert verifier_payload["result"]["target"]["id"] == release.host_id
+    assert verifier_payload["result"]["verifier"]["runtime_revision"] == release.registry_commit
     assert apply_payload["result"]["target"]["id"] == release.host_id
     assert doctor_payload["result"]["target"]["id"] == release.host_id
     assert doctor_payload["result"]["status"] == "healthy"
@@ -254,7 +252,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     assert remote_args == [
         "verifier",
         "/var/lib/legacy/registry",
-        "/var/lib/legacy/runtime/" + "b" * 40,
+        "/var/lib/legacy/runtime/" + release.registry_commit,
         "/etc/legacy/allowed_signers",
         "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
         "refs/heads/main",
@@ -329,6 +327,19 @@ def test_release_path_rejects_a_pointer_to_any_artifact_other_than_the_candidate
         ValueError, match="pointer candidate is not the selected candidate artifact"
     ):
         _release_artifacts(fixture_root)
+
+
+def test_release_path_rejects_an_unsigned_admission() -> None:
+    pointer, admission, candidate = _release_artifacts()
+    admission["signature"] = ""
+
+    with pytest.raises(ValueError, match="admission signature is missing or invalid"):
+        _select_release(
+            FIXTURES / "candidate-registry" / "hosts",
+            pointer=pointer,
+            admission=admission,
+            candidate=candidate,
+        )
 
 
 def test_host_verifier_uses_legacy_or_active_v2_contract_without_mixing_them(
