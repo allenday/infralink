@@ -35,6 +35,7 @@ from infralink.cli.contracts import (
     HelpResult,
     HelpSubcommand,
     HostBootstrapPlanResult,
+    HostReadinessResult,
     InfoResult,
     InfoSources,
     InfoSummary,
@@ -77,6 +78,13 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
         "install_bws_cli",
         "install_self_deploy_dependencies",
         "enable_self_deploy_timer",
+    }
+)
+V2_CONTROLLER_REFRESH_ACTIONS: frozenset[str] = frozenset(
+    {
+        "migrate_v2_registry_layout",
+        "install_self_deploy_runtime",
+        "inspect_self_deploy_reconcile",
     }
 )
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
@@ -1797,9 +1805,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     automated_actions = [
         item.id for item in readiness.actions if item.id in BASELINE_EXECUTOR_ACTIONS
     ]
-    refresh_controller = any(
-        item.id == "inspect_self_deploy_reconcile" for item in readiness.actions
-    )
+    refresh_controller = _requires_v2_controller_refresh(target, readiness)
     controller_runtime_revision: str | None = None
     if refresh_controller and ctx.registry_path is not None and ctx.registry_path.is_dir():
         controller_runtime_revision, _ = _controller_refresh_extra_vars(ctx.registry_path, target)
@@ -1809,58 +1815,21 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         and ctx.registry_path is not None
         and ctx.registry_path.is_dir()
     ):
+        prerequisites = [
+            action_id for action_id in automated_actions if action_id != "enable_self_deploy_timer"
+        ]
+        if prerequisites:
+            _apply_host_baseline(target, prerequisites)
+            readiness = evaluate_host_readiness(target, SshReadinessTransport())
         _apply_controller_refresh(ctx, target, controller_runtime_revision)
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
-    elif apply_changes and automated_actions:
-        control_root = _CONTROL_ROOT
-        playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
-        if not playbook.is_file():
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Bastion host-bootstrap capability is not installed",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Install the current infra-management host-bootstrap capability on Bastion",
-                details={"capability": "host_bootstrap"},
-            )
-        address = target.tailscale_ip or target.public_ip
-        if not address:
-            raise CliFailure(
-                code=ErrorCode.CONFIGURATION_REQUIRED,
-                message="Host address is required for bootstrap",
-                exit_code=ExitCode.INPUT_ERROR,
-                fix="Declare a Tailscale or public address for the host",
-                details={"host": target.uuid},
-            )
-        completed = subprocess.run(
-            [
-                "ansible-playbook",
-                "-i",
-                f"{address},",
-                "-u",
-                "root",
-                str(playbook),
-                "-e",
-                f"host_address={address}",
-                "-e",
-                f"host_uuid={target.uuid}",
-                "-e",
-                f"canonical_name={target.canonical_name}",
-                "-e",
-                json.dumps({"bootstrap_actions": automated_actions}),
-            ],
-            cwd=control_root,
-            text=True,
-            capture_output=True,
-            check=False,
+        _apply_host_baseline(
+            target,
+            [item.id for item in readiness.actions if item.id == "enable_self_deploy_timer"],
         )
-        if completed.returncode != 0:
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Host baseline apply failed",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
-                details={"host": target.uuid},
-            )
+        readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    elif apply_changes and automated_actions:
+        _apply_host_baseline(target, automated_actions)
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
     actions = [
         action(
@@ -1898,6 +1867,68 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         )
     )
     return 0 if readiness.ready or plan_only else 1
+
+
+def _requires_v2_controller_refresh(target: Any, readiness: HostReadinessResult) -> bool:
+    """Return whether this V2 host needs the controller-owned runtime refresh."""
+    return bool(getattr(target, "self_deploy_v2_promotion_enabled", False)) and any(
+        item.id in V2_CONTROLLER_REFRESH_ACTIONS for item in readiness.actions
+    )
+
+
+def _apply_host_baseline(target: Any, action_ids: list[str]) -> None:
+    """Apply the supplied declared baseline actions over the host's SSH address."""
+    if not action_ids:
+        return
+    control_root = _CONTROL_ROOT
+    playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+    if not playbook.is_file():
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion host-bootstrap capability is not installed",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Install the current infra-management host-bootstrap capability on Bastion",
+            details={"capability": "host_bootstrap"},
+        )
+    address = target.tailscale_ip or target.public_ip
+    if not address:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host address is required for bootstrap",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare a Tailscale or public address for the host",
+            details={"host": target.uuid},
+        )
+    completed = subprocess.run(
+        [
+            "ansible-playbook",
+            "-i",
+            f"{address},",
+            "-u",
+            "root",
+            str(playbook),
+            "-e",
+            f"host_address={address}",
+            "-e",
+            f"host_uuid={target.uuid}",
+            "-e",
+            f"canonical_name={target.canonical_name}",
+            "-e",
+            json.dumps({"bootstrap_actions": action_ids}),
+        ],
+        cwd=control_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Host baseline apply failed",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
+            details={"host": target.uuid},
+        )
 
 
 def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str | None) -> None:

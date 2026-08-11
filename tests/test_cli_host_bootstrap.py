@@ -839,6 +839,91 @@ def test_host_bootstrap_apply_forwards_only_the_timer_action_when_it_alone_is_mi
     assert json.loads(argv[0][-1])["bootstrap_actions"] == ["enable_self_deploy_timer"]
 
 
+def test_host_bootstrap_apply_refreshes_v2_runtime_then_enables_timer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    self_deploy_v2_promotion_policy_enabled: true\n"
+        "    self_deploy_v2_promotion_channel: core-v2\n",
+        encoding="utf-8",
+    )
+    readiness = HostReadinessResult(
+        transport="root_ssh",
+        ready=False,
+        checks=[],
+        actions=[
+            HostBootstrapAction(
+                id="install_self_deploy_runtime",
+                check_id="self_deploy_runtime",
+                description="Install the self-deploy runtime.",
+            ),
+            HostBootstrapAction(
+                id="install_self_deploy_dependencies",
+                check_id="self_deploy_dependencies",
+                description="Install self-deploy dependencies.",
+            ),
+            HostBootstrapAction(
+                id="enable_self_deploy_timer",
+                check_id="self_deploy_timer",
+                description="Enable and start the self-deploy timer.",
+            ),
+        ],
+    )
+    calls: list[tuple[str, str | None]] = []
+    order: list[str] = []
+    commands: list[list[str]] = []
+    control_root = tmp_path / "control"
+    playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
+    playbook.parent.mkdir(parents=True)
+    playbook.touch()
+    monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_refresh_extra_vars", lambda *_args: ("a" * 40, {})
+    )
+    monkeypatch.setattr(
+        "infralink.cli.main._apply_controller_refresh",
+        lambda _ctx, target, revision: (
+            calls.append((target.uuid, revision)),
+            order.append("controller"),
+        ),
+    )
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
+    monkeypatch.setattr(
+        "infralink.cli.main.subprocess.run",
+        lambda args, **_kwargs: (
+            commands.append(args)
+            or order.append("baseline:" + ",".join(json.loads(args[-1])["bootstrap_actions"]))
+            or subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(registry), "host", "bootstrap", HOST_ID, "--apply"],
+    )
+
+    assert result.exit_code == 1
+    assert calls == [(HOST_ID, "a" * 40)]
+    assert [json.loads(command[-1])["bootstrap_actions"] for command in commands] == [
+        ["install_self_deploy_dependencies"],
+        ["enable_self_deploy_timer"],
+    ]
+    assert order == [
+        "baseline:install_self_deploy_dependencies",
+        "controller",
+        "baseline:enable_self_deploy_timer",
+    ]
+    payload = json.loads(result.output)
+    assert any(item["rel"] == "reinspect-readiness" for item in payload["next_actions"])
+
+
 def test_host_bootstrap_apply_refreshes_only_the_pinned_controller_runtime(
     monkeypatch, tmp_path: Path
 ) -> None:
