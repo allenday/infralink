@@ -49,6 +49,7 @@ def _controller_source_repository(tmp_path: Path) -> tuple[Path, str]:
     _git(repository, "config", "user.name", "Test")
     _git(repository, "add", ".")
     _git(repository, "commit", "--quiet", "-m", "controller refresh")
+    _git(repository, "branch", "-M", "main")
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
@@ -68,8 +69,42 @@ def _controller_clone_missing_selected_revision(tmp_path: Path) -> tuple[Path, s
     return control, remote.as_uri(), revision
 
 
-def test_controller_refresh_materializes_an_exact_detached_source(tmp_path: Path) -> None:
+def _controller_clone_with_selected_revision_missing_from_main(
+    tmp_path: Path,
+) -> tuple[Path, str, str]:
+    source, _main_revision = _controller_source_repository(tmp_path / "upstream")
+    remote = tmp_path / "infra-management.git"
+    _git(tmp_path, "clone", "--quiet", "--bare", str(source), str(remote))
+
+    (source / "selected-only").write_text("not advertised on remote main\n", encoding="utf-8")
+    _git(source, "add", ".")
+    _git(source, "commit", "--quiet", "-m", "selected only")
+    selected_revision = _git(source, "rev-parse", "HEAD")
+
+    control = tmp_path / "control"
+    _git(tmp_path, "init", "--quiet", str(control))
+    _git(control, "config", "user.email", "test@example.invalid")
+    _git(control, "config", "user.name", "Test")
+    (control / "README").write_text("control checkout\n", encoding="utf-8")
+    _git(control, "add", ".")
+    _git(control, "commit", "--quiet", "-m", "control checkout")
+    _git(control, "remote", "add", "origin", remote.as_uri())
+    _git(control, "fetch", "--quiet", str(source), selected_revision)
+    return control, remote.as_uri(), selected_revision
+
+
+def _configure_self_remote(monkeypatch: pytest.MonkeyPatch, repository: Path) -> str:
+    remote = repository.as_uri()
+    _git(repository, "remote", "add", "origin", remote)
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    return remote
+
+
+def test_controller_refresh_materializes_an_exact_detached_source(
+    monkeypatch, tmp_path: Path
+) -> None:
     repository, revision = _controller_source_repository(tmp_path)
+    _configure_self_remote(monkeypatch, repository)
 
     with _controller_refresh_source(repository, revision) as source:
         assert source != repository
@@ -77,8 +112,11 @@ def test_controller_refresh_materializes_an_exact_detached_source(tmp_path: Path
         assert (source / "ansible/playbooks/infralink_controller_refresh.yml").is_file()
 
 
-def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(tmp_path: Path) -> None:
+def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(
+    monkeypatch, tmp_path: Path
+) -> None:
     repository, revision = _controller_source_repository(tmp_path)
+    _configure_self_remote(monkeypatch, repository)
     (repository / "dirty").write_text("not accepted", encoding="utf-8")
 
     with pytest.raises(CliFailure) as dirty:
@@ -93,7 +131,7 @@ def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(tmp_pat
     assert missing.value.code == ErrorCode.PROVIDER_UNAVAILABLE
 
 
-def test_controller_refresh_fetches_only_the_absent_selected_revision(
+def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revision(
     monkeypatch, tmp_path: Path
 ) -> None:
     control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
@@ -120,13 +158,64 @@ def test_controller_refresh_fetches_only_the_absent_selected_revision(
             "--no-tags",
             "--no-write-fetch-head",
             "origin",
-            revision,
+            "refs/heads/main:refs/remotes/origin/main",
         ]
     ]
     fetch_env = next(kwargs["env"] for args, kwargs in commands if "fetch" in args)
     assert isinstance(fetch_env, dict)
     assert fetch_env["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
+def test_controller_refresh_does_not_fetch_a_raw_selected_revision(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def reject_raw_revision_fetch(
+        args: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        if "fetch" in args and revision in args:
+            return subprocess.CompletedProcess(
+                args=args, returncode=1, stdout="", stderr="rejected"
+            )
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", reject_raw_revision_fetch)
+
+    with _controller_refresh_source(control, revision) as source:
+        assert _git(source, "rev-parse", "HEAD") == revision
+
+    fetches = [args for args in commands if "fetch" in args]
+    assert fetches
+    assert all(revision not in args for args in fetches)
+
+
+def test_controller_refresh_rejects_selected_revision_missing_from_expected_main(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, remote, _revision = _controller_clone_missing_selected_revision(tmp_path)
+    missing_revision = "a" * 40
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+
+    with pytest.raises(CliFailure) as failed:
+        with _controller_refresh_source(control, missing_revision):
+            pass
+
+    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert not any("worktree" in args for args in commands)
 
 
 def test_controller_refresh_rejects_wrong_remote_without_leaking_credentials(
@@ -193,14 +282,12 @@ def test_controller_refresh_fetch_failure_does_not_materialize_or_leak_remote_ou
 def test_controller_refresh_fetch_failure_does_not_start_ansible(
     monkeypatch, tmp_path: Path
 ) -> None:
-    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    control, remote, revision = _controller_clone_with_selected_revision_missing_from_main(tmp_path)
     commands: list[list[str]] = []
     real_run = subprocess.run
 
-    def failing_fetch(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(args)
-        if "fetch" in args:
-            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="failed")
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
     context = Context()
@@ -212,7 +299,7 @@ def test_controller_refresh_fetch_failure_does_not_start_ansible(
         "infralink.cli.main._controller_refresh_extra_vars", lambda *_args: (revision, {})
     )
     monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: object())
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", failing_fetch)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
 
     with pytest.raises(CliFailure) as failed:
         _apply_controller_refresh(context, target, revision)
@@ -221,8 +308,9 @@ def test_controller_refresh_fetch_failure_does_not_start_ansible(
     assert not any(args[0] == "ansible-playbook" for args in commands)
 
 
-def test_controller_refresh_ignores_a_git_replacement_ref(tmp_path: Path) -> None:
+def test_controller_refresh_ignores_a_git_replacement_ref(monkeypatch, tmp_path: Path) -> None:
     repository, revision = _controller_source_repository(tmp_path)
+    _configure_self_remote(monkeypatch, repository)
     playbook = repository / "ansible/playbooks/infralink_controller_refresh.yml"
     playbook.write_text("unsafe replacement\n", encoding="utf-8")
     _git(repository, "add", ".")
@@ -240,6 +328,7 @@ def test_controller_refresh_reports_failed_temporary_worktree_cleanup(
     monkeypatch, tmp_path: Path
 ) -> None:
     repository, revision = _controller_source_repository(tmp_path)
+    _configure_self_remote(monkeypatch, repository)
     real_run = subprocess.run
 
     def failing_cleanup(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
