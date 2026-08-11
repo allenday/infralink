@@ -217,6 +217,10 @@ class PlannedOperationsView(PlanModel):
     id: str
     purpose: str
     sections: tuple[PlannedViewSection, ...]
+    kind: Literal["standard", "fleet_convergence"] = "standard"
+    host_ids: tuple[str, ...] = ()
+    freshness_seconds: int | None = None
+    datasource_binding_id: str | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -972,6 +976,37 @@ def resolve_observation_documents(
     }
     for view, ref in operation_views.values():
         assert isinstance(view, OperationsView)
+        if view.kind == "fleet_convergence":
+            for host_index, host_id in enumerate(view.host_ids):
+                if str(host_id) not in host_ids:
+                    _finding(
+                        findings,
+                        "unknown-view-host",
+                        _child(ref, "host_ids", str(host_index)),
+                        view.id,
+                        "Reference a declared host UUID.",
+                    )
+            if view.datasource_binding_id not in datasources:
+                _finding(
+                    findings,
+                    "unknown-view-datasource-binding",
+                    _child(ref, "datasource_binding_id"),
+                    view.id,
+                    "Reference a declared datasource binding.",
+                )
+            planned_views.append(
+                PlannedOperationsView(
+                    id=view.id,
+                    purpose=view.purpose,
+                    sections=(),
+                    kind="fleet_convergence",
+                    host_ids=tuple(str(host_id) for host_id in view.host_ids),
+                    freshness_seconds=view.freshness_seconds,
+                    datasource_binding_id=view.datasource_binding_id,
+                    source_refs=(ref,),
+                )
+            )
+            continue
         sections: list[PlannedViewSection] = []
         seen_section_ids: set[str] = set()
         seen_query_ids: set[str] = set()
