@@ -95,16 +95,6 @@ def _manifest_registry_checkout(tmp_path: Path) -> Path:
             "    self_deploy_v2_reconcile_packaged: true\n",
             encoding="utf-8",
         )
-    _release_admission_layout(root / "hosts")
-    source = root / "hosts" / HOST_ID / "operations" / "release-admission-shadow-source.yml"
-    source.write_text(
-        source.read_text(encoding="utf-8").replace(
-            "  repository: /var/lib/release-admission/registry-objects/citadel\n",
-            "  repository: /var/lib/release-admission/registry-objects/citadel\n"
-            "  ref: refs/heads/main\n",
-        ),
-        encoding="utf-8",
-    )
     _git(root, "init", "--quiet")
     _git(root, "config", "user.email", "test@example.invalid")
     _git(root, "config", "user.name", "Test")
@@ -162,7 +152,7 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
     }
 
 
-def test_host_verifier_reports_only_public_v2_trust_facts(
+def test_host_verifier_derives_public_v2_trust_facts_from_active_unit_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _manifest_registry_checkout(tmp_path)
@@ -218,12 +208,16 @@ def test_host_verifier_reports_only_public_v2_trust_facts(
     }
     assert "PRIVATE-KEY-MUST-NOT-LEAK" not in response.output
     assert "SECRET-MUST-NOT-LEAK" not in response.output
-    assert calls[0][calls[0].index("--") + 1] == "verifier"
+    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT]
     script = scripts[0]
     assert "systemctl start" not in script
+    assert 'systemctl cat "$unit"' in script
+    assert "BWS_ACCESS_TOKEN" not in script
+    assert "/etc/environment" not in script
+    assert "release-admission-shadow-source" not in script
 
 
-def test_host_verifier_uses_citadel_declared_release_admission_layout(
+def test_host_verifier_ignores_stale_release_admission_shadow_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _manifest_registry_checkout(tmp_path)
@@ -259,17 +253,9 @@ def test_host_verifier_uses_citadel_declared_release_admission_layout(
     assert response.exit_code == 1
     assert_schema(payload, "host-verifier")
     assert payload["result"]["verifier"]["unavailable"] == ["registry_ref"]
-    assert calls[0][-6:] == [
-        "verifier",
-        "/var/lib/release-admission/registry-objects/citadel",
-        "/var/lib/release-admission/runtime/" + "a" * 40,
-        "/etc/infralink/release-admission/allowed_signers",
-        "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
-        "",
-    ]
-    assert "/etc/infra-management" not in scripts[0]
-    assert "/var/lib/infralink" not in scripts[0]
-    assert "/var/lib/self-deploy-v2/runtime" not in scripts[0]
+    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT]
+    assert "release-admission-shadow-source" not in scripts[0]
+    assert "/var/lib/release-admission/registry-objects/citadel" not in scripts[0]
 
 
 def test_host_verifier_rejects_false_green_without_observed_remote_and_ref(
@@ -304,8 +290,8 @@ def test_host_verifier_rejects_false_green_without_observed_remote_and_ref(
         "registry_ref",
         "fetched_tip",
     ]
-    assert "remote get-url" in scripts[0]
-    assert "refs/remotes/$remote_name/$branch^{commit}" in scripts[0]
+    assert '"remote", "get-url", "origin"' in scripts[0]
+    assert "refs/remotes/origin/main^{commit}" in scripts[0]
     assert "rev-parse --verify HEAD^{commit}" not in scripts[0]
 
 
@@ -339,8 +325,7 @@ def test_host_verifier_rejects_passed_signature_without_observed_remote_and_ref(
 def test_host_verifier_marks_all_facts_unavailable_without_a_declared_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registry = _manifest_registry_checkout(tmp_path)
-    (registry / HOST_ID / "operations" / "release-admission-shadow-source.yml").unlink()
+    registry = _registry_checkout(tmp_path)
     monkeypatch.setattr(
         "infralink.cli.operations.subprocess.run",
         lambda *args, **kwargs: pytest.fail("verifier must not guess undeclared paths"),
@@ -364,10 +349,11 @@ def test_host_verifier_marks_all_facts_unavailable_without_a_declared_layout(
     }
 
 
-def test_host_verifier_rejects_secret_bearing_declared_layout_before_ssh(
+def test_host_verifier_ignores_secret_bearing_shadow_metadata_before_ssh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _manifest_registry_checkout(tmp_path)
+    _release_admission_layout(registry)
     source = registry / HOST_ID / "operations" / "release-admission-shadow-source.yml"
     source.write_text(
         source.read_text(encoding="utf-8").replace(
@@ -376,16 +362,24 @@ def test_host_verifier_rejects_secret_bearing_declared_layout_before_ssh(
         ),
         encoding="utf-8",
     )
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _completed("signature_verification=unavailable\n")
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
     monkeypatch.setattr(
-        "infralink.cli.operations.subprocess.run",
-        lambda *args, **kwargs: pytest.fail("secret-bearing declarations must fail before SSH"),
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
     )
 
     response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
 
     payload = yaml.safe_load(response.output)
     assert response.exit_code != 0
-    assert payload["error"]["code"] == "input_load_failed"
+    assert payload["result"]["verifier"]["signature_verification"] == "unavailable"
+    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT]
     assert "secret@gitea" not in response.output
 
 
