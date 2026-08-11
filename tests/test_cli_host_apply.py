@@ -208,13 +208,15 @@ def test_host_verifier_derives_public_v2_trust_facts_from_active_unit_contract(
     }
     assert "PRIVATE-KEY-MUST-NOT-LEAK" not in response.output
     assert "SECRET-MUST-NOT-LEAK" not in response.output
-    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT]
+    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT, HOST_ID]
     script = scripts[0]
     assert "systemctl start" not in script
     assert 'systemctl cat "$unit"' in script
     assert "BWS_ACCESS_TOKEN" not in script
     assert "/etc/environment" not in script
     assert "release-admission-shadow-source" not in script
+    assert "trust.host_uuid != host_uuid" in script
+    assert "except (AttributeError, TypeError):" in script
 
 
 def test_host_verifier_ignores_stale_release_admission_shadow_metadata(
@@ -253,7 +255,7 @@ def test_host_verifier_ignores_stale_release_admission_shadow_metadata(
     assert response.exit_code == 1
     assert_schema(payload, "host-verifier")
     assert payload["result"]["verifier"]["unavailable"] == ["registry_ref"]
-    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT]
+    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT, HOST_ID]
     assert "release-admission-shadow-source" not in scripts[0]
     assert "/var/lib/release-admission/registry-objects/citadel" not in scripts[0]
 
@@ -379,7 +381,7 @@ def test_host_verifier_ignores_secret_bearing_shadow_metadata_before_ssh(
     payload = yaml.safe_load(response.output)
     assert response.exit_code != 0
     assert payload["result"]["verifier"]["signature_verification"] == "unavailable"
-    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT]
+    assert calls[0][calls[0].index("--") + 1 :] == ["active-verifier", UNIT, HOST_ID]
     assert "secret@gitea" not in response.output
 
 

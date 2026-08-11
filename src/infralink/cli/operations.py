@@ -141,6 +141,7 @@ printf 'signature_verification=%s\\n' "$verification"
 
 _ACTIVE_VERIFIER_REMOTE = """set -eu
 unit=$1
+host_uuid=$2
 
 # The unit drop-in is the active public bootstrap contract. Do not read its
 # EnvironmentFile: it may contain credentials needed only by reconciliation.
@@ -173,7 +174,7 @@ case "$runtime" in
 esac
 [ -x "$runtime/.venv/bin/python" ] || exit 0
 
-"$runtime/.venv/bin/python" -P - "$runtime" "$origin" <<'PY'
+"$runtime/.venv/bin/python" -P - "$runtime" "$origin" "$host_uuid" <<'PY'
 import hashlib
 import re
 import subprocess
@@ -183,6 +184,7 @@ from urllib.parse import urlsplit
 
 runtime = Path(sys.argv[1])
 origin = sys.argv[2]
+host_uuid = sys.argv[3]
 try:
     from lib.self_deploy.registry_layout import REGISTRY_ROOT
     from lib.self_deploy.release_admission_authority import (
@@ -206,9 +208,23 @@ try:
     ):
         raise ValueError
     trust = _trust()
-    if trust.remote != origin or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", trust.channel):
+except ReleaseAdmissionAuthorityError:
+    # The active public contract is malformed; fail closed without diagnostics.
+    raise SystemExit(2)
+except (AttributeError, TypeError):
+    # A partial or pre-authority runtime cannot provide this capability.
+    raise SystemExit(0)
+
+try:
+    if (
+        trust.host_uuid != host_uuid
+        or trust.remote != origin
+        or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", trust.channel)
+    ):
         raise ValueError
-except (ReleaseAdmissionAuthorityError, ValueError):
+except AttributeError:
+    raise SystemExit(0)
+except ValueError:
     # The active public contract is malformed; fail closed without diagnostics.
     raise SystemExit(2)
 
@@ -261,9 +277,15 @@ try:
         raise ValueError
     fetched_tip = tip.stdout.strip()
     _channel_pointer(REGISTRY_ROOT, fetched_tip, trust)
-except (OSError, subprocess.TimeoutExpired, ReleaseAdmissionAuthorityError, ValueError):
+except ReleaseAdmissionAuthorityError:
+    # A present authority rejected malformed public release data; fail closed.
+    raise SystemExit(2)
+except (OSError, subprocess.TimeoutExpired, ValueError):
     print("git_ssh_signature_capable=false")
     print("signature_verification=unavailable")
+    raise SystemExit(0)
+except (AttributeError, TypeError):
+    # The installed authority does not expose the required public verifier API.
     raise SystemExit(0)
 
 version = subprocess.run(["git", "--version"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, timeout=5)
@@ -383,7 +405,7 @@ class SshOperationProvider:
                 verifier.registry_ref or "",
             ]
             if verifier is not None
-            else ["active-verifier", request.unit]
+            else ["active-verifier", request.unit, request.host_uuid]
             if active_verifier
             else [request.unit]
             if invocation is None
