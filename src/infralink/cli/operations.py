@@ -251,24 +251,26 @@ except AttributeError:
 except (TypeError, UnicodeError, ValueError):
     # Present signer evidence is malformed; fail closed.
     raise SystemExit(2)
-if first is not None:
-    try:
-        rendered = subprocess.run(
-            ["ssh-keygen", "-lf", "-", "-E", "sha256"],
-            input=" ".join(first) + "\\n",
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=5,
-        )
-        fingerprint = next((part for part in rendered.stdout.split() if part.startswith("SHA256:")), "")
-        if rendered.returncode == 0 and fingerprint:
-            print(f"allowed_signer_principal={first[0]}")
-            print(f"allowed_signer_fingerprint={fingerprint}")
-            print(f"allowed_signers_sha256={digest}")
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+if first is None:
+    raise SystemExit(2)
+try:
+    rendered = subprocess.run(
+        ["ssh-keygen", "-lf", "-", "-E", "sha256"],
+        input=" ".join(first) + "\\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=5,
+    )
+    fingerprint = next((part for part in rendered.stdout.split() if part.startswith("SHA256:")), "")
+except (OSError, subprocess.TimeoutExpired):
+    raise SystemExit(2)
+if rendered.returncode != 0 or not fingerprint:
+    raise SystemExit(2)
+print(f"allowed_signer_principal={first[0]}")
+print(f"allowed_signer_fingerprint={fingerprint}")
+print(f"allowed_signers_sha256={digest}")
 
 try:
     remote = subprocess.run(

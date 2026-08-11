@@ -220,6 +220,8 @@ def test_host_verifier_derives_public_v2_trust_facts_from_active_unit_contract(
     assert "signers = trust.allowed_signers" in script
     assert "if not isinstance(signers, bytes):" in script
     assert "except AttributeError:" in script
+    assert "if first is None:" in script
+    assert "if rendered.returncode != 0 or not fingerprint:" in script
 
 
 def test_host_verifier_ignores_stale_release_admission_shadow_metadata(
