@@ -15,7 +15,13 @@ from click.testing import CliRunner
 from infralink.cli.contracts import HostBootstrapAction, HostReadinessResult
 from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_readiness
-from infralink.cli.main import BASELINE_EXECUTOR_ACTIONS, _controller_refresh_source, cli
+from infralink.cli.main import (
+    BASELINE_EXECUTOR_ACTIONS,
+    Context,
+    _apply_controller_refresh,
+    _controller_refresh_source,
+    cli,
+)
 from infralink.host_readiness import HostReadinessProbe
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +52,22 @@ def _controller_source_repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
+def _controller_clone_missing_selected_revision(tmp_path: Path) -> tuple[Path, str, str]:
+    source, revision = _controller_source_repository(tmp_path / "upstream")
+    remote = tmp_path / "infra-management.git"
+    _git(tmp_path, "clone", "--quiet", "--bare", str(source), str(remote))
+
+    control = tmp_path / "control"
+    _git(tmp_path, "init", "--quiet", str(control))
+    _git(control, "config", "user.email", "test@example.invalid")
+    _git(control, "config", "user.name", "Test")
+    (control / "README").write_text("control checkout\n", encoding="utf-8")
+    _git(control, "add", ".")
+    _git(control, "commit", "--quiet", "-m", "control checkout")
+    _git(control, "remote", "add", "origin", remote.as_uri())
+    return control, remote.as_uri(), revision
+
+
 def test_controller_refresh_materializes_an_exact_detached_source(tmp_path: Path) -> None:
     repository, revision = _controller_source_repository(tmp_path)
 
@@ -69,6 +91,134 @@ def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(tmp_pat
         with _controller_refresh_source(repository, "a" * 40):
             pass
     assert missing.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+
+
+def test_controller_refresh_fetches_only_the_absent_selected_revision(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    commands: list[tuple[list[str], dict[str, object]]] = []
+    real_run = subprocess.run
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append((args, kwargs))
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+
+    with _controller_refresh_source(control, revision) as source:
+        assert _git(source, "rev-parse", "HEAD") == revision
+
+    fetches = [args for args, _kwargs in commands if "fetch" in args]
+    assert fetches == [
+        [
+            "git",
+            "-C",
+            str(control),
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            revision,
+        ]
+    ]
+    fetch_env = next(kwargs["env"] for args, kwargs in commands if "fetch" in args)
+    assert isinstance(fetch_env, dict)
+    assert fetch_env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
+def test_controller_refresh_rejects_wrong_remote_without_leaking_credentials(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, _remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    secret = "top-secret-token"
+    _git(
+        control, "remote", "set-url", "origin", f"https://operator:{secret}@wrong.example.invalid/x"
+    )
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr(
+        "infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE",
+        "https://github.com/relax-dot-gg/infra-management.git",
+    )
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+
+    with pytest.raises(CliFailure) as failed:
+        with _controller_refresh_source(control, revision):
+            pass
+
+    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert secret not in failed.value.message
+    assert secret not in failed.value.fix
+    assert secret not in json.dumps(failed.value.details)
+    assert not any("fetch" in args for args in commands)
+    assert not any("worktree" in args for args in commands)
+
+
+def test_controller_refresh_fetch_failure_does_not_materialize_or_leak_remote_output(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    secret = "top-secret-token"
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def failing_fetch(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        if "fetch" in args:
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr=secret)
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", failing_fetch)
+
+    with pytest.raises(CliFailure) as failed:
+        with _controller_refresh_source(control, revision):
+            pass
+
+    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert secret not in failed.value.message
+    assert secret not in failed.value.fix
+    assert secret not in json.dumps(failed.value.details)
+    assert not any("worktree" in args for args in commands)
+
+
+def test_controller_refresh_fetch_failure_does_not_start_ansible(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def failing_fetch(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        if "fetch" in args:
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="failed")
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    context = Context()
+    context.registry_path = tmp_path
+    target = type("Target", (), {"uuid": HOST_ID})()
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control)
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_refresh_extra_vars", lambda *_args: (revision, {})
+    )
+    monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: object())
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", failing_fetch)
+
+    with pytest.raises(CliFailure) as failed:
+        _apply_controller_refresh(context, target, revision)
+
+    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert not any(args[0] == "ansible-playbook" for args in commands)
 
 
 def test_controller_refresh_ignores_a_git_replacement_ref(tmp_path: Path) -> None:
