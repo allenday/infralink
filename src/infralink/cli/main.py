@@ -1937,13 +1937,6 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
         check=False,
         env=_isolated_git_environment(),
     )
-    present = subprocess.run(
-        ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=_isolated_git_environment(),
-    )
     if status.returncode != 0 or status.stdout:
         raise CliFailure(
             code=ErrorCode.PROVIDER_UNAVAILABLE,
@@ -1952,55 +1945,63 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
             fix="Clean and refresh the Bastion infra-management checkout at the selected revision",
             details={"capability": "controller_refresh", "required_revision": revision},
         )
-    if present.returncode != 0:
-        remote = subprocess.run(
-            ["git", "-C", str(control_root), "remote", "get-url", "origin"],
-            text=True,
-            capture_output=True,
-            check=False,
-            env=_isolated_git_environment(),
+    remote = subprocess.run(
+        ["git", "-C", str(control_root), "remote", "get-url", "origin"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_isolated_git_environment(),
+    )
+    if remote.returncode != 0 or _controller_remote_identity(
+        remote.stdout.strip()
+    ) != _controller_remote_identity(_CONTROLLER_REFRESH_SOURCE_REMOTE):
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion cannot fetch the selected immutable controller source",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Configure the expected infra-management origin and rerun host bootstrap --apply",
+            details={"capability": "controller_refresh", "required_revision": revision},
         )
-        if remote.returncode != 0 or _controller_remote_identity(
-            remote.stdout.strip()
-        ) != _controller_remote_identity(_CONTROLLER_REFRESH_SOURCE_REMOTE):
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Bastion cannot fetch the selected immutable controller source",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Configure the expected infra-management origin and rerun host bootstrap --apply",
-                details={"capability": "controller_refresh", "required_revision": revision},
-            )
-        fetched = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(control_root),
-                "fetch",
-                "--no-tags",
-                "--no-write-fetch-head",
-                "origin",
-                revision,
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-            env=_isolated_git_environment(),
+    # `main` is transport only: the candidate-selected revision remains the
+    # sole executable identity and must be reachable from the expected remote.
+    fetched = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(control_root),
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            "refs/heads/main:refs/remotes/origin/main",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_isolated_git_environment(),
+    )
+    present = subprocess.run(
+        ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_isolated_git_environment(),
+    )
+    selected_from_main = subprocess.run(
+        ["git", "-C", str(control_root), "merge-base", "--is-ancestor", revision, "origin/main"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_isolated_git_environment(),
+    )
+    if fetched.returncode != 0 or present.returncode != 0 or selected_from_main.returncode != 0:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion cannot fetch the selected immutable controller source",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
+            details={"capability": "controller_refresh", "required_revision": revision},
         )
-        present = subprocess.run(
-            ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
-            text=True,
-            capture_output=True,
-            check=False,
-            env=_isolated_git_environment(),
-        )
-        if fetched.returncode != 0 or present.returncode != 0:
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Bastion cannot fetch the selected immutable controller source",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
-                details={"capability": "controller_refresh", "required_revision": revision},
-            )
     with tempfile.TemporaryDirectory(prefix="infralink-controller-refresh-") as temporary:
         source = Path(temporary) / "source"
         created = subprocess.run(
