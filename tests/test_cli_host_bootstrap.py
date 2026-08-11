@@ -848,6 +848,7 @@ def test_host_bootstrap_apply_rejects_incomplete_v2_state_before_starting_ansibl
         ],
     )
     monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", tmp_path / "missing-controller")
     monkeypatch.setattr(
         "infralink.cli.main.subprocess.run",
         lambda *_args, **_kwargs: pytest.fail("incomplete V2 state must not start Ansible"),

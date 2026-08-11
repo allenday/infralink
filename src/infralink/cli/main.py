@@ -1784,6 +1784,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         _apply_controller_refresh(ctx, target, controller_runtime_revision)
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
     elif apply_changes and automated_actions:
+        request = _bootstrap_apply_request(ctx, target, automated_actions)
         control_root = _CONTROL_ROOT
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
         if not playbook.is_file():
@@ -1794,7 +1795,6 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
                 fix="Install the current infra-management host-bootstrap capability on Bastion",
                 details={"capability": "host_bootstrap"},
             )
-        request = _bootstrap_apply_request(ctx, target, automated_actions)
         completed = subprocess.run(
             [
                 "ansible-playbook",
