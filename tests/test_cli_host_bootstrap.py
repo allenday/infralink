@@ -167,6 +167,132 @@ def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revi
     assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
 
 
+def test_controller_refresh_uses_only_a_validated_fixed_credential_store_for_https_fetch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, _remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    store = tmp_path / "git-credentials"
+    store.write_text("https://token@example.invalid\n", encoding="utf-8")
+    store.chmod(0o600)
+    commands: list[tuple[list[str], dict[str, object]]] = []
+    real_run = subprocess.run
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append((args, kwargs))
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr(
+        "infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE",
+        "https://github.com/relax-dot-gg/infra-management.git",
+    )
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_CREDENTIAL_STORE", store)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_remote_identity", lambda _remote: "expected"
+    )
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+
+    with _controller_refresh_source(control, revision) as source:
+        assert _git(source, "rev-parse", "HEAD") == revision
+
+    fetch_env = next(kwargs["env"] for args, kwargs in commands if "fetch" in args)
+    assert isinstance(fetch_env, dict)
+    assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert fetch_env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert fetch_env["GIT_CONFIG_COUNT"] == "1"
+    assert fetch_env["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert fetch_env["GIT_CONFIG_VALUE_0"] == f"store --file={store}"
+    assert all("token@example.invalid" not in " ".join(args) for args, _kwargs in commands)
+
+
+@pytest.mark.parametrize("mode", [None, 0o644])
+def test_controller_refresh_rejects_missing_or_unsafe_credential_store_before_fetch(
+    monkeypatch, tmp_path: Path, mode: int | None
+) -> None:
+    control, _remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    store = tmp_path / "git-credentials"
+    if mode is not None:
+        store.write_text("https://token@example.invalid\n", encoding="utf-8")
+        store.chmod(mode)
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr(
+        "infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE",
+        "https://github.com/relax-dot-gg/infra-management.git",
+    )
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_CREDENTIAL_STORE", store)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_remote_identity", lambda _remote: "expected"
+    )
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+
+    with pytest.raises(CliFailure) as failed:
+        with _controller_refresh_source(control, revision):
+            pass
+
+    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert not any("fetch" in args for args in commands)
+    assert not any("worktree" in args for args in commands)
+
+
+def test_controller_refresh_rejects_non_root_owned_credential_store_before_fetch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    control, _remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    store = tmp_path / "git-credentials"
+    store.write_text("https://token@example.invalid\n", encoding="utf-8")
+    store.chmod(0o600)
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+    real_stat = os.stat
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    def non_root_stat(path: object, *args: object, **kwargs: object) -> os.stat_result:
+        result = real_stat(path, *args, **kwargs)
+        if Path(path) == store:
+            return os.stat_result(
+                (
+                    result.st_mode,
+                    result.st_ino,
+                    result.st_dev,
+                    result.st_nlink,
+                    1000,
+                    result.st_gid,
+                    result.st_size,
+                    result.st_atime,
+                    result.st_mtime,
+                    result.st_ctime,
+                )
+            )
+        return result
+
+    monkeypatch.setattr(
+        "infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE",
+        "https://github.com/relax-dot-gg/infra-management.git",
+    )
+    monkeypatch.setattr("infralink.cli.main._CONTROLLER_CREDENTIAL_STORE", store)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_remote_identity", lambda _remote: "expected"
+    )
+    monkeypatch.setattr("infralink.cli.main.os.stat", non_root_stat)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+
+    with pytest.raises(CliFailure) as failed:
+        with _controller_refresh_source(control, revision):
+            pass
+
+    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert not any("fetch" in args for args in commands)
+    assert not any("worktree" in args for args in commands)
+
+
 def test_controller_refresh_does_not_fetch_a_raw_selected_revision(
     monkeypatch, tmp_path: Path
 ) -> None:

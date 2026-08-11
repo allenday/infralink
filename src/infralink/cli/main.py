@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -80,6 +81,7 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
 )
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
+_CONTROLLER_CREDENTIAL_STORE = Path("/root/.git-credentials")
 
 
 def _isolated_git_environment() -> dict[str, str]:
@@ -95,6 +97,43 @@ def _isolated_git_environment() -> dict[str, str]:
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_OPTIONAL_LOCKS": "0",
     }
+
+
+def _validated_controller_credential_store() -> Path:
+    """Return the sole credential helper source allowed for controller fetches."""
+    try:
+        metadata = os.stat(_CONTROLLER_CREDENTIAL_STORE, follow_symlinks=False)
+    except OSError:
+        metadata = None
+    if (
+        metadata is None
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion cannot use the controller Git credential store",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Repair the root-owned 0600 controller credential store and rerun host bootstrap --apply",
+            details={"capability": "controller_refresh"},
+        )
+    return _CONTROLLER_CREDENTIAL_STORE
+
+
+def _controller_fetch_environment() -> dict[str, str]:
+    """Keep Git isolated while permitting the fixed validated helper for HTTPS only."""
+    environment = _isolated_git_environment()
+    if urlsplit(_CONTROLLER_REFRESH_SOURCE_REMOTE).scheme == "https":
+        credential_store = _validated_controller_credential_store()
+        environment.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "credential.helper",
+                "GIT_CONFIG_VALUE_0": f"store --file={credential_store}",
+            }
+        )
+    return environment
 
 
 def _controller_remote_identity(remote: str) -> str:
@@ -1978,7 +2017,7 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
         text=True,
         capture_output=True,
         check=False,
-        env=_isolated_git_environment(),
+        env=_controller_fetch_environment(),
     )
     present = subprocess.run(
         ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
