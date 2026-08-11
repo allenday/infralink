@@ -59,6 +59,7 @@ class PlannedHost(PlanModel):
     id: str
     display_name: Annotated[str, Field(min_length=1)] | None = None
     baseline_capabilities: tuple[HostBaselineCapability, ...] = ()
+    self_deploy_v2_reconcile_enabled: bool = False
     source_refs: tuple[SourceRef, ...]
 
 
@@ -477,6 +478,8 @@ def resolve_observation_documents(
         host_source_refs: tuple[SourceRef, ...] = (ref,)
         if "baseline_capabilities" in host.model_fields_set:
             host_source_refs += (_child(ref, "baseline_capabilities"),)
+        if "self_deploy_v2_reconcile_enabled" in host.model_fields_set:
+            host_source_refs += (_child(ref, "self_deploy_v2_reconcile_enabled"),)
         planned_hosts.append(
             PlannedHost(
                 id=str(host.id),
@@ -484,6 +487,7 @@ def resolve_observation_documents(
                 baseline_capabilities=tuple(
                     sorted(host.baseline_capabilities, key=lambda item: item.value)
                 ),
+                self_deploy_v2_reconcile_enabled=host.self_deploy_v2_reconcile_enabled,
                 source_refs=host_source_refs,
             )
         )
@@ -977,15 +981,6 @@ def resolve_observation_documents(
     for view, ref in operation_views.values():
         assert isinstance(view, OperationsView)
         if view.kind == "fleet_convergence":
-            for host_index, host_id in enumerate(view.host_ids):
-                if str(host_id) not in host_ids:
-                    _finding(
-                        findings,
-                        "unknown-view-host",
-                        _child(ref, "host_ids", str(host_index)),
-                        view.id,
-                        "Reference a declared host UUID.",
-                    )
             if view.datasource_binding_id not in datasources:
                 _finding(
                     findings,
@@ -1000,7 +995,11 @@ def resolve_observation_documents(
                     purpose=view.purpose,
                     sections=(),
                     kind="fleet_convergence",
-                    host_ids=tuple(str(host_id) for host_id in view.host_ids),
+                    host_ids=tuple(
+                        host.id
+                        for host in sorted(planned_hosts, key=lambda item: item.id)
+                        if host.self_deploy_v2_reconcile_enabled
+                    ),
                     freshness_seconds=view.freshness_seconds,
                     datasource_binding_id=view.datasource_binding_id,
                     source_refs=(ref,),
@@ -1364,7 +1363,11 @@ def _sorted(items: list[Any]) -> tuple[Any, ...]:
 
 
 _SCOPED_COMPATIBILITY_DEFAULT_FIELDS = frozenset(
-    {"baseline_capabilities", "required_host_baseline_capabilities"}
+    {
+        "baseline_capabilities",
+        "required_host_baseline_capabilities",
+        "self_deploy_v2_reconcile_enabled",
+    }
 )
 
 

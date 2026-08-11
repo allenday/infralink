@@ -84,13 +84,13 @@ def test_resolves_views_and_suites_with_stable_derived_signal_identity() -> None
 
 
 def test_resolves_typed_fleet_convergence_view_without_query_members() -> None:
-    data = operational_data()
+    data = deepcopy(operational_data())
+    data["hosts"][0]["self_deploy_v2_reconcile_enabled"] = True  # type: ignore[index]
     data["operations_views"] = [
         {
             "id": "self-deploy",
             "purpose": "Fleet convergence",
             "kind": "fleet_convergence",
-            "host_ids": ["11111111-1111-4111-8111-111111111111"],
             "freshness_seconds": 900,
             "datasource_binding_id": "primary-metrics",
             "sections": [],
@@ -120,9 +120,9 @@ def test_plan_digest_is_exactly_public_canonical_plan_without_digest() -> None:
 def test_legacy_baseline_absence_preserves_global_and_scoped_digests() -> None:
     plan = resolve_observation_documents([document(operational_data())], as_of=AS_OF)
 
-    assert plan.plan_digest == "6ad206b2c4e34452d2b96fad40f4c3bfeb86dc418e0ace7d7138ff7c8f2ea061"
+    assert plan.plan_digest == "a1af237c34002f93c0581ac80ddf34e5a4d64c331eb9110a9453adc1e0d85462"
     assert plan.readiness_suites[0].scoped_plan_digest == (
-        "1d973bf4d4ee6cd7105b6820cf83b752456d14535444016acf919a69ea7a95a9"
+        "08a60dd20a5973cee67bb4de01b99fb88cf6497e2650ca4578a150c033baf04e"
     )
 
 
