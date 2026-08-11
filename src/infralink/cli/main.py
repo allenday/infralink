@@ -9,7 +9,9 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -63,6 +65,7 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+_CONTROL_ROOT = Path("/opt/infra")
 BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
     {
         "create_devops_account",
@@ -74,7 +77,6 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
         "enable_self_deploy_timer",
     }
 )
-_CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION = "09c5c0fcfd9354b179a4bf2cb2aa11247c8ab5d4"
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 
 
@@ -1743,7 +1745,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         _apply_controller_refresh(ctx, target, controller_runtime_revision)
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
     elif apply_changes and automated_actions:
-        control_root = Path("/opt/infra")
+        control_root = _CONTROL_ROOT
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
         if not playbook.is_file():
             raise CliFailure(
@@ -1856,40 +1858,29 @@ def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str |
             details={"host": target.uuid},
         )
     runtime_revision = resolved_runtime_revision
-    control_root = Path("/opt/infra")
-    playbook = control_root / _CONTROLLER_REFRESH_PLAYBOOK
-    if not playbook.is_file() or not _controller_refresh_capability_installed(control_root):
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion controller-refresh capability is not installed",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Install infra-management including the pinned controller-refresh playbook on Bastion",
-            details={
-                "capability": "controller_refresh",
-                "required_revision": _CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION,
-            },
-        )
+    control_root = _CONTROL_ROOT
     ssh_args = "-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes "
     try:
-        with _pinned_known_hosts(request) as known_hosts:
-            completed = subprocess.run(
-                [
-                    "ansible-playbook",
-                    "-i",
-                    f"{request.address},",
-                    "-u",
-                    "root",
-                    "--ssh-common-args",
-                    ssh_args + f"-o UserKnownHostsFile={known_hosts}",
-                    str(playbook),
-                    "-e",
-                    json.dumps(extra_vars, sort_keys=True),
-                ],
-                cwd=control_root,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+        with _controller_refresh_source(control_root, runtime_revision) as source:
+            with _pinned_known_hosts(request) as known_hosts:
+                completed = subprocess.run(
+                    [
+                        "ansible-playbook",
+                        "-i",
+                        f"{request.address},",
+                        "-u",
+                        "root",
+                        "--ssh-common-args",
+                        ssh_args + f"-o UserKnownHostsFile={known_hosts}",
+                        str(source / _CONTROLLER_REFRESH_PLAYBOOK),
+                        "-e",
+                        json.dumps(extra_vars, sort_keys=True),
+                    ],
+                    cwd=source,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
     except (OSError, subprocess.TimeoutExpired):
         raise CliFailure(
             code=ErrorCode.PROVIDER_UNAVAILABLE,
@@ -1908,22 +1899,75 @@ def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str |
         )
 
 
-def _controller_refresh_capability_installed(control_root: Path) -> bool:
-    result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(control_root),
-            "merge-base",
-            "--is-ancestor",
-            _CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION,
-            "HEAD",
-        ],
+@contextmanager
+def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Path]:
+    """Materialize the selected immutable controller tree, never the live checkout."""
+    status = subprocess.run(
+        ["git", "-C", str(control_root), "status", "--porcelain"],
         text=True,
         capture_output=True,
         check=False,
     )
-    return result.returncode == 0
+    present = subprocess.run(
+        ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if status.returncode != 0 or status.stdout or present.returncode != 0:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion cannot materialize the selected immutable controller source",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Clean and refresh the Bastion infra-management checkout at the selected revision",
+            details={"capability": "controller_refresh", "required_revision": revision},
+        )
+    with tempfile.TemporaryDirectory(prefix="infralink-controller-refresh-") as temporary:
+        source = Path(temporary) / "source"
+        created = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(control_root),
+                "worktree",
+                "add",
+                "--detach",
+                str(source),
+                revision,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        head = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        playbook = source / _CONTROLLER_REFRESH_PLAYBOOK
+        if (
+            created.returncode != 0
+            or head.returncode != 0
+            or head.stdout.strip() != revision
+            or not playbook.is_file()
+        ):
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Bastion could not materialize the selected controller source",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Refresh the Bastion infra-management clone with the selected controller revision",
+                details={"capability": "controller_refresh", "required_revision": revision},
+            )
+        try:
+            yield source
+        finally:
+            subprocess.run(
+                ["git", "-C", str(control_root), "worktree", "remove", "--force", str(source)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
 
 
 def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[str, dict[str, Any]]:

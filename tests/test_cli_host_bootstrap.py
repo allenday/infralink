@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -12,14 +13,62 @@ import yaml
 from click.testing import CliRunner
 
 from infralink.cli.contracts import HostBootstrapAction, HostReadinessResult
+from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_readiness
-from infralink.cli.main import BASELINE_EXECUTOR_ACTIONS, cli
+from infralink.cli.main import BASELINE_EXECUTOR_ACTIONS, _controller_refresh_source, cli
 from infralink.host_readiness import HostReadinessProbe
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST_ID = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
 HOST_NAME = "database.example.com"
 HOST_FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _controller_source_repository(tmp_path: Path) -> tuple[Path, str]:
+    repository = tmp_path / "infra-management"
+    playbook = repository / "ansible/playbooks/infralink_controller_refresh.yml"
+    playbook.parent.mkdir(parents=True)
+    playbook.write_text("---\n- hosts: all\n", encoding="utf-8")
+    _git(repository.parent, "init", "--quiet", str(repository))
+    _git(repository, "config", "user.email", "test@example.invalid")
+    _git(repository, "config", "user.name", "Test")
+    _git(repository, "add", ".")
+    _git(repository, "commit", "--quiet", "-m", "controller refresh")
+    return repository, _git(repository, "rev-parse", "HEAD")
+
+
+def test_controller_refresh_materializes_an_exact_detached_source(tmp_path: Path) -> None:
+    repository, revision = _controller_source_repository(tmp_path)
+
+    with _controller_refresh_source(repository, revision) as source:
+        assert source != repository
+        assert _git(source, "rev-parse", "HEAD") == revision
+        assert (source / "ansible/playbooks/infralink_controller_refresh.yml").is_file()
+
+
+def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(tmp_path: Path) -> None:
+    repository, revision = _controller_source_repository(tmp_path)
+    (repository / "dirty").write_text("not accepted", encoding="utf-8")
+
+    with pytest.raises(CliFailure) as dirty:
+        with _controller_refresh_source(repository, revision):
+            pass
+    assert dirty.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+
+    (repository / "dirty").unlink()
+    with pytest.raises(CliFailure) as missing:
+        with _controller_refresh_source(repository, "a" * 40):
+            pass
+    assert missing.value.code == ErrorCode.PROVIDER_UNAVAILABLE
 
 
 def test_cli_readiness_enforces_declared_v2_registry_layout_migration() -> None:
@@ -213,7 +262,7 @@ def test_real_module_apply_failure_emits_an_envelope_and_nonzero_exit() -> None:
 def test_host_bootstrap_apply_missing_bastion_executor_is_provider_unavailable(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: tmp_path)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", tmp_path)
     result = CliRunner().invoke(
         cli,
         [
@@ -271,7 +320,7 @@ def test_host_bootstrap_apply_never_sends_manual_secret_or_runtime_actions(
     playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
     playbook.parent.mkdir(parents=True)
     playbook.touch()
-    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: control_root)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
     calls: list[object] = []
 
     class Completed:
@@ -354,7 +403,7 @@ def test_host_bootstrap_apply_forwards_only_the_timer_action_when_it_alone_is_mi
     playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
     playbook.parent.mkdir(parents=True)
     playbook.touch()
-    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: control_root)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
     calls: list[object] = []
 
     class Completed:
@@ -441,7 +490,11 @@ def test_host_bootstrap_apply_refreshes_only_the_pinned_controller_runtime(
         self_deploy_reconcile_exit_status=1,
     )
     monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", lambda *_args: readiness)
-    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: control_root)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_refresh_source",
+        lambda _root, _revision: nullcontext(control_root),
+    )
     monkeypatch.setattr(
         "infralink.cli.operations._pinned_known_hosts",
         lambda _request: __import__("contextlib").nullcontext(tmp_path / "known_hosts"),
@@ -594,7 +647,11 @@ def test_host_bootstrap_controller_refresh_failure_does_not_reprobe_or_start_ser
         return readiness
 
     monkeypatch.setattr("infralink.cli.main.evaluate_host_readiness", fake_readiness)
-    monkeypatch.setattr("infralink.cli.main.Path", lambda _value: control_root)
+    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control_root)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_refresh_source",
+        lambda _root, _revision: nullcontext(control_root),
+    )
     monkeypatch.setattr(
         "infralink.cli.operations._pinned_known_hosts",
         lambda _request: __import__("contextlib").nullcontext(tmp_path / "known_hosts"),
