@@ -199,52 +199,116 @@
       "description": "Bounded, public-only facts used by the host-local V2 verifier.",
       "properties": {
         "allowed_signer": {
-          "$ref": "#/$defs/AllowedSignerDiagnostic"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AllowedSignerDiagnostic"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "fetched_tip": {
-          "pattern": "^[0-9a-f]{40}$",
-          "title": "Fetched Tip",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fetched Tip"
         },
         "git_ssh_signature_capable": {
-          "title": "Git Ssh Signature Capable",
-          "type": "boolean"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Ssh Signature Capable"
         },
         "registry_ref": {
-          "const": "refs/heads/main",
-          "title": "Registry Ref",
-          "type": "string"
+          "anyOf": [
+            {
+              "const": "refs/heads/main",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Ref"
         },
         "registry_remote": {
-          "maxLength": 1024,
-          "minLength": 1,
-          "title": "Registry Remote",
-          "type": "string"
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Registry Remote"
         },
         "runtime_revision": {
-          "pattern": "^[0-9a-f]{40}$",
-          "title": "Runtime Revision",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Revision"
         },
         "signature_verification": {
-          "enum": [
-            "passed",
-            "failed",
-            "unavailable"
+          "anyOf": [
+            {
+              "enum": [
+                "passed",
+                "failed",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Signature Verification",
-          "type": "string"
+          "default": null,
+          "title": "Signature Verification"
+        },
+        "unavailable": {
+          "items": {
+            "enum": [
+              "registry_remote",
+              "registry_ref",
+              "runtime_revision",
+              "allowed_signer",
+              "git_ssh_signature_capable",
+              "fetched_tip",
+              "signature_verification"
+            ],
+            "type": "string"
+          },
+          "maxItems": 7,
+          "title": "Unavailable",
+          "type": "array"
         }
       },
-      "required": [
-        "registry_remote",
-        "registry_ref",
-        "runtime_revision",
-        "allowed_signer",
-        "git_ssh_signature_capable",
-        "fetched_tip",
-        "signature_verification"
-      ],
       "title": "HostVerifierDiagnostic",
       "type": "object"
     },

@@ -52,16 +52,44 @@ class AllowedSignerDiagnostic(ContractModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+VerifierUnavailableFact = Literal[
+    "registry_remote",
+    "registry_ref",
+    "runtime_revision",
+    "allowed_signer",
+    "git_ssh_signature_capable",
+    "fetched_tip",
+    "signature_verification",
+]
+
+
 class HostVerifierDiagnostic(ContractModel):
     """Bounded, public-only facts used by the host-local V2 verifier."""
 
-    registry_remote: str = Field(min_length=1, max_length=1024)
-    registry_ref: Literal["refs/heads/main"]
-    runtime_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    allowed_signer: AllowedSignerDiagnostic
-    git_ssh_signature_capable: bool
-    fetched_tip: str = Field(pattern=r"^[0-9a-f]{40}$")
-    signature_verification: Literal["passed", "failed", "unavailable"]
+    registry_remote: str | None = Field(
+        default=None, min_length=1, max_length=1024, exclude_if=lambda value: value is None
+    )
+    registry_ref: Literal["refs/heads/main"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    runtime_revision: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{40}$", exclude_if=lambda value: value is None
+    )
+    allowed_signer: AllowedSignerDiagnostic | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    git_ssh_signature_capable: bool | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    fetched_tip: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{40}$", exclude_if=lambda value: value is None
+    )
+    signature_verification: Literal["passed", "failed", "unavailable"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    unavailable: list[VerifierUnavailableFact] = Field(
+        default_factory=list, max_length=7, exclude_if=lambda value: not value
+    )
 
 
 class HostVerifierResult(ContractModel):

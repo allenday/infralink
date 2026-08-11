@@ -22,6 +22,7 @@ from infralink.cli.operation_contracts import (
     HostVerifierDiagnostic,
     OperationFailure,
     OperationUnitFailure,
+    VerifierUnavailableFact,
 )
 
 _OPERATION_ID = re.compile(
@@ -402,52 +403,104 @@ def _parse_verifier_output(stdout: str) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for line in stdout.splitlines():
         key, separator, value = line.partition("=")
-        if separator and key in accepted and key not in values:
-            values[key] = value
+        if not separator or key not in accepted:
+            continue
+        if key in values:
+            raise _provider_failure("Declared host returned invalid verifier diagnostics")
+        values[key] = value
     return values
 
 
 def _parse_verifier_diagnostics(values: dict[str, Any]) -> HostVerifierDiagnostic:
     """Validate public facts before they cross the CLI boundary."""
     try:
-        remote = _required_text(values, "registry_remote")
-        parsed = urlsplit(remote)
-        if (
-            not parsed.scheme
-            or not parsed.hostname
-            or (
-                parsed.username is not None and (parsed.scheme != "ssh" or parsed.username != "git")
-            )
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or any(character.isspace() or ord(character) < 32 for character in remote)
-        ):
+        unavailable: list[VerifierUnavailableFact] = []
+
+        remote = _optional_verifier_value(values, "registry_remote", unavailable)
+        if remote is not None:
+            parsed = urlsplit(remote)
+            if (
+                not parsed.scheme
+                or not parsed.hostname
+                or (
+                    parsed.username is not None
+                    and (parsed.scheme != "ssh" or parsed.username != "git")
+                )
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                or any(character.isspace() or ord(character) < 32 for character in remote)
+            ):
+                raise ValueError
+
+        registry_ref = _optional_verifier_value(values, "registry_ref", unavailable)
+        if registry_ref is not None and registry_ref != "refs/heads/main":
             raise ValueError
-        capable = _required_text(values, "git_ssh_signature_capable")
-        if capable not in {"true", "false"}:
+
+        runtime = _optional_verifier_value(values, "runtime_revision", unavailable)
+        if runtime is not None and _GIT_SHA.fullmatch(runtime) is None:
             raise ValueError
-        registry_ref = _required_text(values, "registry_ref")
-        if registry_ref != "refs/heads/main":
+
+        signer = _optional_allowed_signer(values, unavailable)
+
+        capable = _optional_verifier_value(values, "git_ssh_signature_capable", unavailable)
+        if capable is not None and capable not in {"true", "false"}:
             raise ValueError
-        verification = _required_text(values, "signature_verification")
-        if verification not in {"passed", "failed", "unavailable"}:
+
+        tip = _optional_verifier_value(values, "fetched_tip", unavailable)
+        if tip is not None and _GIT_SHA.fullmatch(tip) is None:
+            raise ValueError
+
+        verification = _optional_verifier_value(values, "signature_verification", unavailable)
+        if verification is not None and verification not in {"passed", "failed", "unavailable"}:
             raise ValueError
         return HostVerifierDiagnostic(
             registry_remote=remote,
-            registry_ref="refs/heads/main",
-            runtime_revision=_required_sha(values, "runtime_revision"),
-            allowed_signer=AllowedSignerDiagnostic(
-                principal=_required_signer_principal(values, "allowed_signer_principal"),
-                fingerprint=_required_fingerprint(values, "allowed_signer_fingerprint"),
-                sha256=_required_sha256(values, "allowed_signers_sha256"),
+            registry_ref=cast(Literal["refs/heads/main"] | None, registry_ref),
+            runtime_revision=runtime,
+            allowed_signer=signer,
+            git_ssh_signature_capable=None if capable is None else capable == "true",
+            fetched_tip=tip,
+            signature_verification=cast(
+                Literal["passed", "failed", "unavailable"] | None, verification
             ),
-            git_ssh_signature_capable=capable == "true",
-            fetched_tip=_required_sha(values, "fetched_tip"),
-            signature_verification=cast(Literal["passed", "failed", "unavailable"], verification),
+            unavailable=unavailable,
         )
     except (TypeError, ValueError):
         raise _provider_failure("Declared host returned invalid verifier diagnostics") from None
+
+
+def _optional_verifier_value(
+    values: dict[str, Any], key: VerifierUnavailableFact, unavailable: list[VerifierUnavailableFact]
+) -> str | None:
+    value = values.get(key)
+    if value is None:
+        unavailable.append(key)
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError
+    return value
+
+
+def _optional_allowed_signer(
+    values: dict[str, Any], unavailable: list[VerifierUnavailableFact]
+) -> AllowedSignerDiagnostic | None:
+    keys = (
+        "allowed_signer_principal",
+        "allowed_signer_fingerprint",
+        "allowed_signers_sha256",
+    )
+    present = [key in values for key in keys]
+    if not any(present):
+        unavailable.append("allowed_signer")
+        return None
+    if not all(present):
+        raise ValueError
+    return AllowedSignerDiagnostic(
+        principal=_required_signer_principal(values, "allowed_signer_principal"),
+        fingerprint=_required_fingerprint(values, "allowed_signer_fingerprint"),
+        sha256=_required_sha256(values, "allowed_signers_sha256"),
+    )
 
 
 def _required_text(values: dict[str, Any], key: str) -> str:

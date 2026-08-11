@@ -1830,7 +1830,7 @@ def host_verifier(ctx: Context, host_ref: str) -> int:
             ],
         )
     )
-    return 0 if verifier.signature_verification == "passed" else 1
+    return 0 if verifier.signature_verification == "passed" and not verifier.unavailable else 1
 
 
 @host.command(name="apply")
