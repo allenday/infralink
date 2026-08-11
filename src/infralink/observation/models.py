@@ -454,7 +454,12 @@ class OperationsView(StrictModel):
     @model_validator(mode="after")
     def validate_kind(self) -> OperationsView:
         if self.kind == "standard":
-            if not self.sections or self.host_ids or self.freshness_seconds is not None or self.datasource_binding_id is not None:
+            if (
+                not self.sections
+                or self.host_ids
+                or self.freshness_seconds is not None
+                or self.datasource_binding_id is not None
+            ):
                 raise ValueError("standard view cannot declare fleet convergence fields")
             return self
         if (
