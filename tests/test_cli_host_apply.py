@@ -121,6 +121,30 @@ def test_manifest_v2_apply_uses_the_declared_target_host_fingerprint(tmp_path: P
     assert request.host_key_fingerprint == TARGET_HOST_FINGERPRINT
 
 
+def test_manifest_v2_apply_retains_legacy_transport_fingerprint_until_migrated(
+    tmp_path: Path,
+) -> None:
+    """Existing V2 hosts stay operable until their declarations are migrated."""
+    from infralink.cli.operations import resolve_apply_request
+
+    registry = _manifest_registry_checkout(tmp_path)
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {TARGET_HOST_FINGERPRINT}\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "legacy V2 manifest")
+    target = type("Target", (), {"uuid": HOST_ID, "canonical_name": HOST_NAME})()
+
+    request = resolve_apply_request(registry, target)
+
+    assert request.host_key_fingerprint == MANIFEST_FINGERPRINT
+
+
 def _release_admission_layout(registry: Path, host_id: str = HOST_ID) -> None:
     operations = registry / host_id / "operations"
     operations.mkdir(exist_ok=True)

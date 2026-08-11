@@ -850,7 +850,6 @@ def test_host_bootstrap_apply_forwards_a_bounded_v2_request_for_es1_layout_runti
         "self_deploy_v2_promotion_bws_project_id",
         "self_deploy_v2_promotion_channel",
         "self_deploy_v2_promotion_host_fingerprint",
-        "self_deploy_v2_target_ssh_host_fingerprint",
         "self_deploy_v2_promotion_policy_enabled",
         "self_deploy_v2_promotion_registry_remote",
         "self_deploy_v2_reconcile_enabled",

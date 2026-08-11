@@ -88,9 +88,6 @@ class HostBootstrapV2State(ContractModel):
     )
     self_deploy_v2_promotion_channel: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     self_deploy_v2_promotion_host_fingerprint: str = Field(min_length=1, max_length=1024)
-    self_deploy_v2_target_ssh_host_fingerprint: str = Field(
-        pattern=r"^(?:ssh-(?:rsa|ed25519) )?SHA256:[A-Za-z0-9+/]{43}$"
-    )
     self_deploy_v2_promotion_policy_enabled: Literal[True]
     self_deploy_v2_promotion_registry_remote: str = Field(min_length=1, max_length=1024)
     self_deploy_v2_reconcile_enabled: Literal[True]
