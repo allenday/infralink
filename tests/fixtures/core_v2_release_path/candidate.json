@@ -2,7 +2,7 @@
   "schema_version": "infralink.release-candidate.v1",
   "channel": "core-v2",
   "main_registry_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "registry_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "registry_commit": "428dc0d3c3914e00ad91311539f98505ea1e17a7",
   "registry_tree": "candidate-registry/hosts",
   "consumer_host_uuid": "9157ddeb-cb6d-4d55-8252-9db358f5d932",
   "artifacts": [
