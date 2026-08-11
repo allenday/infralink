@@ -9,8 +9,8 @@ import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
@@ -49,6 +49,15 @@ _MANIFEST_V2_APPLY_FIELDS = frozenset(
         "self_deploy_v2_promotion_host_fingerprint",
     }
 )
+_VERIFIER_UNAVAILABLE_FACTS: tuple[VerifierUnavailableFact, ...] = (
+    "registry_remote",
+    "registry_ref",
+    "runtime_revision",
+    "allowed_signer",
+    "git_ssh_signature_capable",
+    "fetched_tip",
+    "signature_verification",
+)
 
 _START_REMOTE = """set -eu
 unit=$1
@@ -63,20 +72,49 @@ printf '%s\n' '__INFRALINK_JOURNAL__'
 journalctl --quiet --no-pager --output=cat _SYSTEMD_INVOCATION_ID="$invocation" || true
 """
 _VERIFIER_REMOTE = """set -eu
-bootstrap=/etc/infra-management/self-deploy-bootstrap.yml
-signers=/etc/infra-management/registry-allowed-signers
-registry=/var/lib/infralink/registry
+registry=$1
+runtime_root=$2
+signers=$3
+remote=$4
+ref=$5
 
-value() {
-    sed -n "s/^    $1: //p" "$bootstrap" | head -n 1 | sed 's/^"//; s/"$//'
-}
-remote=$(value remote)
-ref=$(value ref)
-runtime=$(systemctl show self-deploy-v2-reconcile.service -p Environment --value | tr ' ' '\\n' | sed -n 's#^SELF_DEPLOY_V2_RUNTIME_ROOT=/var/lib/self-deploy-v2/runtime/##p' | head -n 1)
-principal=$(awk 'NF >= 3 { print $1; exit }' "$signers")
-fingerprint=$(awk 'NF >= 3 { print $2 " " $3; exit }' "$signers" | ssh-keygen -lf - -E sha256 2>/dev/null | awk '{ print $2; exit }')
-digest=$(sha256sum "$signers" | awk '{ print $1 }')
-tip=$(GIT_CONFIG_NOSYSTEM=1 git -C "$registry" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)
+if [ -d "$runtime_root" ]; then
+    runtime=${runtime_root##*/}
+    if printf '%s' "$runtime" | grep -Eq '^[0-9a-f]{40}$'; then
+        printf 'runtime_revision=%s\\n' "$runtime"
+    fi
+fi
+if [ -f "$signers" ]; then
+    principal=$(awk 'NF >= 3 { print $1; exit }' "$signers")
+    fingerprint=$(awk 'NF >= 3 { print $2 " " $3; exit }' "$signers" | ssh-keygen -lf - -E sha256 2>/dev/null | awk '{ print $2; exit }')
+    digest=$(sha256sum "$signers" | awk '{ print $1 }')
+    if [ -n "$principal" ] && [ -n "$fingerprint" ] && [ -n "$digest" ]; then
+        printf 'allowed_signer_principal=%s\\n' "$principal"
+        printf 'allowed_signer_fingerprint=%s\\n' "$fingerprint"
+        printf 'allowed_signers_sha256=%s\\n' "$digest"
+    fi
+fi
+tip=
+remote_name=
+if [ -d "$registry" ]; then
+    for candidate in $(GIT_CONFIG_NOSYSTEM=1 git -C "$registry" remote 2>/dev/null); do
+        actual_remote=$(GIT_CONFIG_NOSYSTEM=1 git -C "$registry" remote get-url "$candidate" 2>/dev/null || true)
+        if [ "$actual_remote" = "$remote" ]; then
+            remote_name=$candidate
+            break
+        fi
+    done
+fi
+if [ -n "$remote_name" ]; then
+    printf 'registry_remote=%s\\n' "$remote"
+fi
+if [ -n "$remote_name" ] && [ -n "$ref" ]; then
+    branch=${ref#refs/heads/}
+    tip=$(GIT_CONFIG_NOSYSTEM=1 git -C "$registry" rev-parse --verify "refs/remotes/$remote_name/$branch^{commit}" 2>/dev/null || true)
+    if [ -n "$tip" ]; then
+        printf 'registry_ref=%s\\n' "$ref"
+    fi
+fi
 version=$(git --version | awk '{ print $3 }')
 major=${version%%.*}
 rest=${version#*.}
@@ -87,21 +125,17 @@ case "$major:$minor" in
     * ) if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 34 ]; }; then capable=true; fi ;;
 esac
 verification=unavailable
-if [ "$capable" = true ] && [ -n "$tip" ]; then
+if [ "$capable" = true ] && [ -n "$tip" ] && [ -f "$signers" ]; then
     if GIT_CONFIG_NOSYSTEM=1 git -C "$registry" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$signers" verify-commit "$tip" >/dev/null 2>&1; then
         verification=passed
     else
         verification=failed
     fi
 fi
-printf 'registry_remote=%s\\n' "$remote"
-printf 'registry_ref=%s\\n' "$ref"
-printf 'runtime_revision=%s\\n' "$runtime"
-printf 'allowed_signer_principal=%s\\n' "$principal"
-printf 'allowed_signer_fingerprint=%s\\n' "$fingerprint"
-printf 'allowed_signers_sha256=%s\\n' "$digest"
 printf 'git_ssh_signature_capable=%s\\n' "$capable"
-printf 'fetched_tip=%s\\n' "$tip"
+if [ -n "$tip" ]; then
+    printf 'fetched_tip=%s\\n' "$tip"
+fi
 printf 'signature_verification=%s\\n' "$verification"
 """
 
@@ -117,6 +151,18 @@ class ApplyRequest:
     user: str
     host_key_fingerprint: str
     unit: str
+    verifier_layout: VerifierLayout | None = None
+
+
+@dataclass(frozen=True)
+class VerifierLayout:
+    """Declared, public host-local locations needed for signature inspection."""
+
+    registry_repository: str
+    runtime_root: str
+    allowed_signers_file: str
+    registry_remote: str
+    registry_ref: str | None
 
 
 @dataclass(frozen=True)
@@ -163,8 +209,13 @@ class SshOperationProvider:
         )
 
     def inspect_verifier(self, request: ApplyRequest) -> HostVerifierDiagnostic:
-        """Read only the fixed, public facts behind V2 Git signature verification."""
-        return _parse_verifier_diagnostics(self._run(request, _VERIFIER_REMOTE, verifier=True))
+        """Read only the declared, public facts behind V2 Git signature verification."""
+        if request.verifier_layout is None:
+            return HostVerifierDiagnostic(unavailable=list(_VERIFIER_UNAVAILABLE_FACTS))
+        return _parse_verifier_diagnostics(
+            self._run(request, _VERIFIER_REMOTE, verifier=request.verifier_layout),
+            request.verifier_layout,
+        )
 
     def _run(
         self,
@@ -172,11 +223,18 @@ class SshOperationProvider:
         script: str,
         invocation: str | None = None,
         *,
-        verifier: bool = False,
+        verifier: VerifierLayout | None = None,
     ) -> dict[str, Any]:
         remote_args = (
-            ["verifier"]
-            if verifier
+            [
+                "verifier",
+                verifier.registry_repository,
+                verifier.runtime_root,
+                verifier.allowed_signers_file,
+                verifier.registry_remote,
+                verifier.registry_ref or "",
+            ]
+            if verifier is not None
             else [request.unit]
             if invocation is None
             else [request.unit, invocation]
@@ -216,7 +274,7 @@ class SshOperationProvider:
             ) from None
         if completed.returncode != 0:
             raise _provider_failure("Declared host rejected the reconcile operation")
-        if verifier:
+        if verifier is not None:
             return _parse_verifier_output(completed.stdout)
         values = _parse_properties(completed.stdout)
         if not values.get("InvocationID"):
@@ -266,8 +324,8 @@ def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
         raise _registry_failure("Host apply manifest does not match the target host", manifest_path)
     manifest_request = _manifest_request(host.uuid, host.canonical_name, host_data, manifest_path)
     if manifest_request is not None:
-        return manifest_request
-    return _contract_request(registry_path, host)
+        return _with_verifier_layout(manifest_request, registry_path, host.uuid)
+    return _with_verifier_layout(_contract_request(registry_path, host), registry_path, host.uuid)
 
 
 def _manifest_request(
@@ -359,6 +417,126 @@ def _normalize_manifest_fingerprint(value: object) -> str | None:
     return parts[1]
 
 
+def _with_verifier_layout(
+    request: ApplyRequest, registry_path: Path, host_uuid: str
+) -> ApplyRequest:
+    return replace(request, verifier_layout=_resolve_verifier_layout(registry_path, host_uuid))
+
+
+def _resolve_verifier_layout(registry_path: Path, host_uuid: str) -> VerifierLayout | None:
+    """Read only an explicit runtime layout; never invent compatibility paths."""
+    source_path = registry_path / host_uuid / "operations" / "release-admission-shadow-source.yml"
+    if source_path.exists():
+        source = _read_mapping(source_path, "Host verifier release-admission layout is invalid")
+        return _layout_from_release_admission(source, source_path)
+
+    contract_path = registry_path / host_uuid / "operations" / "contract.yml"
+    if not contract_path.exists():
+        return None
+    contract = _read_mapping(contract_path, "Host verifier contract is invalid")
+    declared = contract.get("verifier")
+    if declared is None:
+        return None
+    return _layout_from_legacy_contract(declared, contract_path)
+
+
+def _layout_from_release_admission(document: dict[str, Any], path: Path) -> VerifierLayout:
+    if document.get("schema_version") != "infralink.release-admission-shadow-delivery.v1":
+        raise _registry_failure("Host verifier release-admission layout is invalid", path)
+    registry = document.get("registry")
+    paths = document.get("paths")
+    release = document.get("release")
+    if (
+        not isinstance(registry, dict)
+        or not isinstance(paths, dict)
+        or not isinstance(release, dict)
+    ):
+        raise _registry_failure("Host verifier release-admission layout is invalid", path)
+    return _verifier_layout(
+        registry.get("repository"),
+        paths.get("runtime_root"),
+        release.get("allowed_signers_file"),
+        registry.get("remote"),
+        registry.get("ref"),
+        path,
+    )
+
+
+def _layout_from_legacy_contract(value: object, path: Path) -> VerifierLayout:
+    if not isinstance(value, dict):
+        raise _registry_failure("Host verifier contract is invalid", path)
+    registry = value.get("registry")
+    if not isinstance(registry, dict):
+        raise _registry_failure("Host verifier contract is invalid", path)
+    return _verifier_layout(
+        registry.get("repository"),
+        value.get("runtime_root"),
+        value.get("allowed_signers_file"),
+        registry.get("remote"),
+        registry.get("ref"),
+        path,
+    )
+
+
+def _verifier_layout(
+    repository: object,
+    runtime_root: object,
+    signers: object,
+    remote: object,
+    ref: object,
+    path: Path,
+) -> VerifierLayout:
+    if (
+        not _safe_absolute_path(repository)
+        or not _safe_runtime_root(runtime_root)
+        or not _safe_absolute_path(signers)
+        or not _safe_verifier_remote(remote)
+        or (ref is not None and ref != "refs/heads/main")
+    ):
+        raise _registry_failure("Host verifier declared layout is invalid", path)
+    return VerifierLayout(
+        registry_repository=cast(str, repository),
+        runtime_root=cast(str, runtime_root),
+        allowed_signers_file=cast(str, signers),
+        registry_remote=cast(str, remote),
+        registry_ref=ref,
+    )
+
+
+def _safe_absolute_path(value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character.isspace() or ord(character) < 32 for character in value)
+    ):
+        return False
+    path = PurePosixPath(value)
+    return path.is_absolute() and ".." not in path.parts
+
+
+def _safe_runtime_root(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and _safe_absolute_path(value)
+        and _GIT_SHA.fullmatch(PurePosixPath(value).name) is not None
+    )
+
+
+def _safe_verifier_remote(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    parsed = urlsplit(value)
+    return (
+        bool(parsed.scheme)
+        and bool(parsed.hostname)
+        and (parsed.username is None or (parsed.scheme == "ssh" and parsed.username == "git"))
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+        and not any(character.isspace() or ord(character) < 32 for character in value)
+    )
+
+
 def wait_for_terminal(
     provider: OperationProvider, operation_id: str, request: ApplyRequest, *, timeout_seconds: int
 ) -> OperationRecord:
@@ -420,7 +598,9 @@ def _parse_verifier_output(stdout: str) -> dict[str, Any]:
     return values
 
 
-def _parse_verifier_diagnostics(values: dict[str, Any]) -> HostVerifierDiagnostic:
+def _parse_verifier_diagnostics(
+    values: dict[str, Any], layout: VerifierLayout
+) -> HostVerifierDiagnostic:
     """Validate public facts before they cross the CLI boundary."""
     try:
         unavailable: list[VerifierUnavailableFact] = []
@@ -441,13 +621,19 @@ def _parse_verifier_diagnostics(values: dict[str, Any]) -> HostVerifierDiagnosti
                 or any(character.isspace() or ord(character) < 32 for character in remote)
             ):
                 raise ValueError
+            if remote != layout.registry_remote:
+                raise ValueError
 
         registry_ref = _optional_verifier_value(values, "registry_ref", unavailable)
         if registry_ref is not None and registry_ref != "refs/heads/main":
             raise ValueError
+        if registry_ref is not None and registry_ref != layout.registry_ref:
+            raise ValueError
 
         runtime = _optional_verifier_value(values, "runtime_revision", unavailable)
         if runtime is not None and _GIT_SHA.fullmatch(runtime) is None:
+            raise ValueError
+        if runtime is not None and runtime != PurePosixPath(layout.runtime_root).name:
             raise ValueError
 
         signer = _optional_allowed_signer(values, unavailable)
@@ -462,6 +648,8 @@ def _parse_verifier_diagnostics(values: dict[str, Any]) -> HostVerifierDiagnosti
 
         verification = _optional_verifier_value(values, "signature_verification", unavailable)
         if verification is not None and verification not in {"passed", "failed", "unavailable"}:
+            raise ValueError
+        if verification == "passed" and (remote is None or registry_ref is None or tip is None):
             raise ValueError
         return HostVerifierDiagnostic(
             registry_remote=remote,

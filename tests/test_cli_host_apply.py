@@ -95,12 +95,52 @@ def _manifest_registry_checkout(tmp_path: Path) -> Path:
             "    self_deploy_v2_reconcile_packaged: true\n",
             encoding="utf-8",
         )
+    _release_admission_layout(root / "hosts")
+    source = root / "hosts" / HOST_ID / "operations" / "release-admission-shadow-source.yml"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "  repository: /var/lib/release-admission/registry-objects/citadel\n",
+            "  repository: /var/lib/release-admission/registry-objects/citadel\n"
+            "  ref: refs/heads/main\n",
+        ),
+        encoding="utf-8",
+    )
     _git(root, "init", "--quiet")
     _git(root, "config", "user.email", "test@example.invalid")
     _git(root, "config", "user.name", "Test")
     _git(root, "add", ".")
     _git(root, "commit", "--quiet", "-m", "manifest registry")
     return root / "hosts"
+
+
+def _release_admission_layout(registry: Path, host_id: str = HOST_ID) -> None:
+    operations = registry / host_id / "operations"
+    operations.mkdir(exist_ok=True)
+    (operations / "release-admission-shadow-source.yml").write_text(
+        "schema_version: infralink.release-admission-shadow-delivery.v1\n"
+        "registry:\n"
+        "  remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+        "  repository: /var/lib/release-admission/registry-objects/citadel\n"
+        "paths:\n"
+        "  runtime_root: /var/lib/release-admission/runtime/" + "a" * 40 + "\n"
+        "release:\n"
+        "  allowed_signers_file: /etc/infralink/release-admission/allowed_signers\n",
+        encoding="utf-8",
+    )
+
+
+def _explicit_legacy_verifier_layout(registry: Path) -> None:
+    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract.write_text(
+        contract.read_text(encoding="utf-8") + "verifier:\n"
+        "  registry:\n"
+        "    remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+        "    repository: /var/lib/legacy/registry\n"
+        "    ref: refs/heads/main\n"
+        "  runtime_root: /var/lib/legacy/runtime/" + "a" * 40 + "\n"
+        "  allowed_signers_file: /etc/legacy/allowed_signers\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.parametrize(("host_id", "canonical_name", "address"), CORE_HOSTS)
@@ -178,9 +218,217 @@ def test_host_verifier_reports_only_public_v2_trust_facts(
     }
     assert "PRIVATE-KEY-MUST-NOT-LEAK" not in response.output
     assert "SECRET-MUST-NOT-LEAK" not in response.output
-    assert calls[0][-4:] == ["sh", "-s", "--", "verifier"]
+    assert calls[0][calls[0].index("--") + 1] == "verifier"
     script = scripts[0]
     assert "systemctl start" not in script
+
+
+def test_host_verifier_uses_citadel_declared_release_admission_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    _release_admission_layout(registry)
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "declared release admission layout")
+    calls: list[list[str]] = []
+    scripts: list[str] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        scripts.append(str(kwargs["input"]))
+        return _completed(
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+            "runtime_revision=" + "a" * 40 + "\n"
+            "allowed_signer_principal=infra\n"
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+            "allowed_signers_sha256=" + "c" * 64 + "\n"
+            "git_ssh_signature_capable=true\n"
+            "fetched_tip=" + "d" * 40 + "\n"
+            "signature_verification=unavailable\n"
+        )
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert_schema(payload, "host-verifier")
+    assert payload["result"]["verifier"]["unavailable"] == ["registry_ref"]
+    assert calls[0][-6:] == [
+        "verifier",
+        "/var/lib/release-admission/registry-objects/citadel",
+        "/var/lib/release-admission/runtime/" + "a" * 40,
+        "/etc/infralink/release-admission/allowed_signers",
+        "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+        "",
+    ]
+    assert "/etc/infra-management" not in scripts[0]
+    assert "/var/lib/infralink" not in scripts[0]
+    assert "/var/lib/self-deploy-v2/runtime" not in scripts[0]
+
+
+def test_host_verifier_rejects_false_green_without_observed_remote_and_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    scripts: list[str] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        scripts.append(str(kwargs["input"]))
+        return _completed(
+            "runtime_revision=" + "a" * 40 + "\n"
+            "allowed_signer_principal=infra\n"
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+            "allowed_signers_sha256=" + "c" * 64 + "\n"
+            "git_ssh_signature_capable=true\n"
+            "signature_verification=unavailable\n"
+        )
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert payload["result"]["verifier"]["unavailable"] == [
+        "registry_remote",
+        "registry_ref",
+        "fetched_tip",
+    ]
+    assert "remote get-url" in scripts[0]
+    assert "refs/remotes/$remote_name/$branch^{commit}" in scripts[0]
+    assert "rev-parse --verify HEAD^{commit}" not in scripts[0]
+
+
+def test_host_verifier_rejects_passed_signature_without_observed_remote_and_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            "runtime_revision=" + "a" * 40 + "\n"
+            "allowed_signer_principal=infra\n"
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+            "allowed_signers_sha256=" + "c" * 64 + "\n"
+            "git_ssh_signature_capable=true\n"
+            "signature_verification=passed\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "provider_unavailable"
+
+
+def test_host_verifier_marks_all_facts_unavailable_without_a_declared_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    (registry / HOST_ID / "operations" / "release-admission-shadow-source.yml").unlink()
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("verifier must not guess undeclared paths"),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 1
+    assert_schema(payload, "host-verifier")
+    assert payload["result"]["verifier"] == {
+        "unavailable": [
+            "registry_remote",
+            "registry_ref",
+            "runtime_revision",
+            "allowed_signer",
+            "git_ssh_signature_capable",
+            "fetched_tip",
+            "signature_verification",
+        ]
+    }
+
+
+def test_host_verifier_rejects_secret_bearing_declared_layout_before_ssh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    source = registry / HOST_ID / "operations" / "release-admission-shadow-source.yml"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "https://secret@gitea.example.invalid/relaxgg/infra-registry.git",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("secret-bearing declarations must fail before SSH"),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "input_load_failed"
+    assert "secret@gitea" not in response.output
+
+
+def test_host_verifier_uses_explicit_legacy_layout_without_path_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    _explicit_legacy_verifier_layout(registry)
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "explicit legacy verifier layout")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _completed(
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
+            "registry_ref=refs/heads/main\n"
+            "runtime_revision=" + "a" * 40 + "\n"
+            "allowed_signer_principal=infra\n"
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+            "allowed_signers_sha256=" + "c" * 64 + "\n"
+            "git_ssh_signature_capable=true\n"
+            "fetched_tip=" + "d" * 40 + "\n"
+            "signature_verification=passed\n"
+        )
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    assert response.exit_code == 0
+    assert calls[0][-6:] == [
+        "verifier",
+        "/var/lib/legacy/registry",
+        "/var/lib/legacy/runtime/" + "a" * 40,
+        "/etc/legacy/allowed_signers",
+        "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+        "refs/heads/main",
+    ]
 
 
 def test_host_verifier_retains_valid_partial_facts_and_names_unavailable_fields(
@@ -530,6 +778,7 @@ def test_host_verifier_uses_legacy_contract_for_a_shadow_only_manifest(
         contract.read_text(encoding="utf-8").replace(f"reconcile:\n  unit: {UNIT}\n", ""),
         encoding="utf-8",
     )
+    _explicit_legacy_verifier_layout(registry)
     _git(registry.parent, "add", ".")
     _git(registry.parent, "commit", "--quiet", "-m", "legacy shadow contract")
 
@@ -560,7 +809,7 @@ def test_host_verifier_uses_legacy_contract_for_a_shadow_only_manifest(
     payload = yaml.safe_load(response.output)
     assert response.exit_code == 0
     assert_schema(payload, "host-verifier")
-    assert calls[0][-5:] == ["root@100.64.68.83", "sh", "-s", "--", "verifier"]
+    assert calls[0][calls[0].index("--") + 1] == "verifier"
 
 
 def test_host_apply_rejects_a_legacy_contract_with_a_different_reconcile_unit(
