@@ -30,6 +30,7 @@ class CoreReleasePath:
     """The explicitly selected registry declaration used by every CLI call."""
 
     registry_commit: str
+    runtime_revision: str
     registry_path: Path
     host_id: str
 
@@ -63,6 +64,9 @@ def _select_release(
         if not isinstance(signature, str) or not signature.startswith("ssh-ed25519 "):
             raise ValueError(f"{name} signature is missing or invalid")
     expected = candidate["registry_commit"]
+    runtime_revision = candidate.get("runtime_revision")
+    if not isinstance(runtime_revision, str) or len(runtime_revision) != 40:
+        raise ValueError("candidate runtime revision is invalid")
     if pointer.get("channel") != "core-v2" or candidate.get("channel") != "core-v2":
         raise ValueError("core-v2 channel mismatch")
     if pointer.get("registry_commit") != expected or admission.get("registry_commit") != expected:
@@ -85,7 +89,9 @@ def _select_release(
         raise ValueError("selected candidate artifacts are missing")
     if not (registry_path / candidate["consumer_host_uuid"] / "manifest.yml").is_file():
         raise ValueError("selected candidate host declaration is missing")
-    return CoreReleasePath(expected, registry_path, candidate["consumer_host_uuid"])
+    return CoreReleasePath(
+        expected, runtime_revision, registry_path, candidate["consumer_host_uuid"]
+    )
 
 
 def _git(root: Path, *args: str) -> None:
@@ -127,6 +133,13 @@ def _selected_release(tmp_path: Path) -> CoreReleasePath:
         root / "release-selection.json",
     )
     pointer, admission, candidate = _release_artifacts()
+    head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head == candidate["registry_commit"]
     return _select_release(
         registry,
         pointer=pointer,
@@ -175,7 +188,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
         (
             "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
             "registry_ref=refs/heads/main",
-            "runtime_revision=" + release.registry_commit,
+            "runtime_revision=" + release.runtime_revision,
             "allowed_signer_principal=infra",
             "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
             "allowed_signers_sha256=" + "c" * 64,
@@ -244,7 +257,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     assert_schema(apply_payload, "host-apply")
     assert_schema(doctor_payload, "doctor")
     assert verifier_payload["result"]["target"]["id"] == release.host_id
-    assert verifier_payload["result"]["verifier"]["runtime_revision"] == release.registry_commit
+    assert verifier_payload["result"]["verifier"]["runtime_revision"] == release.runtime_revision
     assert apply_payload["result"]["target"]["id"] == release.host_id
     assert doctor_payload["result"]["target"]["id"] == release.host_id
     assert doctor_payload["result"]["status"] == "healthy"
@@ -252,7 +265,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     assert remote_args == [
         "verifier",
         "/var/lib/legacy/registry",
-        "/var/lib/legacy/runtime/" + release.registry_commit,
+        "/var/lib/legacy/runtime/" + release.runtime_revision,
         "/etc/legacy/allowed_signers",
         "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
         "refs/heads/main",
