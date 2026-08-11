@@ -1,0 +1,19 @@
+schema_version: host-operations-contract.v1
+machine:
+  uuid: 9157ddeb-cb6d-4d55-8252-9db358f5d932
+  canonical_name: cyberstorm-citadel
+transport:
+  kind: ssh
+  host: 100.73.228.90
+  port: 22
+  user: root
+  host_key_fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+reconcile:
+  unit: self-deploy-v2-reconcile.service
+verifier:
+  registry:
+    remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git
+    repository: /var/lib/legacy/registry
+    ref: refs/heads/main
+  runtime_root: /var/lib/legacy/runtime/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  allowed_signers_file: /etc/legacy/allowed_signers
