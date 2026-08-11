@@ -232,9 +232,25 @@ print(f"runtime_revision={runtime.name}")
 print(f"registry_remote={trust.remote}")
 print("registry_ref=refs/heads/main")
 
-signers = trust.allowed_signers
-digest = hashlib.sha256(signers).hexdigest()
-first = next((line.split() for line in signers.decode("utf-8", "strict").splitlines() if len(line.split()) >= 3), None)
+try:
+    signers = trust.allowed_signers
+    if not isinstance(signers, bytes):
+        raise ValueError
+    digest = hashlib.sha256(signers).hexdigest()
+    first = next(
+        (
+            line.split()
+            for line in signers.decode("utf-8", "strict").splitlines()
+            if len(line.split()) >= 3
+        ),
+        None,
+    )
+except AttributeError:
+    # A partial authority cannot expose signer evidence.
+    raise SystemExit(0)
+except (TypeError, UnicodeError, ValueError):
+    # Present signer evidence is malformed; fail closed.
+    raise SystemExit(2)
 if first is not None:
     try:
         rendered = subprocess.run(

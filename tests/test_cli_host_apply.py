@@ -217,6 +217,9 @@ def test_host_verifier_derives_public_v2_trust_facts_from_active_unit_contract(
     assert "release-admission-shadow-source" not in script
     assert "trust.host_uuid != host_uuid" in script
     assert "except (AttributeError, TypeError):" in script
+    assert "signers = trust.allowed_signers" in script
+    assert "if not isinstance(signers, bytes):" in script
+    assert "except AttributeError:" in script
 
 
 def test_host_verifier_ignores_stale_release_admission_shadow_metadata(
