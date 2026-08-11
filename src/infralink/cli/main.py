@@ -80,6 +80,21 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 
 
+def _isolated_git_environment() -> dict[str, str]:
+    """Run controller-source Git commands without user/global replacement state."""
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
 class Context:
     """CLI context object passed to commands."""
 
@@ -1907,12 +1922,14 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
         text=True,
         capture_output=True,
         check=False,
+        env=_isolated_git_environment(),
     )
     present = subprocess.run(
         ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
         text=True,
         capture_output=True,
         check=False,
+        env=_isolated_git_environment(),
     )
     if status.returncode != 0 or status.stdout or present.returncode != 0:
         raise CliFailure(
@@ -1938,12 +1955,14 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
             text=True,
             capture_output=True,
             check=False,
+            env=_isolated_git_environment(),
         )
         head = subprocess.run(
             ["git", "-C", str(source), "rev-parse", "HEAD"],
             text=True,
             capture_output=True,
             check=False,
+            env=_isolated_git_environment(),
         )
         playbook = source / _CONTROLLER_REFRESH_PLAYBOOK
         if (
@@ -1959,15 +1978,26 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
                 fix="Refresh the Bastion infra-management clone with the selected controller revision",
                 details={"capability": "controller_refresh", "required_revision": revision},
             )
+        completed = False
         try:
             yield source
+            completed = True
         finally:
-            subprocess.run(
+            removed = subprocess.run(
                 ["git", "-C", str(control_root), "worktree", "remove", "--force", str(source)],
                 text=True,
                 capture_output=True,
                 check=False,
+                env=_isolated_git_environment(),
             )
+            if completed and removed.returncode != 0:
+                raise CliFailure(
+                    code=ErrorCode.ARTIFACT_IO_FAILED,
+                    message="Bastion could not remove the temporary controller source",
+                    exit_code=ExitCode.ARTIFACT_IO_ERROR,
+                    fix="Remove the temporary controller worktree and rerun host bootstrap --apply",
+                    details={"capability": "controller_refresh", "required_revision": revision},
+                )
 
 
 def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[str, dict[str, Any]]:

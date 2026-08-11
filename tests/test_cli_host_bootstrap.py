@@ -71,6 +71,42 @@ def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(tmp_pat
     assert missing.value.code == ErrorCode.PROVIDER_UNAVAILABLE
 
 
+def test_controller_refresh_ignores_a_git_replacement_ref(tmp_path: Path) -> None:
+    repository, revision = _controller_source_repository(tmp_path)
+    playbook = repository / "ansible/playbooks/infralink_controller_refresh.yml"
+    playbook.write_text("unsafe replacement\n", encoding="utf-8")
+    _git(repository, "add", ".")
+    _git(repository, "commit", "--quiet", "-m", "replacement")
+    replacement = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "replace", revision, replacement)
+
+    with _controller_refresh_source(repository, revision) as source:
+        assert (source / "ansible/playbooks/infralink_controller_refresh.yml").read_text(
+            encoding="utf-8"
+        ) == "---\n- hosts: all\n"
+
+
+def test_controller_refresh_reports_failed_temporary_worktree_cleanup(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repository, revision = _controller_source_repository(tmp_path)
+    real_run = subprocess.run
+
+    def failing_cleanup(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[-4:-1] == ["worktree", "remove", "--force"]:
+            return subprocess.CompletedProcess(
+                args=args, returncode=1, stdout="", stderr="cleanup failed"
+            )
+        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
+
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", failing_cleanup)
+
+    with pytest.raises(CliFailure) as cleanup:
+        with _controller_refresh_source(repository, revision):
+            pass
+    assert cleanup.value.code == ErrorCode.ARTIFACT_IO_FAILED
+
+
 def test_cli_readiness_enforces_declared_v2_registry_layout_migration() -> None:
     probe = HostReadinessProbe(
         reachable=True,
