@@ -2153,11 +2153,14 @@ def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[st
     except (OSError, KeyError, TypeError, yaml.YAMLError):
         declaration = None
     deployment_path = registry_path / target.uuid / "operations" / "deployment.yml"
-    if deployment_path.is_file():
-        try:
-            deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
-            runtime_revision = deployment["infra_management"]["revision"]
-        except (OSError, KeyError, TypeError, yaml.YAMLError):
+    if os.path.lexists(deployment_path):
+        if deployment_path.is_file():
+            try:
+                deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+                runtime_revision = deployment["infra_management"]["revision"]
+            except (OSError, KeyError, TypeError, yaml.YAMLError):
+                runtime_revision = ""
+        else:
             runtime_revision = ""
         revision_source = deployment_path
     else:

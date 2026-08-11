@@ -1262,3 +1262,11 @@ def test_controller_refresh_prefers_the_explicit_host_runtime_over_global_lock(
     runtime_revision, _ = _controller_refresh_extra_vars(registry, target)
 
     assert runtime_revision == explicit_revision
+
+    deployment.unlink()
+    deployment.mkdir()
+    with pytest.raises(CliFailure) as malformed:
+        _controller_refresh_extra_vars(registry, target)
+
+    assert malformed.value.code == ErrorCode.CONFIGURATION_REQUIRED
+    assert malformed.value.details == {"path": str(deployment)}
