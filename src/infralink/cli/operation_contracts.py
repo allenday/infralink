@@ -42,3 +42,28 @@ class OperationStatusResult(ContractModel):
     operation: OperationSummary
     target: DoctorTarget | None = None
     failure: OperationFailure | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class AllowedSignerDiagnostic(ContractModel):
+    """Public identity of the active Git SSH verification trust anchor."""
+
+    principal: str = Field(pattern=r"^[A-Za-z0-9._-]{1,128}$")
+    fingerprint: str = Field(pattern=r"^SHA256:[A-Za-z0-9+/]{43}$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class HostVerifierDiagnostic(ContractModel):
+    """Bounded, public-only facts used by the host-local V2 verifier."""
+
+    registry_remote: str = Field(min_length=1, max_length=1024)
+    registry_ref: Literal["refs/heads/main"]
+    runtime_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    allowed_signer: AllowedSignerDiagnostic
+    git_ssh_signature_capable: bool
+    fetched_tip: str = Field(pattern=r"^[0-9a-f]{40}$")
+    signature_verification: Literal["passed", "failed", "unavailable"]
+
+
+class HostVerifierResult(ContractModel):
+    target: DoctorTarget
+    verifier: HostVerifierDiagnostic

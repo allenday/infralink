@@ -116,6 +116,50 @@ def test_host_bootstrap_plan_uses_the_same_failed_readiness_checks(monkeypatch) 
     assert json.loads(follow_up.output)["result"]["readiness"] == payload["result"]["readiness"]
 
 
+def test_host_bootstrap_links_verifier_when_reconcile_failed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "infralink.cli.main.SshReadinessTransport.probe",
+        lambda self, address: HostReadinessProbe(
+            reachable=True,
+            hostname="database.example.com",
+            machine_id="machine-id",
+            commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+            devops_account=True,
+            devops_authorized_access=True,
+            bws_config=True,
+            self_deploy_dependencies=True,
+            self_deploy_runtime=True,
+            self_deploy_timer_enabled=True,
+            self_deploy_timer_active=True,
+            error=None,
+            self_deploy_mode="v2_reconcile",
+            registry_layout="v2_managed",
+            self_deploy_reconcile_result="exit-code",
+            self_deploy_reconcile_exit_status=1,
+        ),
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(ROOT / "examples" / "registry.yml"),
+            "--edges",
+            str(ROOT / "examples" / "edges.yml"),
+            "host",
+            "bootstrap",
+            "database.example.com",
+            "--plan",
+        ],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    verifier_action = next(item for item in payload["next_actions"] if item["rel"] == "verifier")
+    assert verifier_action["command"].endswith("host verifier d1b9e5d5-36b0-459d-a556-96622811fbd5")
+
+
 def test_host_bootstrap_help_marks_plan_required_and_shows_an_example() -> None:
     result = CliRunner().invoke(cli, ["--output", "json", "help", "host", "bootstrap"])
     payload = json.loads(result.output)

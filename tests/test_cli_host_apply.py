@@ -9,6 +9,7 @@ import yaml
 from click.testing import CliRunner
 
 from infralink.cli.main import cli
+from infralink.cli.operation_contracts import HostVerifierDiagnostic
 from tests.cli_helpers import assert_schema
 
 HOST_ID = "32a3324f-c3d0-4a4f-9587-52c099bcb3fb"
@@ -119,6 +120,152 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
         "dry_run": True,
         "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
     }
+
+
+def test_host_verifier_reports_only_public_v2_trust_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    public_output = "\n".join(
+        (
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "registry_ref=refs/heads/main",
+            "runtime_revision=" + "a" * 40,
+            "allowed_signer_principal=infra",
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "allowed_signers_sha256=" + "c" * 64,
+            "git_ssh_signature_capable=true",
+            "fetched_tip=" + "d" * 40,
+            "signature_verification=passed",
+            "identity=PRIVATE-KEY-MUST-NOT-LEAK",
+            "token=SECRET-MUST-NOT-LEAK",
+        )
+    )
+    calls: list[list[str]] = []
+    scripts: list[str] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        scripts.append(str(kwargs["input"]))
+        return _completed(public_output)
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert_schema(payload, "host-verifier")
+    assert payload["result"] == {
+        "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
+        "verifier": {
+            "registry_remote": "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "registry_ref": "refs/heads/main",
+            "runtime_revision": "a" * 40,
+            "allowed_signer": {
+                "principal": "infra",
+                "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                "sha256": "c" * 64,
+            },
+            "git_ssh_signature_capable": True,
+            "fetched_tip": "d" * 40,
+            "signature_verification": "passed",
+        },
+    }
+    assert "PRIVATE-KEY-MUST-NOT-LEAK" not in response.output
+    assert "SECRET-MUST-NOT-LEAK" not in response.output
+    assert calls[0][-4:] == ["sh", "-s", "--", "verifier"]
+    script = scripts[0]
+    assert "systemctl start" not in script
+
+
+def test_host_verifier_rejects_and_omits_a_remote_with_secret_material(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    secret = "PRIVATE-REGISTRY-TOKEN"
+    remote_output = "\n".join(
+        (
+            f"registry_remote=https://{secret}@gitea.example.invalid/relaxgg/infra-registry.git",
+            "registry_ref=refs/heads/main",
+            "runtime_revision=" + "a" * 40,
+            "allowed_signer_principal=infra",
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "allowed_signers_sha256=" + "c" * 64,
+            "git_ssh_signature_capable=true",
+            "fetched_tip=" + "d" * 40,
+            "signature_verification=failed",
+        )
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run", lambda *args, **kwargs: _completed(remote_output)
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "provider_unavailable"
+    assert secret not in response.output
+
+
+def test_host_verifier_rejects_a_non_main_registry_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _manifest_registry_checkout(tmp_path)
+    remote_output = "\n".join(
+        (
+            "registry_remote=ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+            "registry_ref=refs/heads/release",
+            "runtime_revision=" + "a" * 40,
+            "allowed_signer_principal=infra",
+            "allowed_signer_fingerprint=SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "allowed_signers_sha256=" + "c" * 64,
+            "git_ssh_signature_capable=true",
+            "fetched_tip=" + "d" * 40,
+            "signature_verification=passed",
+        )
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run", lambda *args, **kwargs: _completed(remote_output)
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "verifier", HOST_ID])
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code != 0
+    assert payload["error"]["code"] == "provider_unavailable"
+
+
+def test_host_verifier_contract_allows_only_the_fixed_main_ref() -> None:
+    with pytest.raises(ValueError):
+        HostVerifierDiagnostic.model_validate(
+            {
+                "registry_remote": "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+                "registry_ref": "refs/heads/release",
+                "runtime_revision": "a" * 40,
+                "allowed_signer": {
+                    "principal": "infra",
+                    "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                    "sha256": "c" * 64,
+                },
+                "git_ssh_signature_capable": True,
+                "fetched_tip": "d" * 40,
+                "signature_verification": "passed",
+            }
+        )
 
 
 def test_host_apply_reports_only_normalized_observed_fingerprints_on_key_mismatch(

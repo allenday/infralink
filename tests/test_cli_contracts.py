@@ -69,6 +69,7 @@ SCHEMA_NAMES = (
     "hosts",
     "host-show",
     "host-bootstrap",
+    "host-verifier",
     "host-apply",
     "operation-status",
     "services",

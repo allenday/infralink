@@ -42,6 +42,7 @@ from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failu
 from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.operation_contracts import (
     HostApplyResult,
+    HostVerifierResult,
     OperationStatusResult,
     OperationSummary,
 )
@@ -1773,6 +1774,21 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
                 details={"host": target.uuid},
             )
         readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    actions = [
+        action(
+            "reinspect-readiness",
+            [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--plan"],
+            "Reinspect live host readiness",
+        )
+    ]
+    if any(item.id == "inspect_self_deploy_reconcile" for item in readiness.actions):
+        actions.append(
+            action(
+                "verifier",
+                [*_root_source_argv(ctx), "host", "verifier", target.uuid],
+                "Inspect the read-only self-deploy verifier facts",
+            )
+        )
     result = HostBootstrapPlanResult(
         host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
         readiness=readiness,
@@ -1781,16 +1797,40 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         ok_envelope(
             _context_for(path=["host", "bootstrap"]),
             result,
+            actions,
+        )
+    )
+    return 0 if readiness.ready or plan_only else 1
+
+
+@host.command(name="verifier")
+@click.argument("host_ref")
+@pass_context
+def host_verifier(ctx: Context, host_ref: str) -> int:
+    """Inspect the declared host's public V2 Git signature verifier facts."""
+    from infralink.cli.operations import inspect_verifier, resolve_apply_request
+
+    target = ctx.registry.get(host_ref)
+    if target is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    verifier = inspect_verifier(resolve_apply_request(ctx.registry_path, target))
+    doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "verifier"]),
+            HostVerifierResult(target=doctor_target, verifier=verifier),
             [
                 action(
-                    "reinspect-readiness",
-                    [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--plan"],
-                    "Reinspect live host readiness",
+                    "doctor",
+                    [*_root_source_argv(ctx), "doctor", "host", target.uuid],
+                    "Reinspect the host convergence result",
                 )
             ],
         )
     )
-    return 0 if readiness.ready or plan_only else 1
+    return 0 if verifier.signature_verification == "passed" else 1
 
 
 @host.command(name="apply")
