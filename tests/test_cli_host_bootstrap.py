@@ -135,6 +135,8 @@ def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revi
     monkeypatch, tmp_path: Path
 ) -> None:
     control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
+    unsafe_marker = tmp_path / "unsafe-helper-ran"
+    _git(control, "config", "--local", "credential.helper", f"!touch {unsafe_marker}")
     commands: list[tuple[list[str], dict[str, object]]] = []
     real_run = subprocess.run
 
@@ -165,6 +167,37 @@ def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revi
     assert isinstance(fetch_env, dict)
     assert fetch_env["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert fetch_env["HOME"] == "/root"
+    assert fetch_env["GIT_CONFIG_COUNT"] == "3"
+    assert fetch_env["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert fetch_env["GIT_CONFIG_VALUE_0"] == ""
+    assert fetch_env["GIT_CONFIG_KEY_1"] == "credential.helper"
+    assert fetch_env["GIT_CONFIG_VALUE_1"] == "store"
+    assert fetch_env["GIT_CONFIG_KEY_2"] == "credential.useHttpPath"
+    assert fetch_env["GIT_CONFIG_VALUE_2"] == "true"
+
+    credential_home = tmp_path / "credentials"
+    credential_home.mkdir()
+    (credential_home / ".git-credentials").write_text(
+        "https://x-access-token:test-token@github.com/relax-dot-gg/infra-management.git\n",
+        encoding="utf-8",
+    )
+    credential = subprocess.run(
+        ["git", "-C", str(control), "credential", "fill"],
+        input=(
+            "protocol=https\n"
+            "host=github.com\n"
+            "path=relax-dot-gg/infra-management.git\n"
+            "username=x-access-token\n\n"
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**fetch_env, "HOME": str(credential_home), "GIT_TERMINAL_PROMPT": "0"},
+    )
+    assert credential.returncode == 0
+    assert "password=test-token" in credential.stdout
+    assert not unsafe_marker.exists()
 
 
 def test_controller_refresh_does_not_fetch_a_raw_selected_revision(
