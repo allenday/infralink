@@ -74,6 +74,8 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
         "enable_self_deploy_timer",
     }
 )
+_CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION = "b10333f45d4a2d0687fd7ac2aa9b7e016fac072e"
+_CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 
 
 class Context:
@@ -279,7 +281,7 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink host show host-1"],
     },
     ("host", "bootstrap"): {
-        "description": "Plan host bootstrap actions without applying them.",
+        "description": "Plan host bootstrap actions or refresh a failed V2 controller.",
         "arguments": [{"name": "host_id", "type": "string", "required": True}],
         "options": [
             {"name": "plan", "type": "boolean", "required": False},
@@ -1709,11 +1711,14 @@ def host_show(
     help="Emit a read-only bootstrap plan.",
 )
 @click.option(
-    "--apply", "apply_changes", is_flag=True, help="Apply only failed host baseline actions."
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    help="Apply failed host baseline actions or the declared V2 controller refresh.",
 )
 @pass_context
 def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: bool) -> int:
-    """Plan required host bootstrap actions without applying them."""
+    """Plan required bootstrap actions or refresh a failed V2 controller."""
     target = ctx.registry.get(host_id)
     if target is None:
         raise entity_not_found("host", host_id)
@@ -1723,7 +1728,21 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     automated_actions = [
         item.id for item in readiness.actions if item.id in BASELINE_EXECUTOR_ACTIONS
     ]
-    if apply_changes and automated_actions:
+    refresh_controller = any(
+        item.id == "inspect_self_deploy_reconcile" for item in readiness.actions
+    )
+    controller_runtime_revision: str | None = None
+    if refresh_controller and ctx.registry_path is not None and ctx.registry_path.is_dir():
+        controller_runtime_revision, _ = _controller_refresh_extra_vars(ctx.registry_path, target)
+    if (
+        apply_changes
+        and refresh_controller
+        and ctx.registry_path is not None
+        and ctx.registry_path.is_dir()
+    ):
+        _apply_controller_refresh(ctx, target, controller_runtime_revision)
+        readiness = evaluate_host_readiness(target, SshReadinessTransport())
+    elif apply_changes and automated_actions:
         control_root = Path("/opt/infra")
         playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
         if not playbook.is_file():
@@ -1782,6 +1801,15 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         )
     ]
     if any(item.id == "inspect_self_deploy_reconcile" for item in readiness.actions):
+        if controller_runtime_revision is not None:
+            actions.append(
+                action(
+                    "refresh-controller",
+                    [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--apply"],
+                    f"Refresh controller runtime {controller_runtime_revision}",
+                    safe=False,
+                )
+            )
         actions.append(
             action(
                 "verifier",
@@ -1801,6 +1829,164 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
         )
     )
     return 0 if readiness.ready or plan_only else 1
+
+
+def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str | None) -> None:
+    """Run only the pinned controller refresh playbook over declared SSH."""
+    from infralink.cli.operations import _pinned_known_hosts, resolve_apply_request
+
+    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Controller refresh requires a directory registry checkout",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Provide the selected registry hosts directory",
+            details={"host": target.uuid},
+        )
+    request = resolve_apply_request(ctx.registry_path, target)
+    resolved_runtime_revision, extra_vars = _controller_refresh_extra_vars(
+        ctx.registry_path, target
+    )
+    if runtime_revision is not None and runtime_revision != resolved_runtime_revision:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Selected controller runtime revision changed during bootstrap",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Re-run host bootstrap --plan and apply the newly selected controller revision",
+            details={"host": target.uuid},
+        )
+    runtime_revision = resolved_runtime_revision
+    control_root = Path("/opt/infra")
+    playbook = control_root / _CONTROLLER_REFRESH_PLAYBOOK
+    if not playbook.is_file() or not _controller_refresh_capability_installed(control_root):
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion controller-refresh capability is not installed",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Install infra-management including the pinned controller-refresh playbook on Bastion",
+            details={
+                "capability": "controller_refresh",
+                "required_revision": _CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION,
+            },
+        )
+    ssh_args = "-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes "
+    try:
+        with _pinned_known_hosts(request) as known_hosts:
+            completed = subprocess.run(
+                [
+                    "ansible-playbook",
+                    "-i",
+                    f"{request.address},",
+                    "-u",
+                    "root",
+                    "--ssh-common-args",
+                    ssh_args + f"-o UserKnownHostsFile={known_hosts}",
+                    str(playbook),
+                    "-e",
+                    json.dumps(extra_vars, sort_keys=True),
+                ],
+                cwd=control_root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Declared host controller refresh is unavailable",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Verify the declared SSH transport and rerun host bootstrap --apply",
+            details={"host": target.uuid, "runtime_revision": runtime_revision},
+        ) from None
+    if completed.returncode != 0:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Host controller refresh failed",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
+            details={"host": target.uuid, "runtime_revision": runtime_revision},
+        )
+
+
+def _controller_refresh_capability_installed(control_root: Path) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(control_root),
+            "merge-base",
+            "--is-ancestor",
+            _CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION,
+            "HEAD",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[str, dict[str, Any]]:
+    """Read only the selected candidate declaration and its locked runtime SHA."""
+    lock = registry_path.parent / "operations" / "infra-management.lock"
+    try:
+        runtime_revision = lock.read_text(encoding="utf-8").strip()
+    except OSError:
+        runtime_revision = ""
+    if re.fullmatch(r"[0-9a-f]{40}", runtime_revision) is None:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Selected candidate does not bind an exact controller runtime revision",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Publish a selected registry candidate with operations/infra-management.lock",
+            details={"path": str(lock)},
+        )
+    manifest_path = registry_path / target.uuid / "manifest.yml"
+    try:
+        document = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        declaration = document["hosts"][target.uuid]
+    except (OSError, KeyError, TypeError, yaml.YAMLError):
+        declaration = None
+    required_true = (
+        "self_deploy_v2_reconcile_enabled",
+        "self_deploy_v2_reconcile_packaged",
+        "self_deploy_v2_promotion_policy_enabled",
+    )
+    required_strings = (
+        "self_deploy_v2_promotion_registry_remote",
+        "self_deploy_v2_promotion_bws_project_id",
+        "self_deploy_v2_registry_read_identity_secret_uuid",
+        "self_deploy_v2_promotion_host_fingerprint",
+        "self_deploy_v2_promotion_allowed_signers",
+        "self_deploy_v2_promotion_channel",
+        "self_deploy_registry_origin",
+    )
+    if (
+        not isinstance(declaration, dict)
+        or any(declaration.get(name) is not True for name in required_true)
+        or declaration.get("self_deploy_legacy_cron_enabled") is not False
+        or any(
+            not isinstance(declaration.get(name), str) or not declaration[name]
+            for name in required_strings
+        )
+    ):
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Selected host declaration is incomplete for controller refresh",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare the complete V2 controller inputs in the selected host manifest",
+            details={"host": target.uuid},
+        )
+    return runtime_revision, {
+        "uuid": target.uuid,
+        "canonical_name": target.canonical_name,
+        "self_deploy_v2_runtime_revision": runtime_revision,
+        "self_deploy_v2_reconcile_enabled": True,
+        "self_deploy_v2_reconcile_packaged": True,
+        "self_deploy_v2_promotion_policy_enabled": True,
+        "self_deploy_legacy_cron_enabled": False,
+        **{name: declaration[name] for name in required_strings},
+    }
 
 
 @host.command(name="verifier")
