@@ -74,7 +74,7 @@ BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
         "enable_self_deploy_timer",
     }
 )
-_CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION = "b10333f7b56b726d56f6938998998369c12e554b"
+_CONTROLLER_REFRESH_INFRA_MANAGEMENT_REVISION = "09c5c0fcfd9354b179a4bf2cb2aa11247c8ab5d4"
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 
 
