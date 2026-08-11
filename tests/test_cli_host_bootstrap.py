@@ -791,20 +791,34 @@ def test_host_bootstrap_apply_forwards_a_bounded_v2_request_for_es1_layout_runti
     assert len(ansible_calls) == 1
     extra_vars = json.loads(ansible_calls[0][0][-1])
     assert set(extra_vars) == {
-        "bootstrap_actions", "canonical_name", "host_address", "host_uuid",
-        "self_deploy_legacy_cron_enabled", "self_deploy_registry_origin",
-        "self_deploy_v2_promotion_allowed_signers", "self_deploy_v2_promotion_bws_project_id",
-        "self_deploy_v2_promotion_channel", "self_deploy_v2_promotion_host_fingerprint",
-        "self_deploy_v2_promotion_policy_enabled", "self_deploy_v2_promotion_registry_remote",
-        "self_deploy_v2_reconcile_enabled", "self_deploy_v2_reconcile_packaged",
-        "self_deploy_v2_registry_read_identity_secret_uuid", "self_deploy_v2_runtime_revision",
+        "bootstrap_actions",
+        "canonical_name",
+        "host_address",
+        "host_uuid",
+        "self_deploy_legacy_cron_enabled",
+        "self_deploy_registry_origin",
+        "self_deploy_v2_promotion_allowed_signers",
+        "self_deploy_v2_promotion_bws_project_id",
+        "self_deploy_v2_promotion_channel",
+        "self_deploy_v2_promotion_host_fingerprint",
+        "self_deploy_v2_promotion_policy_enabled",
+        "self_deploy_v2_promotion_registry_remote",
+        "self_deploy_v2_reconcile_enabled",
+        "self_deploy_v2_reconcile_packaged",
+        "self_deploy_v2_registry_read_identity_secret_uuid",
+        "self_deploy_v2_runtime_revision",
     }
     assert extra_vars["bootstrap_actions"] == [
-        "migrate_v2_registry_layout", "install_self_deploy_runtime", "enable_self_deploy_timer"
+        "migrate_v2_registry_layout",
+        "install_self_deploy_runtime",
+        "enable_self_deploy_timer",
     ]
     assert extra_vars["host_uuid"] == HOST_ID
     assert extra_vars["self_deploy_v2_runtime_revision"] == runtime_revision
-    assert extra_vars["self_deploy_registry_origin"] == "http://100.73.228.90:3000/relaxgg/infra-registry.git"
+    assert (
+        extra_vars["self_deploy_registry_origin"]
+        == "http://100.73.228.90:3000/relaxgg/infra-registry.git"
+    )
 
 
 def test_host_bootstrap_apply_rejects_incomplete_v2_state_before_starting_ansible(
@@ -879,7 +893,7 @@ def test_host_bootstrap_apply_failure_returns_only_bounded_safe_task_context(
             returncode=2,
             stdout=(
                 "TASK [Install jq] ********************************************************\n"
-                "fatal: [host]: FAILED! => {\"msg\": \"token=not-for-output\"}\n"
+                'fatal: [host]: FAILED! => {"msg": "token=not-for-output"}\n'
                 "TASK [Read BWS secret] ***************************************************\n"
             ),
             stderr="credential=not-for-output",

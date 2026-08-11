@@ -1762,9 +1762,7 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     readiness = evaluate_host_readiness(target, SshReadinessTransport())
     if plan_only == apply_changes:
         raise click.UsageError("pass exactly one of --plan or --apply")
-    v2_bootstrap_declared = bool(
-        getattr(target, "self_deploy_v2_registry_layout_enabled", False)
-    )
+    v2_bootstrap_declared = bool(getattr(target, "self_deploy_v2_registry_layout_enabled", False))
     automated_actions = [
         item.id
         for item in readiness.actions
@@ -1921,12 +1919,16 @@ def _bootstrap_apply_request(
         ) from None
 
 
-def _bootstrap_failure_details(host_uuid: str, completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+def _bootstrap_failure_details(
+    host_uuid: str, completed: subprocess.CompletedProcess[str]
+) -> dict[str, Any]:
     """Expose only bounded Ansible task labels, never raw controller output."""
     task_labels = [
         match.group(1)
         for match in re.finditer(r"^TASK \[([^\]]+)\]", completed.stdout, flags=re.MULTILINE)
-        if not re.search(r"(?:secret|token|password|credential|authorization)", match.group(1), re.I)
+        if not re.search(
+            r"(?:secret|token|password|credential|authorization)", match.group(1), re.I
+        )
     ]
     details: dict[str, Any] = {
         "host": host_uuid,
