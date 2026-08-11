@@ -368,7 +368,8 @@ def test_host_verifier_uses_legacy_or_active_v2_contract_without_mixing_them(
         + "    self_deploy_v2_reconcile_packaged: true\n"
         + "    self_deploy_v2_promotion_policy_enabled: true\n"
         + "    self_deploy_v2_promotion_channel: core-v2\n"
-        + "    self_deploy_v2_promotion_host_fingerprint: ssh-rsa SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+        + "    self_deploy_v2_promotion_host_fingerprint: ssh-rsa SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+        + "    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
         encoding="utf-8",
     )
     calls: list[list[str]] = []
