@@ -85,7 +85,9 @@ def test_resolves_views_and_suites_with_stable_derived_signal_identity() -> None
 
 def test_resolves_typed_fleet_convergence_view_without_query_members() -> None:
     data = deepcopy(operational_data())
+    data["hosts"].append({"id": "33333333-3333-4333-8333-333333333333"})  # type: ignore[union-attr]
     data["hosts"][0]["self_deploy_v2_reconcile_enabled"] = True  # type: ignore[index]
+    data["hosts"][1]["self_deploy_v2_reconcile_enabled"] = True  # type: ignore[index]
     data["operations_views"] = [
         {
             "id": "self-deploy",
@@ -101,10 +103,23 @@ def test_resolves_typed_fleet_convergence_view_without_query_members() -> None:
 
     view = plan.operations_views[0]
     assert view.kind == "fleet_convergence"
-    assert view.host_ids == ("11111111-1111-4111-8111-111111111111",)
+    assert view.host_ids == (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    )
     assert view.freshness_seconds == 900
     assert view.datasource_binding_id == "primary-metrics"
     assert view.sections == ()
+
+
+def test_fleet_convergence_rejects_declarative_host_membership() -> None:
+    data = operational_data()
+    data["operations_views"][0]["host_ids"] = ["11111111-1111-4111-8111-111111111111"]  # type: ignore[index]
+
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert "invalid-document-record" in {item.code for item in caught.value.report.diagnostics}
 
 
 def test_plan_digest_is_exactly_public_canonical_plan_without_digest() -> None:
