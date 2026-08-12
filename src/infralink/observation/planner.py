@@ -218,10 +218,11 @@ class PlannedOperationsView(PlanModel):
     id: str
     purpose: str
     sections: tuple[PlannedViewSection, ...]
-    kind: Literal["standard", "fleet_convergence"] = "standard"
+    kind: Literal["standard", "fleet_convergence", "host_metrics"] = "standard"
     host_ids: tuple[str, ...] = ()
     freshness_seconds: int | None = None
     datasource_binding_id: str | None = None
+    metric_profile_id: str | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -1002,6 +1003,58 @@ def resolve_observation_documents(
                     ),
                     freshness_seconds=view.freshness_seconds,
                     datasource_binding_id=view.datasource_binding_id,
+                    source_refs=(ref,),
+                )
+            )
+            continue
+        if view.kind == "host_metrics":
+            metric_profile_supports_host_metrics = False
+            if view.datasource_binding_id not in datasources:
+                _finding(
+                    findings,
+                    "unknown-view-datasource-binding",
+                    _child(ref, "datasource_binding_id"),
+                    view.id,
+                    "Reference a declared datasource binding.",
+                )
+            if view.metric_profile_id not in profiles:
+                _finding(
+                    findings,
+                    "unknown-host-metrics-profile",
+                    _child(ref, "metric_profile_id"),
+                    view.id,
+                    "Reference a declared service profile.",
+                )
+            else:
+                metric_profile = profiles[view.metric_profile_id][0]
+                assert isinstance(metric_profile, ServiceProfile)
+                metric_profile_supports_host_metrics = (
+                    HostBaselineCapability.HOST_METRICS
+                    in metric_profile.required_host_baseline_capabilities
+                )
+            if not metric_profile_supports_host_metrics and view.metric_profile_id in profiles:
+                _finding(
+                    findings,
+                    "host-metrics-profile-capability-required",
+                    _child(ref, "metric_profile_id"),
+                    view.id,
+                    "Reference a profile that requires the host-metrics baseline capability.",
+                )
+            planned_views.append(
+                PlannedOperationsView(
+                    id=view.id,
+                    purpose=view.purpose,
+                    sections=(),
+                    kind="host_metrics",
+                    host_ids=tuple(
+                        sorted(
+                            service.host_id
+                            for service in planned_services
+                            if service.profile_id == view.metric_profile_id
+                        )
+                    ),
+                    datasource_binding_id=view.datasource_binding_id,
+                    metric_profile_id=view.metric_profile_id,
                     source_refs=(ref,),
                 )
             )

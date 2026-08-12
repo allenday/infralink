@@ -84,10 +84,59 @@
     "OperationsView": {
       "additionalProperties": false,
       "properties": {
+        "datasource_binding_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datasource Binding Id"
+        },
+        "freshness_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Freshness Seconds"
+        },
         "id": {
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
           "title": "Id",
           "type": "string"
+        },
+        "kind": {
+          "default": "standard",
+          "enum": [
+            "standard",
+            "fleet_convergence",
+            "host_metrics"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "metric_profile_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric Profile Id"
         },
         "purpose": {
           "minLength": 1,
@@ -98,7 +147,6 @@
           "items": {
             "$ref": "#/$defs/OperationsViewSection"
           },
-          "minItems": 1,
           "title": "Sections",
           "type": "array"
         }
