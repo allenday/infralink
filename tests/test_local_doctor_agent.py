@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import infralink.local_doctor_agent as agent
 from infralink.host_readiness import HostReadinessProbe
 from infralink.local_doctor import LocalDoctorResult
 from infralink.local_doctor_agent import (
@@ -16,6 +18,13 @@ from infralink.local_doctor_agent import (
     load_signed_runtime_config,
     main,
 )
+
+
+def test_local_probe_uses_the_active_controller_units() -> None:
+    source = inspect.getsource(agent)
+    assert "infralink-host-reconcile.timer" in source
+    assert "infralink-host-reconcile.service" in source
+    assert "self-deploy-v2-reconcile" not in source
 
 
 def _runtime_payload(tmp_path: Path) -> dict[str, object]:

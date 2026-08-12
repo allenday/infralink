@@ -189,8 +189,8 @@ def load_signed_runtime_config(
 def collect_local_readiness_probe() -> HostReadinessProbe:
     """Gather the same bounded readiness facts locally, without SSH or remote execution."""
     try:
-        runtime_v2 = Path("/var/lib/self-deploy-v2/runtime").is_dir() and _unit_exists(
-            "self-deploy-v2-reconcile.timer"
+        runtime_v2 = Path("/var/lib/infralink/registry").is_dir() and _unit_exists(
+            "infralink-host-reconcile.timer"
         )
         legacy = (
             Path("/opt/infra/scripts/self-deploy.sh").is_file()
@@ -284,8 +284,8 @@ def _systemctl_state(command: str, unit: str) -> bool:
 def _timer_state(runtime_v2: bool) -> tuple[bool, bool]:
     if runtime_v2:
         return (
-            _systemctl_state("is-enabled", "self-deploy-v2-reconcile.timer"),
-            _systemctl_state("is-active", "self-deploy-v2-reconcile.timer"),
+            _systemctl_state("is-enabled", "infralink-host-reconcile.timer"),
+            _systemctl_state("is-active", "infralink-host-reconcile.timer"),
         )
     legacy = Path("/etc/cron.d/self-deploy").is_file()
     return legacy, legacy
@@ -294,7 +294,7 @@ def _timer_state(runtime_v2: bool) -> tuple[bool, bool]:
 def _reconcile_state(
     runtime_v2: bool,
 ) -> tuple[str | None, int | None, str | None, str | None, int | None]:
-    if not runtime_v2 or not _unit_exists("self-deploy-v2-reconcile.service"):
+    if not runtime_v2 or not _unit_exists("infralink-host-reconcile.service"):
         return None, None, None, None, None
     names = (
         "Result",
@@ -314,7 +314,7 @@ def _reconcile_state(
 
 def _systemctl_show(name: str) -> str:
     completed = subprocess.run(
-        ["systemctl", "show", "self-deploy-v2-reconcile.service", "-p", name, "--value"],
+        ["systemctl", "show", "infralink-host-reconcile.service", "-p", name, "--value"],
         text=True,
         capture_output=True,
         check=False,

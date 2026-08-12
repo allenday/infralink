@@ -355,7 +355,7 @@ def test_release_path_rejects_an_unsigned_admission() -> None:
         )
 
 
-def test_host_verifier_uses_legacy_or_active_v2_contract_without_mixing_them(
+def test_host_verifier_marks_controller_manifests_unavailable_without_mixing_legacy_contracts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     legacy = _selected_release(tmp_path / "legacy")
@@ -403,13 +403,10 @@ def test_host_verifier_uses_legacy_or_active_v2_contract_without_mixing_them(
         cli, ["--registry", str(current_registry), "host", "verifier", HOST_ID]
     )
 
-    assert legacy_result.exit_code == current_result.exit_code == 0
+    assert legacy_result.exit_code == 0
+    assert current_result.exit_code == 1
     assert calls[0][calls[0].index("--") + 1] == "verifier"
-    assert calls[1][calls[1].index("--") + 1 :] == [
-        "active-verifier",
-        "self-deploy-v2-reconcile.service",
-        HOST_ID,
-    ]
+    assert len(calls) == 1
 
 
 def test_release_path_rejects_legacy_contract_when_a_partial_v2_manifest_is_selected(

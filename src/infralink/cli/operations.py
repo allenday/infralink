@@ -32,7 +32,7 @@ _OPERATION_ID = re.compile(
 _LEGACY_OPERATION_ID = re.compile(r"^op_[A-Za-z0-9_-]{8,128}$")
 _FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 _CHANNEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-_UNIT = "self-deploy-v2-reconcile.service"
+_UNIT = "infralink-host-reconcile.service"
 _JOURNAL_SEPARATOR = "__INFRALINK_JOURNAL__"
 _DIAGNOSTIC_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _DIAGNOSTIC_STAGES = frozenset({"inspect", "validate", "plan", "apply", "verify", "record"})
@@ -140,186 +140,6 @@ fi
 printf 'signature_verification=%s\\n' "$verification"
 """
 
-_ACTIVE_VERIFIER_REMOTE = """set -eu
-unit=$1
-host_uuid=$2
-
-# The unit drop-in is the active public bootstrap contract. Do not read its
-# EnvironmentFile: it may contain credentials needed only by reconciliation.
-unit_body=$(systemctl cat "$unit" 2>/dev/null) || exit 0
-extract_public_unit_value() {
-    name=$1
-    value=$(printf '%s\\n' "$unit_body" | awk -v name="$name" '
-        $0 ~ "^Environment=\\\"" name "=" {
-            line=$0
-            sub("^Environment=\\\"" name "=", "", line)
-            if (line !~ /"$/ || seen++) exit 2
-            sub(/"$/, "", line)
-            print line
-        }
-        END { if (seen > 1) exit 2 }
-    ') || exit 2
-    printf '%s' "$value"
-}
-
-runtime=$(extract_public_unit_value SELF_DEPLOY_V2_RUNTIME_ROOT)
-origin=$(extract_public_unit_value SELF_DEPLOY_REGISTRY_ORIGIN)
-[ -n "$runtime" ] && [ -n "$origin" ] || exit 0
-case "$runtime" in
-    /var/lib/self-deploy-v2/runtime/*)
-        revision=${runtime#/var/lib/self-deploy-v2/runtime/}
-        case "$revision" in '' | *[!0-9a-f]*) exit 2 ;; esac
-        [ "${#revision}" -eq 40 ] || exit 2
-        ;;
-    *) exit 2 ;;
-esac
-[ -x "$runtime/.venv/bin/python" ] || exit 0
-
-"$runtime/.venv/bin/python" -P - "$runtime" "$origin" "$host_uuid" <<'PY'
-import hashlib
-import re
-import subprocess
-import sys
-from pathlib import Path
-from urllib.parse import urlsplit
-
-runtime = Path(sys.argv[1])
-origin = sys.argv[2]
-host_uuid = sys.argv[3]
-try:
-    from lib.self_deploy.registry_layout import REGISTRY_ROOT
-    from lib.self_deploy.release_admission_authority import (
-        ReleaseAdmissionAuthorityError,
-        _channel_pointer,
-        _trust,
-    )
-except ImportError:
-    # A pre-authority runtime cannot provide this public capability.
-    raise SystemExit(0)
-
-try:
-    parsed = urlsplit(origin)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError
-    trust = _trust()
-except ReleaseAdmissionAuthorityError:
-    # The active public contract is malformed; fail closed without diagnostics.
-    raise SystemExit(2)
-except (AttributeError, TypeError):
-    # A partial or pre-authority runtime cannot provide this capability.
-    raise SystemExit(0)
-
-try:
-    if (
-        trust.host_uuid != host_uuid
-        or trust.remote != origin
-        or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", trust.channel)
-    ):
-        raise ValueError
-except AttributeError:
-    raise SystemExit(0)
-except ValueError:
-    # The active public contract is malformed; fail closed without diagnostics.
-    raise SystemExit(2)
-
-print(f"runtime_revision={runtime.name}")
-print(f"registry_remote={trust.remote}")
-print("registry_ref=refs/heads/main")
-
-try:
-    signers = trust.allowed_signers
-    if not isinstance(signers, bytes):
-        raise ValueError
-    digest = hashlib.sha256(signers).hexdigest()
-    first = next(
-        (
-            line.split()
-            for line in signers.decode("utf-8", "strict").splitlines()
-            if len(line.split()) >= 3
-        ),
-        None,
-    )
-except AttributeError:
-    # A partial authority cannot expose signer evidence.
-    raise SystemExit(0)
-except (TypeError, UnicodeError, ValueError):
-    # Present signer evidence is malformed; fail closed.
-    raise SystemExit(2)
-if first is None:
-    raise SystemExit(2)
-try:
-    rendered = subprocess.run(
-        ["ssh-keygen", "-lf", "-", "-E", "sha256"],
-        input=" ".join(first) + "\\n",
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=5,
-    )
-    fingerprint = next((part for part in rendered.stdout.split() if part.startswith("SHA256:")), "")
-except (OSError, subprocess.TimeoutExpired):
-    raise SystemExit(2)
-if rendered.returncode != 0 or not fingerprint:
-    raise SystemExit(2)
-print(f"allowed_signer_principal={first[0]}")
-print(f"allowed_signer_fingerprint={fingerprint}")
-print(f"allowed_signers_sha256={digest}")
-
-try:
-    remote = subprocess.run(
-        ["git", "-C", str(REGISTRY_ROOT), "remote", "get-url", "origin"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=5,
-    )
-    if remote.returncode != 0 or remote.stdout.strip() != trust.remote:
-        raise ValueError
-    tip = subprocess.run(
-        ["git", "-C", str(REGISTRY_ROOT), "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=5,
-    )
-    if tip.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", tip.stdout.strip()) is None:
-        raise ValueError
-    fetched_tip = tip.stdout.strip()
-    _channel_pointer(REGISTRY_ROOT, fetched_tip, trust)
-except ReleaseAdmissionAuthorityError:
-    # A present authority rejected malformed public release data; fail closed.
-    raise SystemExit(2)
-except (OSError, subprocess.TimeoutExpired, ValueError):
-    print("git_ssh_signature_capable=false")
-    print("signature_verification=unavailable")
-    raise SystemExit(0)
-except (AttributeError, TypeError):
-    # The installed authority does not expose the required public verifier API.
-    raise SystemExit(0)
-
-version = subprocess.run(["git", "--version"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, timeout=5)
-parts = version.stdout.strip().split()
-numbers = parts[-1].split(".") if version.returncode == 0 and parts else []
-try:
-    capable = int(numbers[0]) > 2 or (int(numbers[0]) == 2 and int(numbers[1]) >= 34)
-except (IndexError, ValueError):
-    capable = False
-print(f"git_ssh_signature_capable={'true' if capable else 'false'}")
-print(f"fetched_tip={fetched_tip}")
-print("signature_verification=passed")
-PY
-"""
-
 
 @dataclass(frozen=True)
 class ApplyRequest:
@@ -333,7 +153,7 @@ class ApplyRequest:
     host_key_fingerprint: str
     unit: str
     verifier_layout: VerifierLayout | None = None
-    verifier_source: Literal["active", "legacy", "unavailable"] = "unavailable"
+    verifier_source: Literal["legacy", "unavailable"] = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -394,10 +214,6 @@ class SshOperationProvider:
         """Read only the declared, public facts behind V2 Git signature verification."""
         if request.verifier_source == "unavailable":
             return HostVerifierDiagnostic(unavailable=list(_VERIFIER_UNAVAILABLE_FACTS))
-        if request.verifier_source == "active":
-            return _parse_verifier_diagnostics(
-                self._run(request, _ACTIVE_VERIFIER_REMOTE, active_verifier=True), None
-            )
         if request.verifier_layout is None:
             raise _provider_failure("Declared host verifier contract is invalid")
         return _parse_verifier_diagnostics(
@@ -412,7 +228,6 @@ class SshOperationProvider:
         invocation: str | None = None,
         *,
         verifier: VerifierLayout | None = None,
-        active_verifier: bool = False,
     ) -> dict[str, Any]:
         remote_args = (
             [
@@ -424,8 +239,6 @@ class SshOperationProvider:
                 verifier.registry_ref or "",
             ]
             if verifier is not None
-            else ["active-verifier", request.unit, request.host_uuid]
-            if active_verifier
             else [request.unit]
             if invocation is None
             else [request.unit, invocation]
@@ -465,7 +278,7 @@ class SshOperationProvider:
             ) from None
         if completed.returncode != 0:
             raise _provider_failure("Declared host rejected the reconcile operation")
-        if verifier is not None or active_verifier:
+        if verifier is not None:
             return _parse_verifier_output(completed.stdout)
         values = _parse_properties(completed.stdout)
         if not values.get("InvocationID"):
@@ -515,7 +328,7 @@ def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
         raise _registry_failure("Host apply manifest does not match the target host", manifest_path)
     manifest_request = _manifest_request(host.uuid, host.canonical_name, host_data, manifest_path)
     if manifest_request is not None:
-        return replace(manifest_request, verifier_source="active")
+        return manifest_request
     return _with_legacy_verifier_layout(
         _contract_request(registry_path, host), registry_path, host.uuid
     )
