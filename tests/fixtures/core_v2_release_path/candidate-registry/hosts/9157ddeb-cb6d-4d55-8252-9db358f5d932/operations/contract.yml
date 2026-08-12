@@ -9,7 +9,7 @@ transport:
   user: root
   host_key_fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 reconcile:
-  unit: self-deploy-v2-reconcile.service
+  unit: infralink-host-reconcile.service
 verifier:
   registry:
     remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git
