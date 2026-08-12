@@ -125,6 +125,11 @@
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "self_deploy_v2_reconcile_enabled": {
+          "default": false,
+          "title": "Self Deploy V2 Reconcile Enabled",
+          "type": "boolean"
         }
       },
       "required": [

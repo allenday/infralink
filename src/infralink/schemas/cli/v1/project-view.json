@@ -176,10 +176,23 @@
           "default": "standard",
           "enum": [
             "standard",
-            "fleet_convergence"
+            "fleet_convergence",
+            "host_metrics"
           ],
           "title": "Kind",
           "type": "string"
+        },
+        "metric_profile_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric Profile Id"
         },
         "purpose": {
           "title": "Purpose",

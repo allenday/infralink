@@ -447,9 +447,10 @@ class OperationsView(StrictModel):
     id: CanonicalId
     purpose: Annotated[str, Field(min_length=1)]
     sections: list[OperationsViewSection]
-    kind: Literal["standard", "fleet_convergence"] = "standard"
+    kind: Literal["standard", "fleet_convergence", "host_metrics"] = "standard"
     freshness_seconds: PositiveSeconds | None = None
     datasource_binding_id: CanonicalId | None = None
+    metric_profile_id: CanonicalId | None = None
 
     @model_validator(mode="after")
     def validate_kind(self) -> OperationsView:
@@ -458,11 +459,26 @@ class OperationsView(StrictModel):
                 not self.sections
                 or self.freshness_seconds is not None
                 or self.datasource_binding_id is not None
+                or self.metric_profile_id is not None
             ):
                 raise ValueError("standard view cannot declare fleet convergence fields")
             return self
-        if self.sections or self.freshness_seconds is None or self.datasource_binding_id is None:
-            raise ValueError("fleet convergence view has an invalid declaration")
+        if self.kind == "fleet_convergence":
+            if (
+                self.sections
+                or self.freshness_seconds is None
+                or self.datasource_binding_id is None
+                or self.metric_profile_id is not None
+            ):
+                raise ValueError("fleet convergence view has an invalid declaration")
+            return self
+        if (
+            self.sections
+            or self.freshness_seconds is not None
+            or self.datasource_binding_id is None
+            or self.metric_profile_id is None
+        ):
+            raise ValueError("host metrics view has an invalid declaration")
         return self
 
 
