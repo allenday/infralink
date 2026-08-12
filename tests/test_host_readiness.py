@@ -243,3 +243,11 @@ def test_ssh_transport_requires_a_nonempty_bws_token_in_etc_environment() -> Non
     assert "grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/environment" in _REMOTE_PROBE
     assert "bws.json" not in _REMOTE_PROBE
     assert "bws.conf" not in _REMOTE_PROBE
+
+
+def test_ssh_transport_probes_the_active_controller_units() -> None:
+    from infralink.host_transport import _REMOTE_PROBE
+
+    assert "infralink-host-reconcile.timer" in _REMOTE_PROBE
+    assert "infralink-host-reconcile.service" in _REMOTE_PROBE
+    assert "self-deploy-v2-reconcile" not in _REMOTE_PROBE

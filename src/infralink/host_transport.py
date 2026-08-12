@@ -16,16 +16,16 @@ if id devops >/dev/null 2>&1; then printf 'devops_account=1\\n'; else printf 'de
 if test -s /home/devops/.ssh/authorized_keys; then printf 'devops_authorized_access=1\\n'; else printf 'devops_authorized_access=0\\n'; fi
 if test -r /etc/environment && grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/environment; then printf 'bws_config=1\\n'; else printf 'bws_config=0\\n'; fi
 if python3 -c 'import yaml, jinja2' >/dev/null 2>&1; then printf 'self_deploy_dependencies=1\\n'; else printf 'self_deploy_dependencies=0\\n'; fi
-if test -d /var/lib/self-deploy-v2/runtime && systemctl cat self-deploy-v2-reconcile.timer >/dev/null 2>&1; then
+if test -d /var/lib/infralink/registry && systemctl cat infralink-host-reconcile.timer >/dev/null 2>&1; then
   printf 'self_deploy_runtime=1\\nself_deploy_mode=v2_reconcile\\n'
 elif test -x /opt/infra/scripts/self-deploy.sh && test -f /etc/cron.d/self-deploy; then
   printf 'self_deploy_runtime=1\\nself_deploy_mode=legacy_pull\\n'
 else
   printf 'self_deploy_runtime=0\\nself_deploy_mode=\\n'
 fi
-if systemctl cat self-deploy-v2-reconcile.timer >/dev/null 2>&1; then
-  if systemctl is-enabled self-deploy-v2-reconcile.timer >/dev/null 2>&1; then printf 'self_deploy_timer_enabled=1\\n'; else printf 'self_deploy_timer_enabled=0\\n'; fi
-  if systemctl is-active self-deploy-v2-reconcile.timer >/dev/null 2>&1; then printf 'self_deploy_timer_active=1\\n'; else printf 'self_deploy_timer_active=0\\n'; fi
+if systemctl cat infralink-host-reconcile.timer >/dev/null 2>&1; then
+  if systemctl is-enabled infralink-host-reconcile.timer >/dev/null 2>&1; then printf 'self_deploy_timer_enabled=1\\n'; else printf 'self_deploy_timer_enabled=0\\n'; fi
+  if systemctl is-active infralink-host-reconcile.timer >/dev/null 2>&1; then printf 'self_deploy_timer_active=1\\n'; else printf 'self_deploy_timer_active=0\\n'; fi
 else
   if test -f /etc/cron.d/self-deploy; then
     printf 'self_deploy_timer_enabled=1\\nself_deploy_timer_active=1\\n'
@@ -33,12 +33,12 @@ else
     printf 'self_deploy_timer_enabled=0\\nself_deploy_timer_active=0\\n'
   fi
 fi
-if systemctl cat self-deploy-v2-reconcile.service >/dev/null 2>&1; then
-  reconcile_result="$(systemctl show self-deploy-v2-reconcile.service -p Result --value 2>/dev/null || true)"
-  reconcile_exit_status="$(systemctl show self-deploy-v2-reconcile.service -p ExecMainStatus --value 2>/dev/null || true)"
-  reconcile_active_state="$(systemctl show self-deploy-v2-reconcile.service -p ActiveState --value 2>/dev/null || true)"
-  reconcile_sub_state="$(systemctl show self-deploy-v2-reconcile.service -p SubState --value 2>/dev/null || true)"
-  reconcile_exit_timestamp_monotonic="$(systemctl show self-deploy-v2-reconcile.service -p ExecMainExitTimestampMonotonic --value 2>/dev/null || true)"
+if systemctl cat infralink-host-reconcile.service >/dev/null 2>&1; then
+  reconcile_result="$(systemctl show infralink-host-reconcile.service -p Result --value 2>/dev/null || true)"
+  reconcile_exit_status="$(systemctl show infralink-host-reconcile.service -p ExecMainStatus --value 2>/dev/null || true)"
+  reconcile_active_state="$(systemctl show infralink-host-reconcile.service -p ActiveState --value 2>/dev/null || true)"
+  reconcile_sub_state="$(systemctl show infralink-host-reconcile.service -p SubState --value 2>/dev/null || true)"
+  reconcile_exit_timestamp_monotonic="$(systemctl show infralink-host-reconcile.service -p ExecMainExitTimestampMonotonic --value 2>/dev/null || true)"
   printf 'self_deploy_reconcile_result=%s\n' "$reconcile_result"
   printf 'self_deploy_reconcile_exit_status=%s\n' "$reconcile_exit_status"
   printf 'self_deploy_reconcile_active_state=%s\n' "$reconcile_active_state"

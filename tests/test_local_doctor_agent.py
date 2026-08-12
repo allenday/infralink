@@ -18,6 +18,16 @@ from infralink.local_doctor_agent import (
 )
 
 
+def test_local_probe_uses_the_active_controller_units() -> None:
+    import inspect
+    import infralink.local_doctor_agent as agent
+
+    source = inspect.getsource(agent)
+    assert "infralink-host-reconcile.timer" in source
+    assert "infralink-host-reconcile.service" in source
+    assert "self-deploy-v2-reconcile" not in source
+
+
 def _runtime_payload(tmp_path: Path) -> dict[str, object]:
     return {
         "schema_version": "infralink.local-doctor-runtime/v1",
