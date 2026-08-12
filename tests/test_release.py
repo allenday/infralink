@@ -25,8 +25,8 @@ def test_validate_release_inputs_accepts_matching_requested_package_version_and_
     module = load_module()
 
     module.validate_release_inputs(
-        requested_version="0.4.0",
-        package_version="0.4.0",
+        requested_version="0.5.0",
+        package_version="0.5.0",
         pipeline_sha=SOURCE_SHA,
         main_sha=SOURCE_SHA,
     )
@@ -34,7 +34,7 @@ def test_validate_release_inputs_accepts_matching_requested_package_version_and_
     with pytest.raises(module.ReleaseError):
         module.validate_release_inputs(
             requested_version="0.3.0",
-            package_version="0.4.0",
+            package_version="0.5.0",
             pipeline_sha=SOURCE_SHA,
             main_sha=SOURCE_SHA,
         )

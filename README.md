@@ -159,7 +159,7 @@ export BWS_ORGANIZATION_ID="<organization-uuid>"
 infralink --registry registry.yml --edges edges.yml secrets audit --provider bws
 ```
 
-Production `v0.4.0` accepts Bitwarden's hosted endpoints only. Endpoint override
+Production `v0.5.0` accepts Bitwarden's hosted endpoints only. Endpoint override
 environment variables are rejected; custom endpoints remain deferred. Audit is
 read-only, is restricted to references declared by topology, and does not fetch
 secret values.
