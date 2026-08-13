@@ -182,7 +182,9 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
         "bootstrap",
         "create",
         "list",
+        "logs",
         "show",
+        "status",
         "verifier",
     }
     assert yaml.safe_load(listed.output)["result"] == yaml.safe_load(compatibility.output)["result"]
@@ -194,7 +196,9 @@ def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_
         "bootstrap",
         "create",
         "list",
+        "logs",
         "show",
+        "status",
         "verifier",
     }
     assert all(

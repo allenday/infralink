@@ -8,7 +8,9 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.main import cli
+from infralink.cli.operations import OperationRecord
 from tests.cli_helpers import assert_schema
 
 HOST_ID = "32a3324f-c3d0-4a4f-9587-52c099bcb3fb"
@@ -525,6 +527,7 @@ def test_host_apply_starts_only_declared_reconcile_unit_and_returns_opaque_run_r
             "state": "applying",
         },
         "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
+        "dispatch": {"provider": "ssh", "status": "accepted"},
     }
     assert payload["next_actions"][0]["rel"] == "status"
 
@@ -605,12 +608,163 @@ def test_host_status_reads_target_timer_and_last_reconcile_evidence(
         "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
         "reconcile_mode": "timer",
         "timer": {"active": True, "next_scheduled_at": "2026-08-13T17:00:00Z"},
+        "in_progress": False,
         "last_reconcile": {
             "status": "success",
             "registry_sha": "a" * 40,
             "finished_at": "2026-08-13T16:00:00Z",
         },
     }
+    assert_schema(payload, "host-status")
+
+
+def test_host_apply_reports_healthy_target_timer_when_direct_dispatch_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+
+    class UnavailableProvider:
+        def submit(self, request: object) -> OperationRecord:
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Declared host SSH reconcile operation is unavailable",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Retry",
+                details={"dispatch": "unavailable"},
+            )
+
+    monkeypatch.setattr(
+        "infralink.cli.operations.operation_provider", lambda: UnavailableProvider()
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_target_status",
+        lambda request: {
+            "timer_active": "active",
+            "timer_next": "2026-08-13T17:00:00Z",
+            "unit_active": "inactive",
+            "unit_result": "success",
+            "registry_sha": "b" * 40,
+            "finished_at": "2026-08-13T16:00:00Z",
+        },
+    )
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--wait"]
+    )
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert_schema(payload, "host-apply")
+    assert payload["result"] == {
+        "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
+        "dispatch": {"provider": "ssh", "status": "unavailable"},
+        "target_status": {
+            "reconcile_mode": "timer",
+            "timer": {"active": True, "next_scheduled_at": "2026-08-13T17:00:00Z"},
+            "in_progress": False,
+            "last_reconcile": {
+                "status": "success",
+                "registry_sha": "b" * 40,
+                "finished_at": "2026-08-13T16:00:00Z",
+            },
+        },
+    }
+    assert {item["rel"] for item in payload["next_actions"]} == {"status", "logs"}
+
+
+def test_host_logs_last_run_returns_bounded_sanitized_target_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            '{"ok":false,"error_code":"reconcile_render_failed",'
+            '"error_stage":"apply","retryable":true,"secret":"not-output"}\n'
+            "unstructured line\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "logs", HOST_ID, "--last-run"]
+    )
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert payload["result"] == {
+        "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
+        "lines": [
+            "code: reconcile_render_failed",
+            "stage: apply",
+            "retryable: true",
+        ],
+    }
+    assert "not-output" not in response.output
+    assert_schema(payload, "host-logs")
+
+
+def test_host_status_marks_an_active_target_reconcile_in_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            "timer_active=active\n"
+            "timer_next=2026-08-13T17:00:00Z\n"
+            "unit_active=activating\n"
+            "unit_result=success\n"
+            "registry_sha=" + "a" * 40 + "\n"
+            "finished_at=2026-08-13T16:00:00Z\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "status", HOST_ID])
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert payload["result"]["in_progress"] is True
+
+
+def test_host_status_drops_an_untrusted_finished_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            "timer_active=active\nunit_active=inactive\nunit_result=success\n"
+            "registry_sha=" + "a" * 40 + "\n"
+            "finished_at=repository-wide-loaded-secret-value-canary\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "status", HOST_ID])
+
+    assert response.exit_code == 0
+    assert "repository-wide-loaded-secret-value-canary" not in response.output
+    assert yaml.safe_load(response.output)["result"]["last_reconcile"]["finished_at"] is None
+
+
+def test_host_help_discovers_target_status_and_last_run_logs() -> None:
+    result = CliRunner().invoke(cli, ["help", "host"])
+    payload = yaml.safe_load(result.output)
+
+    assert result.exit_code == 0
+    children = {item["name"] for item in payload["result"]["children"]}
+    assert {"status", "logs"} <= children
 
 
 def test_host_apply_refuses_a_noncanonical_ssh_fingerprint(tmp_path: Path) -> None:

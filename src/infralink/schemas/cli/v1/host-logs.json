@@ -166,106 +166,26 @@
       "title": "ErrorDetail",
       "type": "object"
     },
-    "HostStatusResult": {
+    "HostLogsResult": {
       "additionalProperties": false,
       "properties": {
-        "in_progress": {
-          "title": "In Progress",
-          "type": "boolean"
-        },
-        "last_reconcile": {
-          "$ref": "#/$defs/LastReconcile"
-        },
-        "reconcile_mode": {
-          "const": "timer",
-          "title": "Reconcile Mode",
-          "type": "string"
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Lines",
+          "type": "array"
         },
         "target": {
           "$ref": "#/$defs/DoctorTarget"
-        },
-        "timer": {
-          "$ref": "#/$defs/HostTimer"
         }
       },
       "required": [
-        "reconcile_mode",
-        "timer",
-        "in_progress",
-        "last_reconcile",
-        "target"
+        "target",
+        "lines"
       ],
-      "title": "HostStatusResult",
-      "type": "object"
-    },
-    "HostTimer": {
-      "additionalProperties": false,
-      "properties": {
-        "active": {
-          "title": "Active",
-          "type": "boolean"
-        },
-        "next_scheduled_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Next Scheduled At"
-        }
-      },
-      "required": [
-        "active"
-      ],
-      "title": "HostTimer",
-      "type": "object"
-    },
-    "LastReconcile": {
-      "additionalProperties": false,
-      "properties": {
-        "finished_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Finished At"
-        },
-        "registry_sha": {
-          "anyOf": [
-            {
-              "pattern": "^[0-9a-f]{40}$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Registry Sha"
-        },
-        "status": {
-          "enum": [
-            "success",
-            "failed",
-            "unknown"
-          ],
-          "title": "Status",
-          "type": "string"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "title": "LastReconcile",
+      "title": "HostLogsResult",
       "type": "object"
     },
     "Meta": {
@@ -371,7 +291,7 @@
     "result": {
       "anyOf": [
         {
-          "$ref": "#/$defs/HostStatusResult"
+          "$ref": "#/$defs/HostLogsResult"
         },
         {
           "type": "null"
@@ -391,6 +311,6 @@
     "command",
     "next_actions"
   ],
-  "title": "Envelope[HostStatusResult]",
+  "title": "Envelope[HostLogsResult]",
   "type": "object"
 }

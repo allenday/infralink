@@ -49,11 +49,25 @@ class HostTimer(ContractModel):
     next_scheduled_at: str | None = None
 
 
-class HostStatusResult(ContractModel):
-    target: DoctorTarget
+class TargetReconcileStatus(ContractModel):
     reconcile_mode: Literal["timer"]
     timer: HostTimer
+    in_progress: bool
     last_reconcile: LastReconcile
+
+
+class HostStatusResult(TargetReconcileStatus):
+    target: DoctorTarget
+
+
+class HostLogsResult(ContractModel):
+    target: DoctorTarget
+    lines: list[str] = Field(max_length=8)
+
+
+class HostDispatch(ContractModel):
+    provider: Literal["ssh"]
+    status: Literal["accepted", "rejected", "unavailable"]
 
 
 class HostApplyResult(ContractModel):
@@ -61,6 +75,10 @@ class HostApplyResult(ContractModel):
     target: DoctorTarget
     dry_run: bool = Field(default=False, exclude_if=lambda value: not value)
     plan: HostApplyPlan | None = Field(default=None, exclude_if=lambda value: value is None)
+    dispatch: HostDispatch | None = Field(default=None, exclude_if=lambda value: value is None)
+    target_status: TargetReconcileStatus | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     failure: OperationFailure | None = Field(default=None, exclude_if=lambda value: value is None)
 
 

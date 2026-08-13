@@ -71,6 +71,8 @@ SCHEMA_NAMES = (
     "host-bootstrap",
     "host-verifier",
     "host-apply",
+    "host-status",
+    "host-logs",
     "operation-status",
     "services",
     "service-show",
