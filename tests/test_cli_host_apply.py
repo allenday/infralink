@@ -190,6 +190,12 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
     assert payload["result"] == {
         "dry_run": True,
         "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
+        "plan": {
+            "registry_revision": _git(registry.parent, "rev-parse", "HEAD"),
+            "dispatch_provider": "ssh",
+            "reconcile_mode": "timer",
+            "action_categories": ["registry_checkout", "render", "reconcile"],
+        },
     }
 
 

@@ -31,10 +31,18 @@ class OperationFailure(ContractModel):
     journal: list[str] = Field(default_factory=list, max_length=8)
 
 
+class HostApplyPlan(ContractModel):
+    registry_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    dispatch_provider: Literal["ssh"]
+    reconcile_mode: Literal["timer"]
+    action_categories: list[Literal["registry_checkout", "render", "reconcile"]]
+
+
 class HostApplyResult(ContractModel):
     operation: OperationSummary | None = Field(default=None, exclude_if=lambda value: value is None)
     target: DoctorTarget
     dry_run: bool = Field(default=False, exclude_if=lambda value: not value)
+    plan: HostApplyPlan | None = Field(default=None, exclude_if=lambda value: value is None)
     failure: OperationFailure | None = Field(default=None, exclude_if=lambda value: value is None)
 
 

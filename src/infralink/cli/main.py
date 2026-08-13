@@ -46,6 +46,7 @@ from infralink.cli.contracts import (
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.operation_contracts import (
+    HostApplyPlan,
     HostApplyResult,
     HostVerifierResult,
     OperationStatusResult,
@@ -2305,10 +2306,34 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
     request = resolve_apply_request(ctx.registry_path, target)
     doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
     if dry_run:
+        completed = subprocess.run(
+            ["git", "-C", str(ctx.registry_path.parent), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        revision = completed.stdout.strip()
+        if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise CliFailure(
+                code=ErrorCode.INPUT_LOAD_FAILED,
+                message="Selected registry revision could not be resolved",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Use a Git checkout containing the selected registry revision",
+                details={"registry": str(ctx.registry_path)},
+            )
         _emit(
             ok_envelope(
                 _context_for(path=["host", "apply"]),
-                HostApplyResult(target=doctor_target, dry_run=True),
+                HostApplyResult(
+                    target=doctor_target,
+                    dry_run=True,
+                    plan=HostApplyPlan(
+                        registry_revision=revision,
+                        dispatch_provider="ssh",
+                        reconcile_mode="timer",
+                        action_categories=["registry_checkout", "render", "reconcile"],
+                    ),
+                ),
                 [
                     action(
                         "apply",

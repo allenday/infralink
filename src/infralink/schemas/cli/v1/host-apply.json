@@ -166,6 +166,46 @@
       "title": "ErrorDetail",
       "type": "object"
     },
+    "HostApplyPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "action_categories": {
+          "items": {
+            "enum": [
+              "registry_checkout",
+              "render",
+              "reconcile"
+            ],
+            "type": "string"
+          },
+          "title": "Action Categories",
+          "type": "array"
+        },
+        "dispatch_provider": {
+          "const": "ssh",
+          "title": "Dispatch Provider",
+          "type": "string"
+        },
+        "reconcile_mode": {
+          "const": "timer",
+          "title": "Reconcile Mode",
+          "type": "string"
+        },
+        "registry_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Registry Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_revision",
+        "dispatch_provider",
+        "reconcile_mode",
+        "action_categories"
+      ],
+      "title": "HostApplyPlan",
+      "type": "object"
+    },
     "HostApplyResult": {
       "additionalProperties": false,
       "properties": {
@@ -189,6 +229,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/OperationSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostApplyPlan"
             },
             {
               "type": "null"
