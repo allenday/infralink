@@ -223,7 +223,7 @@ def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path
             "host_id": HOST_ID,
             "primary_service_id": f"{HOST_ID}/postgresql",
             "component_service_ids": [f"{HOST_ID}/postgresql", f"{HOST_ID}/proxy"],
-            "health_signal_refs": [f"dependency/{OBSERVATION_ID}/health/reachable"],
+            "health_signal_refs": [f"service/{HOST_ID}/postgresql/ready/up"],
             "source_refs": [],
         }
     ]
@@ -239,6 +239,26 @@ def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path
             "health_signal_refs": ["dependency/database-stack-internal/health/reachable"],
         }
     )
+    binding_payload = yaml.safe_load(bindings.read_text(encoding="utf-8"))
+    binding_payload["bindings"].append(
+        {
+            "id": "gatus-database-stack-internal",
+            "renderer_kind": "gatus",
+            "observation_backend_id": "core-health",
+            "output_identity": "database-stack-internal",
+            "signal_ref": "dependency/database-stack-internal/health/reachable",
+        }
+    )
+    binding_payload["bindings"].append(
+        {
+            "id": "gatus-postgresql-ready",
+            "renderer_kind": "gatus",
+            "observation_backend_id": "core-health",
+            "output_identity": "postgresql-ready",
+            "signal_ref": f"service/{HOST_ID}/postgresql/ready/up",
+        }
+    )
+    bindings.write_text(yaml.safe_dump(binding_payload, sort_keys=False), encoding="utf-8")
     plan.write_text(json.dumps(payload), encoding="utf-8")
 
     result = _invoke(
@@ -264,12 +284,52 @@ def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path
         "component_count": 2,
     }
     assert response["result"]["coverage"] == {
-        "required": 1,
-        "bound": 1,
+        "required": 3,
+        "bound": 3,
         "unbound": 0,
         "unsupported": 0,
         "valid": True,
     }
+
+
+def test_doctor_logical_service_fails_coverage_without_component_health_binding(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    logical_service_id = f"{HOST_ID}/database-stack"
+    payload["logical_services"] = [
+        {
+            "id": logical_service_id,
+            "host_id": HOST_ID,
+            "primary_service_id": f"{HOST_ID}/postgresql",
+            "component_service_ids": [f"{HOST_ID}/postgresql"],
+            "health_signal_refs": [f"service/{HOST_ID}/postgresql/ready/up"],
+            "source_refs": [],
+        }
+    ]
+    plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "service",
+        logical_service_id,
+        "--validate",
+    )
+    response = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert response["result"]["coverage"] == {
+        "required": 2,
+        "bound": 1,
+        "unbound": 1,
+        "unsupported": 0,
+        "valid": False,
+    }
+    assert response["result"]["reason"] == "observer_coverage_incomplete"
 
 
 def test_doctor_validate_requires_an_explicit_observation_plan() -> None:

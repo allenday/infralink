@@ -212,7 +212,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     "check": {"description": "Run health checks for edges.", "usage": "infralink check"},
     "doctor": {
         "description": "Validate declared observation coverage and inspect declared evidence.",
-        "usage": "infralink doctor [host|service|edge|profile <ref>] [--validate]",
+        "usage": (
+            "infralink doctor [host|service|edge|profile <ref>] [--validate]; "
+            "logical services use service <host-uuid>/<service-id>"
+        ),
     },
     "diagram": {
         "description": "Generate topology diagrams.",
