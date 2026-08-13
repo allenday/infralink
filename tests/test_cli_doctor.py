@@ -89,6 +89,17 @@ def test_global_doctor_requires_declared_observation_inputs() -> None:
     assert payload["command"]["resolved"]["gatus_configured"] is False
 
 
+def test_doctor_help_discloses_host_qualified_logical_service_targets() -> None:
+    result = CliRunner().invoke(cli, ["help", "doctor"])
+    payload = yaml.safe_load(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["examples"] == [
+        "infralink doctor host cyberstorm-watchtower",
+        "infralink doctor service <host-uuid>/<logical-service-id>",
+    ]
+
+
 def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network_calls(
     tmp_path: Path, monkeypatch
 ) -> None:

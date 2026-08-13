@@ -293,6 +293,18 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         ],
         "examples": ["infralink resolve 058e29ff-57b9-47c8-b6fa-0914ac03e25c"],
     },
+    ("doctor",): {
+        "description": "Inspect declared observation coverage and live evidence.",
+        "arguments": [
+            {"name": "target_type", "type": "choice", "required": False},
+            {"name": "target_ref", "type": "string", "required": False},
+        ],
+        "options": [],
+        "examples": [
+            "infralink doctor host cyberstorm-watchtower",
+            "infralink doctor service <host-uuid>/<logical-service-id>",
+        ],
+    },
     ("app", "list"): {
         "description": "List application groupings.",
         "arguments": [],
