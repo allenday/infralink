@@ -89,6 +89,17 @@ def test_global_doctor_requires_declared_observation_inputs() -> None:
     assert payload["command"]["resolved"]["gatus_configured"] is False
 
 
+def test_doctor_help_discloses_host_qualified_logical_service_targets() -> None:
+    result = CliRunner().invoke(cli, ["help", "doctor"])
+    payload = yaml.safe_load(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["examples"] == [
+        "infralink doctor host cyberstorm-watchtower",
+        "infralink doctor service <host-uuid>/<logical-service-id>",
+    ]
+
+
 def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network_calls(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -211,6 +222,125 @@ def test_doctor_profile_resolves_declared_observation_profile_not_service_or_rol
         "canonical_name": None,
     }
     assert payload["result"]["coverage"]["valid"] is True
+
+
+def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    logical_service_id = f"{HOST_ID}/database-stack"
+    payload["logical_services"] = [
+        {
+            "id": logical_service_id,
+            "host_id": HOST_ID,
+            "primary_service_id": f"{HOST_ID}/postgresql",
+            "component_service_ids": [f"{HOST_ID}/postgresql", f"{HOST_ID}/proxy"],
+            "health_signal_refs": [f"service/{HOST_ID}/postgresql/ready/up"],
+            "source_refs": [],
+        }
+    ]
+    payload["services"].append({"id": f"{HOST_ID}/proxy", "profile_id": "proxy"})
+    payload["dependencies"].append(
+        {
+            "id": "database-stack-internal",
+            "source_service_id": f"{HOST_ID}/postgresql",
+            "target_service_id": f"{HOST_ID}/proxy",
+            "target_endpoint_id": f"{HOST_ID}/proxy/http",
+            "required": True,
+            "execution_adapter": "gatus",
+            "health_signal_refs": ["dependency/database-stack-internal/health/reachable"],
+        }
+    )
+    binding_payload = yaml.safe_load(bindings.read_text(encoding="utf-8"))
+    binding_payload["bindings"].append(
+        {
+            "id": "gatus-database-stack-internal",
+            "renderer_kind": "gatus",
+            "observation_backend_id": "core-health",
+            "output_identity": "database-stack-internal",
+            "signal_ref": "dependency/database-stack-internal/health/reachable",
+        }
+    )
+    binding_payload["bindings"].append(
+        {
+            "id": "gatus-postgresql-ready",
+            "renderer_kind": "gatus",
+            "observation_backend_id": "core-health",
+            "output_identity": "postgresql-ready",
+            "signal_ref": f"service/{HOST_ID}/postgresql/ready/up",
+        }
+    )
+    bindings.write_text(yaml.safe_dump(binding_payload, sort_keys=False), encoding="utf-8")
+    plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "service",
+        logical_service_id,
+        "--validate",
+    )
+    response = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert response["result"]["target"] == {
+        "type": "service",
+        "id": logical_service_id,
+        "canonical_name": "database.example.com/database-stack",
+    }
+    assert response["result"]["declared"] == {
+        "host_id": HOST_ID,
+        "component_service_ids": [f"{HOST_ID}/postgresql", f"{HOST_ID}/proxy"],
+        "component_count": 2,
+    }
+    assert response["result"]["coverage"] == {
+        "required": 3,
+        "bound": 3,
+        "unbound": 0,
+        "unsupported": 0,
+        "valid": True,
+    }
+
+
+def test_doctor_logical_service_fails_coverage_without_component_health_binding(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    logical_service_id = f"{HOST_ID}/database-stack"
+    payload["logical_services"] = [
+        {
+            "id": logical_service_id,
+            "host_id": HOST_ID,
+            "primary_service_id": f"{HOST_ID}/postgresql",
+            "component_service_ids": [f"{HOST_ID}/postgresql"],
+            "health_signal_refs": [f"service/{HOST_ID}/postgresql/ready/up"],
+            "source_refs": [],
+        }
+    ]
+    plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "service",
+        logical_service_id,
+        "--validate",
+    )
+    response = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert response["result"]["coverage"] == {
+        "required": 2,
+        "bound": 1,
+        "unbound": 1,
+        "unsupported": 0,
+        "valid": False,
+    }
+    assert response["result"]["reason"] == "observer_coverage_incomplete"
 
 
 def test_doctor_validate_requires_an_explicit_observation_plan() -> None:

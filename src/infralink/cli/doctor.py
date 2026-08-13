@@ -112,10 +112,10 @@ def _gatus_evidence(
 def _result_status(
     coverage: DoctorCoverage | None, evidence: list[DoctorEvidence], gatus_url: str | None
 ) -> tuple[Literal["healthy", "unhealthy", "unavailable", "unknown"], str | None]:
-    if gatus_url is None and any(item.adapter == "gatus" for item in evidence):
-        return "unknown", "gatus_not_configured"
     if coverage is not None and not coverage.valid:
         return "unknown", "observer_coverage_incomplete"
+    if gatus_url is None and any(item.adapter == "gatus" for item in evidence):
+        return "unknown", "gatus_not_configured"
     statuses = {item.status for item in evidence}
     if "unavailable" in statuses:
         reasons = {item.reason for item in evidence if item.status == "unavailable"}
@@ -313,6 +313,40 @@ def _target(
             raise _missing(ctx, "profile", target_ref, observation_plan, adapter_bindings)
         return DoctorTarget(type="profile", id=target_ref), {"profile_id": target_ref}, target_ref
 
+    logical_service = next(
+        (
+            item
+            for item in (plan or {}).get("logical_services", [])
+            if isinstance(item, dict) and item.get("id") == target_ref
+        ),
+        None,
+    )
+    if logical_service is not None:
+        host_id = logical_service.get("host_id")
+        component_service_ids = logical_service.get("component_service_ids")
+        if not isinstance(host_id, str) or not isinstance(component_service_ids, list):
+            raise _missing(ctx, "service", target_ref, observation_plan, adapter_bindings)
+        components = [item for item in component_service_ids if isinstance(item, str)]
+        if len(components) != len(component_service_ids):
+            raise _missing(ctx, "service", target_ref, observation_plan, adapter_bindings)
+        host = ctx.registry.get(host_id)
+        aggregate_name = target_ref.rsplit("/", 1)[-1]
+        return (
+            DoctorTarget(
+                type="service",
+                id=target_ref,
+                canonical_name=(
+                    f"{host.canonical_name}/{aggregate_name}" if host is not None else None
+                ),
+            ),
+            {
+                "host_id": host_id,
+                "component_service_ids": components,
+                "component_count": len(components),
+            },
+            target_ref,
+        )
+
     service_ids = {
         service_id
         for host in ctx.registry
@@ -356,6 +390,32 @@ def _coverage(
     target_type: DoctorKind | None,
     target_id: str,
 ) -> tuple[DoctorCoverage, list[DoctorEvidence]]:
+    logical_service = next(
+        (
+            item
+            for item in plan.get("logical_services", [])
+            if isinstance(item, dict) and item.get("id") == target_id
+        ),
+        None,
+    )
+    logical_service_components = (
+        {
+            component
+            for component in logical_service.get("component_service_ids", [])
+            if isinstance(component, str)
+        }
+        if logical_service is not None
+        else None
+    )
+    logical_service_signal_refs = (
+        {
+            signal_ref
+            for signal_ref in logical_service.get("health_signal_refs", [])
+            if isinstance(signal_ref, str)
+        }
+        if logical_service is not None
+        else set()
+    )
     profile_services = {
         item["id"]
         for item in plan.get("services", [])
@@ -369,7 +429,14 @@ def _coverage(
         if isinstance(item, dict)
         and (
             target_type is None
-            or _dependency_matches(item, target_type, target_id, profile_services)
+            or (
+                (
+                    (item.get("source_service_id") in logical_service_components)
+                    or (item.get("target_service_id") in logical_service_components)
+                )
+                if logical_service_components is not None
+                else _dependency_matches(item, target_type, target_id, profile_services)
+            )
         )
     ]
     binding_by_identity = {
@@ -412,6 +479,45 @@ def _coverage(
                 reason=reason,
             )
         )
+    observed_signal_refs = {
+        signal_ref
+        for dependency in dependencies
+        for signal_ref in dependency.get("health_signal_refs", [])
+        if isinstance(signal_ref, str)
+    }
+    for signal_ref in sorted(logical_service_signal_refs - observed_signal_refs):
+        required += 1
+        signal_bindings = [
+            binding
+            for binding in (bindings or {}).get("bindings", [])
+            if isinstance(binding, dict)
+            and binding.get("renderer_kind") == "gatus"
+            and binding.get("signal_ref") == signal_ref
+            and isinstance(binding.get("output_identity"), str)
+        ]
+        if len(signal_bindings) == 1:
+            binding = signal_bindings[0]
+            bound += 1
+            evidence.append(
+                DoctorEvidence(
+                    id=binding["output_identity"],
+                    adapter="gatus",
+                    signal_refs=[signal_ref],
+                    status="unknown",
+                    reason="no_live_observation_evidence",
+                )
+            )
+        else:
+            unbound += 1
+            evidence.append(
+                DoctorEvidence(
+                    id=f"logical-service/{target_id}/{signal_ref}",
+                    adapter=None,
+                    signal_refs=[signal_ref],
+                    status="unknown",
+                    reason="observer_binding_undeclared",
+                )
+            )
     return (
         DoctorCoverage(
             required=required,
