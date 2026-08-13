@@ -469,6 +469,15 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
     assert plan_action["safe"] is True
 
 
+def test_doctor_normalizes_single_host_firewall_sources_for_nft() -> None:
+    from infralink.cli.doctor import _firewall_rule_lines
+
+    assert _firewall_rule_lines(
+        {"interface": "tailscale0", "sources": ["100.93.157.126/32"], "ports": [9300]},
+        "tcp",
+    ) == ['iifname "tailscale0" ip saddr 100.93.157.126 tcp dport 9300 accept']
+
+
 def test_doctor_host_fails_closed_when_latest_v2_reconcile_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
