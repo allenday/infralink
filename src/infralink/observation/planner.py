@@ -441,6 +441,22 @@ def resolve_observation_documents(
         )
 
     profiles = _unique(parsed["service_profiles"], "profile", findings)
+    logical_service_ids: set[str] = set()
+    for profile, ref in profiles.values():
+        assert isinstance(profile, ServiceProfile)
+        if profile.logical_service is None:
+            continue
+        logical_service_id = profile.logical_service.id
+        if logical_service_id in logical_service_ids:
+            _finding(
+                findings,
+                "duplicate-logical-service-id",
+                _child(_child(ref, "logical_service"), "id"),
+                logical_service_id,
+                "Give every logical service aggregate a unique identity.",
+            )
+        else:
+            logical_service_ids.add(logical_service_id)
     hosts = _unique(parsed["hosts"], "host", findings)
     instance_entries = parsed["service_instances"]
     aliases = _unique(parsed["provider_aliases"], "provider-alias", findings)
@@ -728,18 +744,20 @@ def resolve_observation_documents(
     service_ids = {service.id for service in planned_services}
     services_by_host_profile: dict[tuple[str, str], list[PlannedService]] = {}
     for service in planned_services:
-        services_by_host_profile.setdefault((service.host_id, service.profile_id), []).append(service)
+        services_by_host_profile.setdefault((service.host_id, service.profile_id), []).append(
+            service
+        )
     planned_logical_services: list[PlannedLogicalService] = []
     for primary in planned_services:
         profile = service_profiles[primary.id]
         aggregate = profile.logical_service
         if aggregate is None:
             continue
-        component_services: list[str] = []
-        health_signal_refs: list[str] = []
+        resolved_components: list[tuple[str, str, tuple[SourceRef, ...]]] = []
         profile_ref = next(
             ref for candidate, ref in profiles.values() if candidate.id == profile.id
         )
+        aggregate_source_refs: list[SourceRef] = [profile_ref, service_refs[primary.id]]
         for component_index, component in enumerate(aggregate.components):
             component_ref = _child(
                 _child(profile_ref, "logical_service"), "components", str(component_index)
@@ -756,6 +774,7 @@ def resolve_observation_documents(
                 continue
             component_service = matches[0]
             component_profile = service_profiles[component_service.id]
+            component_profile_ref = profiles[component.profile_id][1]
             signal = next(
                 (item for item in component_profile.signals if item.id == component.signal_id),
                 None,
@@ -769,20 +788,28 @@ def resolve_observation_documents(
                     "Reference a signal declared by the component profile.",
                 )
                 continue
-            component_services.append(component_service.id)
-            health_signal_refs.append(
-                f"service/{component_service.id}/{signal.capability_id}/{signal.id}"
+            resolved_components.append(
+                (
+                    component_service.id,
+                    f"service/{component_service.id}/{signal.capability_id}/{signal.id}",
+                    (component_ref, component_profile_ref, service_refs[component_service.id]),
+                )
             )
-        if len(component_services) == len(aggregate.components):
+        if len(resolved_components) == len(aggregate.components):
+            resolved_components.sort(key=lambda item: item[0])
+            component_services = tuple(item[0] for item in resolved_components)
+            health_signal_refs = tuple(item[1] for item in resolved_components)
+            for _, _, source_refs in resolved_components:
+                aggregate_source_refs.extend(source_refs)
             planned_logical_services.append(
                 PlannedLogicalService(
                     id=f"{primary.host_id}/{aggregate.id}",
                     host_id=primary.host_id,
                     primary_service_id=primary.id,
                     display_name=aggregate.display_name or primary.display_name,
-                    component_service_ids=tuple(component_services),
-                    health_signal_refs=tuple(health_signal_refs),
-                    source_refs=(profile_ref, service_refs[primary.id]),
+                    component_service_ids=component_services,
+                    health_signal_refs=health_signal_refs,
+                    source_refs=tuple(aggregate_source_refs),
                 )
             )
     planned_dependencies: list[PlannedDependency] = []

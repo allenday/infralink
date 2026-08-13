@@ -26,6 +26,7 @@ DUPLICATE_IDENTITY_KINDS = frozenset(
         "dependency",
         "endpoint",
         "host",
+        "logical-service",
         "observation-backend",
         "profile",
         "provider-alias",
