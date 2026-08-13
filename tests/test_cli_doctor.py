@@ -213,6 +213,65 @@ def test_doctor_profile_resolves_declared_observation_profile_not_service_or_rol
     assert payload["result"]["coverage"]["valid"] is True
 
 
+def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    logical_service_id = f"{HOST_ID}/database-stack"
+    payload["logical_services"] = [
+        {
+            "id": logical_service_id,
+            "host_id": HOST_ID,
+            "primary_service_id": f"{HOST_ID}/postgresql",
+            "component_service_ids": [f"{HOST_ID}/postgresql", f"{HOST_ID}/proxy"],
+            "health_signal_refs": [f"dependency/{OBSERVATION_ID}/health/reachable"],
+            "source_refs": [],
+        }
+    ]
+    payload["services"].append({"id": f"{HOST_ID}/proxy", "profile_id": "proxy"})
+    payload["dependencies"].append(
+        {
+            "id": "database-stack-internal",
+            "source_service_id": f"{HOST_ID}/postgresql",
+            "target_service_id": f"{HOST_ID}/proxy",
+            "target_endpoint_id": f"{HOST_ID}/proxy/http",
+            "required": True,
+            "execution_adapter": "gatus",
+            "health_signal_refs": ["dependency/database-stack-internal/health/reachable"],
+        }
+    )
+    plan.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "service",
+        logical_service_id,
+        "--validate",
+    )
+    response = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert response["result"]["target"] == {
+        "type": "service",
+        "id": logical_service_id,
+        "canonical_name": "database.example.com/database-stack",
+    }
+    assert response["result"]["declared"] == {
+        "host_id": HOST_ID,
+        "component_service_ids": [f"{HOST_ID}/postgresql", f"{HOST_ID}/proxy"],
+        "component_count": 2,
+    }
+    assert response["result"]["coverage"] == {
+        "required": 1,
+        "bound": 1,
+        "unbound": 0,
+        "unsupported": 0,
+        "valid": True,
+    }
+
+
 def test_doctor_validate_requires_an_explicit_observation_plan() -> None:
     result = _invoke("host", "database.example.com", "--validate")
     payload = json.loads(result.output)

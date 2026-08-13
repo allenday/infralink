@@ -313,6 +313,40 @@ def _target(
             raise _missing(ctx, "profile", target_ref, observation_plan, adapter_bindings)
         return DoctorTarget(type="profile", id=target_ref), {"profile_id": target_ref}, target_ref
 
+    logical_service = next(
+        (
+            item
+            for item in (plan or {}).get("logical_services", [])
+            if isinstance(item, dict) and item.get("id") == target_ref
+        ),
+        None,
+    )
+    if logical_service is not None:
+        host_id = logical_service.get("host_id")
+        component_service_ids = logical_service.get("component_service_ids")
+        if not isinstance(host_id, str) or not isinstance(component_service_ids, list):
+            raise _missing(ctx, "service", target_ref, observation_plan, adapter_bindings)
+        components = [item for item in component_service_ids if isinstance(item, str)]
+        if len(components) != len(component_service_ids):
+            raise _missing(ctx, "service", target_ref, observation_plan, adapter_bindings)
+        host = ctx.registry.get(host_id)
+        aggregate_name = target_ref.rsplit("/", 1)[-1]
+        return (
+            DoctorTarget(
+                type="service",
+                id=target_ref,
+                canonical_name=(
+                    f"{host.canonical_name}/{aggregate_name}" if host is not None else None
+                ),
+            ),
+            {
+                "host_id": host_id,
+                "component_service_ids": components,
+                "component_count": len(components),
+            },
+            target_ref,
+        )
+
     service_ids = {
         service_id
         for host in ctx.registry
@@ -356,6 +390,18 @@ def _coverage(
     target_type: DoctorKind | None,
     target_id: str,
 ) -> tuple[DoctorCoverage, list[DoctorEvidence]]:
+    logical_service_components = next(
+        (
+            {
+                component
+                for component in item.get("component_service_ids", [])
+                if isinstance(component, str)
+            }
+            for item in plan.get("logical_services", [])
+            if isinstance(item, dict) and item.get("id") == target_id
+        ),
+        None,
+    )
     profile_services = {
         item["id"]
         for item in plan.get("services", [])
@@ -369,7 +415,14 @@ def _coverage(
         if isinstance(item, dict)
         and (
             target_type is None
-            or _dependency_matches(item, target_type, target_id, profile_services)
+            or (
+                (
+                    (item.get("source_service_id") in logical_service_components)
+                    != (item.get("target_service_id") in logical_service_components)
+                )
+                if logical_service_components is not None
+                else _dependency_matches(item, target_type, target_id, profile_services)
+            )
         )
     ]
     binding_by_identity = {
