@@ -31,10 +31,54 @@ class OperationFailure(ContractModel):
     journal: list[str] = Field(default_factory=list, max_length=8)
 
 
+class HostApplyPlan(ContractModel):
+    registry_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    dispatch_provider: Literal["ssh"]
+    reconcile_mode: Literal["timer"]
+    action_categories: list[Literal["registry_checkout", "render", "reconcile"]]
+
+
+class LastReconcile(ContractModel):
+    status: Literal["success", "failed", "unknown"]
+    registry_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    finished_at: str | None = None
+
+
+class HostTimer(ContractModel):
+    active: bool
+    next_scheduled_at: str | None = None
+
+
+class TargetReconcileStatus(ContractModel):
+    reconcile_mode: Literal["timer"]
+    timer: HostTimer
+    in_progress: bool
+    last_reconcile: LastReconcile
+
+
+class HostStatusResult(TargetReconcileStatus):
+    target: DoctorTarget
+
+
+class HostLogsResult(ContractModel):
+    target: DoctorTarget
+    lines: list[str] = Field(max_length=8)
+
+
+class HostDispatch(ContractModel):
+    provider: Literal["ssh"]
+    status: Literal["accepted", "rejected", "unavailable"]
+
+
 class HostApplyResult(ContractModel):
     operation: OperationSummary | None = Field(default=None, exclude_if=lambda value: value is None)
     target: DoctorTarget
     dry_run: bool = Field(default=False, exclude_if=lambda value: not value)
+    plan: HostApplyPlan | None = Field(default=None, exclude_if=lambda value: value is None)
+    dispatch: HostDispatch | None = Field(default=None, exclude_if=lambda value: value is None)
+    target_status: TargetReconcileStatus | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     failure: OperationFailure | None = Field(default=None, exclude_if=lambda value: value is None)
 
 

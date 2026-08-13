@@ -166,142 +166,36 @@
       "title": "ErrorDetail",
       "type": "object"
     },
-    "HostApplyPlan": {
+    "HostStatusResult": {
       "additionalProperties": false,
       "properties": {
-        "action_categories": {
-          "items": {
-            "enum": [
-              "registry_checkout",
-              "render",
-              "reconcile"
-            ],
-            "type": "string"
-          },
-          "title": "Action Categories",
-          "type": "array"
+        "in_progress": {
+          "title": "In Progress",
+          "type": "boolean"
         },
-        "dispatch_provider": {
-          "const": "ssh",
-          "title": "Dispatch Provider",
-          "type": "string"
+        "last_reconcile": {
+          "$ref": "#/$defs/LastReconcile"
         },
         "reconcile_mode": {
           "const": "timer",
           "title": "Reconcile Mode",
           "type": "string"
         },
-        "registry_revision": {
-          "pattern": "^[0-9a-f]{40}$",
-          "title": "Registry Revision",
-          "type": "string"
-        }
-      },
-      "required": [
-        "registry_revision",
-        "dispatch_provider",
-        "reconcile_mode",
-        "action_categories"
-      ],
-      "title": "HostApplyPlan",
-      "type": "object"
-    },
-    "HostApplyResult": {
-      "additionalProperties": false,
-      "properties": {
-        "dispatch": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HostDispatch"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "dry_run": {
-          "default": false,
-          "title": "Dry Run",
-          "type": "boolean"
-        },
-        "failure": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OperationFailure"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "operation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OperationSummary"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "plan": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HostApplyPlan"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "target": {
           "$ref": "#/$defs/DoctorTarget"
         },
-        "target_status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TargetReconcileStatus"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "timer": {
+          "$ref": "#/$defs/HostTimer"
         }
       },
       "required": [
+        "reconcile_mode",
+        "timer",
+        "in_progress",
+        "last_reconcile",
         "target"
       ],
-      "title": "HostApplyResult",
-      "type": "object"
-    },
-    "HostDispatch": {
-      "additionalProperties": false,
-      "properties": {
-        "provider": {
-          "const": "ssh",
-          "title": "Provider",
-          "type": "string"
-        },
-        "status": {
-          "enum": [
-            "accepted",
-            "rejected",
-            "unavailable"
-          ],
-          "title": "Status",
-          "type": "string"
-        }
-      },
-      "required": [
-        "provider",
-        "status"
-      ],
-      "title": "HostDispatch",
+      "title": "HostStatusResult",
       "type": "object"
     },
     "HostTimer": {
@@ -384,110 +278,6 @@
         }
       },
       "title": "Meta",
-      "type": "object"
-    },
-    "OperationFailure": {
-      "additionalProperties": false,
-      "properties": {
-        "journal": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 8,
-          "title": "Journal",
-          "type": "array"
-        },
-        "unit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OperationUnitFailure"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "title": "OperationFailure",
-      "type": "object"
-    },
-    "OperationSummary": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "pattern": "^(?:op_[A-Za-z0-9_-]{8,128}|ssh/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{32})$",
-          "title": "Id",
-          "type": "string"
-        },
-        "state": {
-          "enum": [
-            "queued",
-            "applying",
-            "converged",
-            "failed"
-          ],
-          "title": "State",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "state"
-      ],
-      "title": "OperationSummary",
-      "type": "object"
-    },
-    "OperationUnitFailure": {
-      "additionalProperties": false,
-      "properties": {
-        "active_state": {
-          "title": "Active State",
-          "type": "string"
-        },
-        "exec_main_status": {
-          "title": "Exec Main Status",
-          "type": "integer"
-        },
-        "result": {
-          "title": "Result",
-          "type": "string"
-        }
-      },
-      "required": [
-        "active_state",
-        "result",
-        "exec_main_status"
-      ],
-      "title": "OperationUnitFailure",
-      "type": "object"
-    },
-    "TargetReconcileStatus": {
-      "additionalProperties": false,
-      "properties": {
-        "in_progress": {
-          "title": "In Progress",
-          "type": "boolean"
-        },
-        "last_reconcile": {
-          "$ref": "#/$defs/LastReconcile"
-        },
-        "reconcile_mode": {
-          "const": "timer",
-          "title": "Reconcile Mode",
-          "type": "string"
-        },
-        "timer": {
-          "$ref": "#/$defs/HostTimer"
-        }
-      },
-      "required": [
-        "reconcile_mode",
-        "timer",
-        "in_progress",
-        "last_reconcile"
-      ],
-      "title": "TargetReconcileStatus",
       "type": "object"
     }
   },
@@ -581,7 +371,7 @@
     "result": {
       "anyOf": [
         {
-          "$ref": "#/$defs/HostApplyResult"
+          "$ref": "#/$defs/HostStatusResult"
         },
         {
           "type": "null"
@@ -601,6 +391,6 @@
     "command",
     "next_actions"
   ],
-  "title": "Envelope[HostApplyResult]",
+  "title": "Envelope[HostStatusResult]",
   "type": "object"
 }

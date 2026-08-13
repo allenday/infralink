@@ -46,10 +46,17 @@ from infralink.cli.contracts import (
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.operation_contracts import (
+    HostApplyPlan,
     HostApplyResult,
+    HostDispatch,
+    HostLogsResult,
+    HostStatusResult,
+    HostTimer,
     HostVerifierResult,
+    LastReconcile,
     OperationStatusResult,
     OperationSummary,
+    TargetReconcileStatus,
 )
 from infralink.cli.output import (
     command_context,
@@ -365,6 +372,18 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
             "infralink host apply relaxgg-db-es1",
             "infralink host apply relaxgg-db-es1 --wait",
         ],
+    },
+    ("host", "status"): {
+        "description": "Read target timer and latest reconcile evidence.",
+        "arguments": [{"name": "host_ref", "type": "string", "required": True}],
+        "options": [],
+        "examples": ["infralink host status relaxgg-db-es1"],
+    },
+    ("host", "logs"): {
+        "description": "Read bounded sanitized evidence from the target's latest reconcile run.",
+        "arguments": [{"name": "host_ref", "type": "string", "required": True}],
+        "options": [{"name": "last_run", "type": "boolean", "required": True}],
+        "examples": ["infralink host logs relaxgg-db-es1 --last-run"],
     },
     ("operation",): {
         "description": "Inspect declared host-local reconcile operations.",
@@ -2305,10 +2324,34 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
     request = resolve_apply_request(ctx.registry_path, target)
     doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
     if dry_run:
+        completed = subprocess.run(
+            ["git", "-C", str(ctx.registry_path.parent), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        revision = completed.stdout.strip()
+        if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise CliFailure(
+                code=ErrorCode.INPUT_LOAD_FAILED,
+                message="Selected registry revision could not be resolved",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Use a Git checkout containing the selected registry revision",
+                details={"registry": str(ctx.registry_path)},
+            )
         _emit(
             ok_envelope(
                 _context_for(path=["host", "apply"]),
-                HostApplyResult(target=doctor_target, dry_run=True),
+                HostApplyResult(
+                    target=doctor_target,
+                    dry_run=True,
+                    plan=HostApplyPlan(
+                        registry_revision=revision,
+                        dispatch_provider="ssh",
+                        reconcile_mode="timer",
+                        action_categories=["registry_checkout", "render", "reconcile"],
+                    ),
+                ),
                 [
                     action(
                         "apply",
@@ -2322,7 +2365,40 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         return 0
 
     provider = operation_provider()
-    record = provider.submit(request)
+    try:
+        record = provider.submit(request)
+    except CliFailure as failure:
+        dispatch_status = failure.details.get("dispatch")
+        if failure.code != ErrorCode.PROVIDER_UNAVAILABLE or dispatch_status not in {
+            "rejected",
+            "unavailable",
+        }:
+            raise
+        from infralink.cli.operations import inspect_target_status
+
+        target_status = _target_reconcile_status(inspect_target_status(request))
+        result = HostApplyResult(
+            target=doctor_target,
+            dispatch=HostDispatch(
+                provider="ssh",
+                status=cast(Literal["rejected", "unavailable"], dispatch_status),
+            ),
+            target_status=target_status,
+        )
+        actions = [
+            action(
+                "status",
+                [*_root_source_argv(ctx), "host", "status", target.uuid],
+                "Inspect the target timer and latest reconcile result",
+            ),
+            action(
+                "logs",
+                [*_root_source_argv(ctx), "host", "logs", target.uuid, "--last-run"],
+                "Inspect bounded evidence from the target's latest reconcile run",
+            ),
+        ]
+        _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
+        return 0 if target_status.last_reconcile.status == "success" else 1
     if wait:
         record = wait_for_terminal(provider, record.id, request, timeout_seconds=timeout)
     result = HostApplyResult(
@@ -2331,6 +2407,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
             state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
         ),
         target=doctor_target,
+        dispatch=HostDispatch(provider="ssh", status="accepted"),
         failure=record.failure,
     )
     actions = []
@@ -2352,6 +2429,107 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         )
     _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
     return 0 if record.state == "converged" or not wait else 1
+
+
+def _target_reconcile_status(values: dict[str, str]) -> TargetReconcileStatus:
+    result_value = values.get("unit_result")
+    status = "success" if result_value == "success" else "failed" if result_value else "unknown"
+    sha = values.get("registry_sha")
+    active = values.get("unit_active") in {"active", "activating", "reloading"}
+    return TargetReconcileStatus(
+        reconcile_mode="timer",
+        timer=HostTimer(
+            active=values.get("timer_active") == "active",
+            next_scheduled_at=values.get("timer_next") or None,
+        ),
+        in_progress=active,
+        last_reconcile=LastReconcile(
+            status=cast(Literal["success", "failed", "unknown"], status),
+            registry_sha=sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else None,
+            finished_at=(
+                values["finished_at"]
+                if re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                    values.get("finished_at", ""),
+                )
+                else None
+            ),
+        ),
+    )
+
+
+@host.command(name="status")
+@click.argument("host_ref")
+@pass_context
+def host_status(ctx: Context, host_ref: str) -> int:
+    """Read the declared host's timer and latest reconcile evidence."""
+    from infralink.cli.operations import inspect_target_status, resolve_apply_request
+
+    target = ctx.registry.get(host_ref)
+    if target is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    values = inspect_target_status(resolve_apply_request(ctx.registry_path, target))
+    target_status = _target_reconcile_status(values)
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "status"]),
+            HostStatusResult(
+                target=DoctorTarget(
+                    type="host", id=target.uuid, canonical_name=target.canonical_name
+                ),
+                **target_status.model_dump(),
+            ),
+            [
+                action(
+                    "logs",
+                    [*_root_source_argv(ctx), "host", "logs", target.uuid, "--last-run"],
+                    "Inspect bounded evidence from the target's latest reconcile run",
+                )
+            ],
+        )
+    )
+    return 0 if target_status.last_reconcile.status == "success" else 1
+
+
+@host.command(name="logs")
+@click.argument("host_ref")
+@click.option(
+    "--last-run",
+    is_flag=True,
+    required=True,
+    help="Show bounded evidence from the latest reconcile run.",
+)
+@pass_context
+def host_logs(ctx: Context, host_ref: str, last_run: bool) -> int:
+    """Read bounded sanitized evidence from the declared host's latest reconcile run."""
+    from infralink.cli.operations import inspect_target_logs, resolve_apply_request
+
+    target = ctx.registry.get(host_ref)
+    if target is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "logs"]),
+            HostLogsResult(
+                target=DoctorTarget(
+                    type="host", id=target.uuid, canonical_name=target.canonical_name
+                ),
+                lines=inspect_target_logs(resolve_apply_request(ctx.registry_path, target)),
+            ),
+            [
+                action(
+                    "status",
+                    [*_root_source_argv(ctx), "host", "status", target.uuid],
+                    "Inspect target reconcile status",
+                )
+            ],
+        )
+    )
+    return 0
 
 
 @click.group()

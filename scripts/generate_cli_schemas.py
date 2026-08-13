@@ -44,6 +44,8 @@ from infralink.cli.observation_contracts import (
 )
 from infralink.cli.operation_contracts import (
     HostApplyResult,
+    HostLogsResult,
+    HostStatusResult,
     HostVerifierResult,
     OperationStatusResult,
 )
@@ -60,6 +62,8 @@ MODELS: dict[str, Any] = {
     "host-bootstrap": Envelope[HostBootstrapPlanResult],
     "host-verifier": Envelope[HostVerifierResult],
     "host-apply": Envelope[HostApplyResult],
+    "host-status": Envelope[HostStatusResult],
+    "host-logs": Envelope[HostLogsResult],
     "operation-status": Envelope[OperationStatusResult],
     "services": Envelope[ServiceListResult],
     "service-show": Envelope[ServiceShowResult],

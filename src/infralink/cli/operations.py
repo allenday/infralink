@@ -72,6 +72,48 @@ systemctl show "$unit" -p InvocationID -p ActiveState -p Result -p ExecMainStatu
 printf '%s\n' '__INFRALINK_JOURNAL__'
 journalctl --quiet --no-pager --output=cat _SYSTEMD_INVOCATION_ID="$invocation" || true
 """
+_TARGET_STATUS_REMOTE = """set -eu
+unit=$1
+timer=${unit%.service}.timer
+timer_active=$(systemctl show "$timer" -p ActiveState --value 2>/dev/null || true)
+timer_next_raw=$(systemctl show "$timer" -p NextElapseUSecRealtime --value 2>/dev/null || true)
+timer_next=$(date -u -d "$timer_next_raw" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+unit_active=$(systemctl show "$unit" -p ActiveState --value 2>/dev/null || true)
+unit_result=$(systemctl show "$unit" -p Result --value 2>/dev/null || true)
+unit_status=$(systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || true)
+printf 'timer_active=%s\n' "$timer_active"
+printf 'timer_next=%s\n' "$timer_next"
+printf 'unit_active=%s\n' "$unit_active"
+printf 'unit_result=%s\n' "$unit_result"
+printf 'unit_status=%s\n' "$unit_status"
+result=/var/lib/infralink/reconcile-result.yml
+if [ -f "$result" ]; then
+  sha=$(awk '
+    /^[[:space:]]*registry_sha:[[:space:]]*[0-9a-f]{40}[[:space:]]*$/ {
+      sub(/^[[:space:]]*registry_sha:[[:space:]]*/, ""); print; exit
+    }
+    /^[[:space:]]*head:[[:space:]]*[0-9a-f]{40}[[:space:]]*$/ {
+      sub(/^[[:space:]]*head:[[:space:]]*/, ""); print; exit
+    }
+    /^[[:space:]]*registry_head:[[:space:]]*[0-9a-f]{40}[[:space:]]*$/ {
+      sub(/^[[:space:]]*registry_head:[[:space:]]*/, ""); print; exit
+    }
+  ' "$result")
+  finished=$(awk '
+    /^[[:space:]]*(finished_at|observed_at):[[:space:]]*'"'"'?[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'"'"'?[[:space:]]*$/ {
+      sub(/^[[:space:]]*(finished_at|observed_at):[[:space:]]*/, "")
+      gsub(/'"'"'/, "")
+      print; exit
+    }
+  ' "$result")
+  printf 'registry_sha=%s\n' "$sha"
+  printf 'finished_at=%s\n' "$finished"
+fi
+"""
+_TARGET_LOGS_REMOTE = """set -eu
+unit=$1
+journalctl --quiet --no-pager --output=cat -u "$unit" -n 8 || true
+"""
 _VERIFIER_REMOTE = """set -eu
 registry=$1
 runtime_root=$2
@@ -221,6 +263,101 @@ class SshOperationProvider:
             request.verifier_layout,
         )
 
+    def target_status(self, request: ApplyRequest) -> dict[str, str]:
+        return self._run_target_status(request)
+
+    def target_logs(self, request: ApplyRequest) -> list[str]:
+        return self._run_target_logs(request)
+
+    def _run_target_status(self, request: ApplyRequest) -> dict[str, str]:
+        try:
+            with _pinned_known_hosts(request) as known_hosts:
+                completed = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=10",
+                        "-o",
+                        "LogLevel=ERROR",
+                        "-o",
+                        "StrictHostKeyChecking=yes",
+                        "-o",
+                        f"UserKnownHostsFile={known_hosts}",
+                        "-p",
+                        str(request.port),
+                        f"{request.user}@{request.address}",
+                        "sh",
+                        "-s",
+                        "--",
+                        request.unit,
+                    ],
+                    input=_TARGET_STATUS_REMOTE,
+                    text=True,
+                    capture_output=True,
+                    timeout=20,
+                    check=False,
+                )
+        except (OSError, subprocess.TimeoutExpired):
+            raise _provider_failure(
+                "Declared host SSH reconcile operation is unavailable"
+            ) from None
+        if completed.returncode != 0:
+            raise _provider_failure("Declared host rejected the reconcile status request")
+        return {
+            key: value
+            for line in completed.stdout.splitlines()
+            if "=" in line
+            for key, value in [line.split("=", 1)]
+        }
+
+    def _run_target_logs(self, request: ApplyRequest) -> list[str]:
+        try:
+            with _pinned_known_hosts(request) as known_hosts:
+                completed = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=10",
+                        "-o",
+                        "LogLevel=ERROR",
+                        "-o",
+                        "StrictHostKeyChecking=yes",
+                        "-o",
+                        f"UserKnownHostsFile={known_hosts}",
+                        "-p",
+                        str(request.port),
+                        f"{request.user}@{request.address}",
+                        "sh",
+                        "-s",
+                        "--",
+                        request.unit,
+                    ],
+                    input=_TARGET_LOGS_REMOTE,
+                    text=True,
+                    capture_output=True,
+                    timeout=20,
+                    check=False,
+                )
+        except (OSError, subprocess.TimeoutExpired):
+            raise _provider_failure(
+                "Declared host SSH reconcile operation is unavailable"
+            ) from None
+        if completed.returncode != 0:
+            raise _provider_failure("Declared host rejected the reconcile log request")
+        records: list[dict[str, Any]] = []
+        for line in completed.stdout.splitlines():
+            try:
+                value = yaml.safe_load(line)
+            except yaml.YAMLError:
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+        return _sanitize_journal(records)
+
     def _run(
         self,
         request: ApplyRequest,
@@ -274,10 +411,13 @@ class SshOperationProvider:
                 )
         except (OSError, subprocess.TimeoutExpired):
             raise _provider_failure(
-                "Declared host SSH reconcile operation is unavailable"
+                "Declared host SSH reconcile operation is unavailable",
+                details={"dispatch": "unavailable"},
             ) from None
         if completed.returncode != 0:
-            raise _provider_failure("Declared host rejected the reconcile operation")
+            raise _provider_failure(
+                "Declared host rejected the reconcile operation", details={"dispatch": "rejected"}
+            )
         if verifier is not None:
             return _parse_verifier_output(completed.stdout)
         values = _parse_properties(completed.stdout)
@@ -311,6 +451,14 @@ def operation_provider() -> OperationProvider:
 def inspect_verifier(request: ApplyRequest) -> HostVerifierDiagnostic:
     """Return fixed, read-only V2 verifier facts over the declared SSH transport."""
     return SshOperationProvider().inspect_verifier(request)
+
+
+def inspect_target_status(request: ApplyRequest) -> dict[str, str]:
+    return SshOperationProvider().target_status(request)
+
+
+def inspect_target_logs(request: ApplyRequest) -> list[str]:
+    return SshOperationProvider().target_logs(request)
 
 
 def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
