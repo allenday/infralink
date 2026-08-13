@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from shlex import quote
 
 from infralink.host_readiness import HostReadinessProbe
 
@@ -64,6 +65,9 @@ fi
 class SshReadinessTransport:
     """Collect the bootstrap baseline over root SSH without remote mutation."""
 
+    def __init__(self, expected_firewall_rules: tuple[str, ...] = ()) -> None:
+        self._expected_firewall_rules = expected_firewall_rules
+
     def probe(self, address: str) -> HostReadinessProbe:
         if not address:
             return _unreachable("host_address_missing")
@@ -81,7 +85,7 @@ class SshReadinessTransport:
                     "sh",
                     "-s",
                 ],
-                input=_REMOTE_PROBE,
+                input=_REMOTE_PROBE + _firewall_probe(self._expected_firewall_rules),
                 text=True,
                 capture_output=True,
                 timeout=15,
@@ -122,7 +126,27 @@ class SshReadinessTransport:
             self_deploy_reconcile_exit_timestamp_monotonic=_optional_int(
                 values.get("self_deploy_reconcile_exit_timestamp_monotonic")
             ),
+            firewall_rules_expected=len(self._expected_firewall_rules),
+            firewall_rules_matched=_optional_int(values.get("firewall_rules_matched")) or 0,
+            firewall_observable=values.get("firewall_observable", "1") == "1",
         )
+
+
+def _firewall_probe(expected_rules: tuple[str, ...]) -> str:
+    if not expected_rules:
+        return "printf 'firewall_rules_matched=0\\nfirewall_observable=1\\n'\n"
+    checks = "\n".join(
+        f"if printf '%s\\n' \"$firewall_chain\" | grep -F -- {quote(rule)} >/dev/null; then firewall_rules_matched=$((firewall_rules_matched + 1)); fi"
+        for rule in expected_rules
+    )
+    return f"""if firewall_chain=\"$(nft list chain inet infralink_filter input 2>/dev/null)\"; then
+  firewall_rules_matched=0
+{checks}
+  printf 'firewall_observable=1\\nfirewall_rules_matched=%s\\n' \"$firewall_rules_matched\"
+else
+  printf 'firewall_observable=0\\nfirewall_rules_matched=0\\n'
+fi
+"""
 
 
 def _parse_probe(stdout: str) -> dict[str, str]:

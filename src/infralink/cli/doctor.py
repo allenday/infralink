@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
@@ -487,7 +488,60 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
     host = ctx.registry.get(target_ref)
     if host is None:
         return None
-    return evaluate_host_readiness(host, SshReadinessTransport())
+    return evaluate_host_readiness(
+        host, SshReadinessTransport(_declared_firewall_rules(ctx, str(host.uuid)))
+    )
+
+
+def _declared_firewall_rules(ctx: Context, host_uuid: str) -> tuple[str, ...]:
+    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+        return ()
+    deployment_path = ctx.registry_path / host_uuid / "operations" / "deployment.yml"
+    try:
+        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return ()
+    firewall = deployment.get("firewall") if isinstance(deployment, dict) else None
+    if not isinstance(firewall, dict):
+        return ()
+    rules: list[str] = []
+    management = firewall.get("management_ssh")
+    if isinstance(management, dict):
+        rules.extend(_firewall_rule_lines(management, "tcp"))
+    ingress = firewall.get("ingress")
+    if isinstance(ingress, list):
+        for entry in ingress:
+            if isinstance(entry, dict) and entry.get("protocol") in {"tcp", "udp"}:
+                rules.extend(_firewall_rule_lines(entry, str(entry["protocol"])))
+    return tuple(rules)
+
+
+def _firewall_rule_lines(entry: dict[str, Any], protocol: str) -> list[str]:
+    interface, sources = entry.get("interface"), entry.get("sources")
+    ports = entry.get("ports", [entry.get("port")])
+    if (
+        not isinstance(interface, str)
+        or not isinstance(sources, list)
+        or not isinstance(ports, list)
+    ):
+        return []
+    return [
+        f'iifname "{interface}" ip saddr {_nft_source(source)} {protocol} dport {port} accept'
+        for source in sources
+        for port in ports
+        if isinstance(source, str) and isinstance(port, int)
+    ]
+
+
+def _nft_source(source: str) -> str:
+    """Match nft's canonical display, which suppresses an IPv4 /32 suffix."""
+    try:
+        network = ip_network(source, strict=True)
+    except ValueError:
+        return source
+    return (
+        str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
+    )
 
 
 def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:

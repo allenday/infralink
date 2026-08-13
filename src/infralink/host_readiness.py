@@ -35,6 +35,9 @@ class HostReadinessProbe:
     self_deploy_reconcile_active_state: str | None = None
     self_deploy_reconcile_sub_state: str | None = None
     self_deploy_reconcile_exit_timestamp_monotonic: int | None = None
+    firewall_rules_expected: int = 0
+    firewall_rules_matched: int = 0
+    firewall_observable: bool = True
 
 
 @dataclass(frozen=True)
@@ -232,6 +235,27 @@ class HostReadinessEvaluator:
             )
             for requirement in BASELINE_REQUIREMENTS
         ]
+        if probe.firewall_rules_expected:
+            firewall_passed = (
+                probe.reachable
+                and probe.firewall_observable
+                and probe.firewall_rules_matched == probe.firewall_rules_expected
+            )
+            checks.append(
+                ReadinessCheck(
+                    id="declared_firewall",
+                    required=True,
+                    passed=firewall_passed,
+                    description="Declared firewall ingress is active.",
+                    detail=None
+                    if firewall_passed
+                    else (
+                        "firewall_unobservable"
+                        if not probe.firewall_observable
+                        else f"{probe.firewall_rules_matched}/{probe.firewall_rules_expected}_rules_matched"
+                    ),
+                )
+            )
         actions = [
             BootstrapAction(
                 id=requirement.action_id,
@@ -242,6 +266,17 @@ class HostReadinessEvaluator:
             if next(check for check in checks if check.id == requirement.id).required
             and not outcomes[requirement.id][0]
         ]
+        if (
+            probe.firewall_rules_expected
+            and not next(check for check in checks if check.id == "declared_firewall").passed
+        ):
+            actions.append(
+                BootstrapAction(
+                    id="reconcile_declared_firewall",
+                    check_id="declared_firewall",
+                    description="Run reconciliation to apply the declared firewall ingress.",
+                )
+            )
         return HostReadiness(
             ready=all(not check.required or check.passed for check in checks),
             checks=checks,

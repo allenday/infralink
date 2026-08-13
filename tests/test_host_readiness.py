@@ -117,6 +117,18 @@ def test_v2_reconcile_success_satisfies_readiness() -> None:
     assert reconcile.passed is True
 
 
+def test_declared_firewall_fails_closed_when_a_rule_is_missing() -> None:
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relaxgg-db-es1",
+        probe=_probe(firewall_rules_expected=2, firewall_rules_matched=1),
+    )
+
+    check = next(check for check in readiness.checks if check.id == "declared_firewall")
+    assert check.passed is False
+    assert check.detail == "1/2_rules_matched"
+    assert any(action.id == "reconcile_declared_firewall" for action in readiness.actions)
+
+
 def test_provisioning_host_without_declared_reconcile_does_not_require_timer_or_run() -> None:
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name="relaxgg-db-es1",
