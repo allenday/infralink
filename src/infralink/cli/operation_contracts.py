@@ -38,6 +38,24 @@ class HostApplyPlan(ContractModel):
     action_categories: list[Literal["registry_checkout", "render", "reconcile"]]
 
 
+class LastReconcile(ContractModel):
+    status: Literal["success", "failed", "unknown"]
+    registry_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    finished_at: str | None = None
+
+
+class HostTimer(ContractModel):
+    active: bool
+    next_scheduled_at: str | None = None
+
+
+class HostStatusResult(ContractModel):
+    target: DoctorTarget
+    reconcile_mode: Literal["timer"]
+    timer: HostTimer
+    last_reconcile: LastReconcile
+
+
 class HostApplyResult(ContractModel):
     operation: OperationSummary | None = Field(default=None, exclude_if=lambda value: value is None)
     target: DoctorTarget

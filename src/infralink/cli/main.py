@@ -48,7 +48,10 @@ from infralink.cli.host_readiness import evaluate_host_readiness
 from infralink.cli.operation_contracts import (
     HostApplyPlan,
     HostApplyResult,
+    HostStatusResult,
+    HostTimer,
     HostVerifierResult,
+    LastReconcile,
     OperationStatusResult,
     OperationSummary,
 )
@@ -2377,6 +2380,52 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         )
     _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
     return 0 if record.state == "converged" or not wait else 1
+
+
+@host.command(name="status")
+@click.argument("host_ref")
+@pass_context
+def host_status(ctx: Context, host_ref: str) -> int:
+    """Read the declared host's timer and latest reconcile evidence."""
+    from infralink.cli.operations import inspect_target_status, resolve_apply_request
+
+    target = ctx.registry.get(host_ref)
+    if target is None:
+        raise entity_not_found("host", host_ref)
+    if ctx.registry_path is None:
+        raise configuration_required("registry")
+    values = inspect_target_status(resolve_apply_request(ctx.registry_path, target))
+    result_value = values.get("unit_result")
+    status = "success" if result_value == "success" else "failed" if result_value else "unknown"
+    sha = values.get("registry_sha")
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "status"]),
+            HostStatusResult(
+                target=DoctorTarget(
+                    type="host", id=target.uuid, canonical_name=target.canonical_name
+                ),
+                reconcile_mode="timer",
+                timer=HostTimer(
+                    active=values.get("timer_active") == "active",
+                    next_scheduled_at=values.get("timer_next") or None,
+                ),
+                last_reconcile=LastReconcile(
+                    status=cast(Literal["success", "failed", "unknown"], status),
+                    registry_sha=sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else None,
+                    finished_at=values.get("finished_at") or None,
+                ),
+            ),
+            [
+                action(
+                    "doctor",
+                    [*_root_source_argv(ctx), "doctor", "host", target.uuid],
+                    "Inspect declared and observed host health",
+                )
+            ],
+        )
+    )
+    return 0 if status == "success" else 1
 
 
 @click.group()

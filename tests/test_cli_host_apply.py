@@ -576,6 +576,43 @@ def test_host_apply_refuses_a_host_without_declared_ssh_reconcile_contract(tmp_p
     assert "declared" in payload["error"]["message"].lower()
 
 
+def test_host_status_reads_target_timer_and_last_reconcile_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            "timer_active=active\n"
+            "timer_next=2026-08-13T17:00:00Z\n"
+            "unit_active=inactive\n"
+            "unit_result=success\n"
+            "unit_status=0\n"
+            "registry_sha=" + "a" * 40 + "\n"
+            "finished_at=2026-08-13T16:00:00Z\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "status", HOST_ID])
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert payload["result"] == {
+        "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
+        "reconcile_mode": "timer",
+        "timer": {"active": True, "next_scheduled_at": "2026-08-13T17:00:00Z"},
+        "last_reconcile": {
+            "status": "success",
+            "registry_sha": "a" * 40,
+            "finished_at": "2026-08-13T16:00:00Z",
+        },
+    }
+
+
 def test_host_apply_refuses_a_noncanonical_ssh_fingerprint(tmp_path: Path) -> None:
     registry = _registry_checkout(tmp_path)
     contract = registry / HOST_ID / "operations" / "contract.yml"
