@@ -14,6 +14,7 @@ from uuid import UUID
 
 import pytest
 
+from infralink import __version__
 from infralink.adapters.bws import (
     BwsConfig,
     BwsConfigurationError,
@@ -477,7 +478,7 @@ def test_default_factory_uses_sdk_21_settings_and_version_user_agent(
             "apiUrl": HOSTED_API_URL,
             "identityUrl": HOSTED_IDENTITY_URL,
             "deviceType": DeviceType.SDK,
-            "userAgent": "infralink/0.5.0",
+            "userAgent": f"infralink/{__version__}",
         }
     ]
 
