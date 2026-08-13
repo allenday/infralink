@@ -401,6 +401,72 @@ def test_configured_unhealthy_required_gatus_evidence_is_nonzero(
     assert payload["result"]["reason"] == "gatus_observation_unhealthy"
 
 
+def test_doctor_uses_the_latest_gatus_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: [
+            {
+                "name": OBSERVATION_ID,
+                "results": [
+                    {"success": False, "timestamp": "2026-08-09T00:00:00Z"},
+                    {"success": True, "timestamp": "2026-08-09T00:01:00Z"},
+                ],
+            }
+        ],
+    )
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        OBSERVATION_ID,
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["status"] == "healthy"
+    assert payload["result"]["evidence_summary"][0]["latest_observed_at"] == "2026-08-09T00:01:00Z"
+
+
+def test_doctor_rejects_a_malformed_latest_gatus_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: [
+            {
+                "name": OBSERVATION_ID,
+                "results": [{"success": True}, "malformed"],
+            }
+        ],
+    )
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        OBSERVATION_ID,
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unknown"
+    assert payload["result"]["reason"] == "no_live_observation_evidence"
+    assert payload["result"]["evidence"][0]["reason"] == "gatus_result_missing"
+
+
 def test_doctor_unknown_host_returns_a_bounded_canonical_discovery_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
