@@ -68,7 +68,7 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
-_CONTROL_ROOT = Path("/opt/infra")
+_CONTROL_ROOT = Path(os.environ.get("INFRALINK_CONTROL_ROOT", "/opt/infra"))
 BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
     {
         "create_devops_account",

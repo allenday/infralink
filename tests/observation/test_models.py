@@ -98,7 +98,10 @@ def test_dependency_contract_preserves_explicit_adapter_or_legacy_null() -> None
         "health_signal_ref": "dependency/api-to-frontend/health/reachable",
     }
 
-    assert DependencyContract(**base, execution_adapter="edge-prober").execution_adapter == "edge-prober"
+    assert (
+        DependencyContract(**base, execution_adapter="edge-prober").execution_adapter
+        == "edge-prober"
+    )
     assert DependencyContract(**base, execution_adapter=None).execution_adapter is None
 
 

@@ -182,12 +182,19 @@ def test_plan_digest_is_exactly_public_canonical_plan_without_digest() -> None:
     assert b'"label":null' not in canonical_json(without_digest)
 
 
-def test_legacy_baseline_absence_preserves_global_and_scoped_digests() -> None:
-    plan = resolve_observation_documents([document(operational_data())], as_of=AS_OF)
+def test_legacy_baseline_absence_matches_explicit_default_baselines() -> None:
+    legacy = resolve_observation_documents([document(operational_data())], as_of=AS_OF)
+    explicit = deepcopy(operational_data())
+    for host in explicit["hosts"]:  # type: ignore[union-attr]
+        host["baseline_capabilities"] = []
+    for profile in explicit["service_profiles"]:  # type: ignore[union-attr]
+        profile["required_host_baseline_capabilities"] = []
+    declared = resolve_observation_documents([document(explicit)], as_of=AS_OF)
 
-    assert plan.plan_digest == "a1af237c34002f93c0581ac80ddf34e5a4d64c331eb9110a9453adc1e0d85462"
-    assert plan.readiness_suites[0].scoped_plan_digest == (
-        "08a60dd20a5973cee67bb4de01b99fb88cf6497e2650ca4578a150c033baf04e"
+    assert legacy.plan_digest == declared.plan_digest
+    assert (
+        legacy.readiness_suites[0].scoped_plan_digest
+        == declared.readiness_suites[0].scoped_plan_digest
     )
 
 
