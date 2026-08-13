@@ -85,8 +85,8 @@ def _gatus_evidence(
         else:
             results = status.get("results")
             latest = (
-                results[0]
-                if isinstance(results, list) and results and isinstance(results[0], dict)
+                results[-1]
+                if isinstance(results, list) and results and isinstance(results[-1], dict)
                 else {}
             )
             success = latest.get("success")
