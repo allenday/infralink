@@ -30,6 +30,31 @@ HOST_NAME = "database.example.com"
 HOST_FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 
+def test_control_root_can_be_supplied_by_the_controller_runtime(
+    tmp_path: Path,
+) -> None:
+    environment = {
+        **os.environ,
+        "INFRALINK_CONTROL_ROOT": str(tmp_path),
+        "PYTHONPATH": str(ROOT / "src"),
+    }
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from infralink.cli.main import _CONTROL_ROOT; print(_CONTROL_ROOT)",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == str(tmp_path)
+
+
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args],
