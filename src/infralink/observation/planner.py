@@ -441,9 +441,11 @@ def resolve_observation_documents(
         )
 
     profiles = _unique(parsed["service_profiles"], "profile", findings)
+    profile_entries: dict[str, tuple[ServiceProfile, SourceRef]] = {}
     logical_service_ids: set[str] = set()
     for profile, ref in profiles.values():
         assert isinstance(profile, ServiceProfile)
+        profile_entries[profile.id] = (profile, ref)
         if profile.logical_service is None:
             continue
         logical_service_id = profile.logical_service.id
@@ -754,9 +756,7 @@ def resolve_observation_documents(
         if aggregate is None:
             continue
         resolved_components: list[tuple[str, str, tuple[SourceRef, ...]]] = []
-        profile_ref = next(
-            ref for candidate, ref in profiles.values() if candidate.id == profile.id
-        )
+        profile_ref = profile_entries[profile.id][1]
         aggregate_source_refs: list[SourceRef] = [profile_ref, service_refs[primary.id]]
         for component_index, component in enumerate(aggregate.components):
             component_ref = _child(
@@ -774,12 +774,12 @@ def resolve_observation_documents(
                 continue
             component_service = matches[0]
             component_profile = service_profiles[component_service.id]
-            component_profile_ref = profiles[component.profile_id][1]
-            signal = next(
+            component_profile_ref = profile_entries[component.profile_id][1]
+            component_signal = next(
                 (item for item in component_profile.signals if item.id == component.signal_id),
                 None,
             )
-            if signal is None:
+            if component_signal is None:
                 _finding(
                     findings,
                     "logical-service-component-signal-unknown",
@@ -791,7 +791,10 @@ def resolve_observation_documents(
             resolved_components.append(
                 (
                     component_service.id,
-                    f"service/{component_service.id}/{signal.capability_id}/{signal.id}",
+                    (
+                        f"service/{component_service.id}/"
+                        f"{component_signal.capability_id}/{component_signal.id}"
+                    ),
                     (component_ref, component_profile_ref, service_refs[component_service.id]),
                 )
             )
