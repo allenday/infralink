@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime, timezone
 from types import MappingProxyType
 
@@ -115,6 +116,160 @@ def test_resolves_two_hosts_and_exact_signal_namespaces_deterministically() -> N
     assert plan.dependencies[0].execution_adapter == "gatus"
     assert plan.schema_version == "infralink.plan.v1"
     assert plan.document_digests == ("contract.yml",)
+
+
+def test_projects_a_same_host_logical_service_from_declared_components() -> None:
+    data = base_data()
+    data["service_profiles"][0]["logical_service"] = {  # type: ignore[index]
+        "id": "web-stack",
+        "display_name": "Web Stack",
+        "components": [
+            {"profile_id": "web", "signal_id": "up"},
+            {"profile_id": "proxy", "signal_id": "up"},
+        ],
+    }
+    data["service_profiles"].append(  # type: ignore[index]
+        {
+            "id": "proxy",
+            "endpoints": [{"id": "http", "protocol": "http", "port": 8081}],
+            "health": [{"id": "ready", "endpoint_id": "http", "evaluator": "http-status"}],
+            "signals": [{"id": "up", "capability_id": "ready", "evaluator": "capability-state"}],
+        }
+    )
+    data["service_instances"].extend(  # type: ignore[index]
+        [
+            {
+                "id": "api-proxy",
+                "host_id": "11111111-1111-4111-8111-111111111111",
+                "profile_id": "proxy",
+            },
+            {
+                "id": "frontend-proxy",
+                "host_id": "22222222-2222-4222-8222-222222222222",
+                "profile_id": "proxy",
+            },
+        ]
+    )
+
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert [item.id for item in plan.logical_services] == [
+        "11111111-1111-4111-8111-111111111111/web-stack",
+        "22222222-2222-4222-8222-222222222222/web-stack",
+    ]
+    assert plan.logical_services[0].component_service_ids == (
+        "11111111-1111-4111-8111-111111111111/api",
+        "11111111-1111-4111-8111-111111111111/api-proxy",
+    )
+    assert plan.logical_services[0].health_signal_refs == (
+        "service/11111111-1111-4111-8111-111111111111/api/ready/up",
+        "service/11111111-1111-4111-8111-111111111111/api-proxy/ready/up",
+    )
+    assert [ref.pointer for ref in plan.logical_services[0].source_refs] == [
+        "/service_profiles/0",
+        "/service_instances/1",
+        "/service_profiles/0/logical_service/components/0",
+        "/service_profiles/0",
+        "/service_instances/1",
+        "/service_profiles/0/logical_service/components/1",
+        "/service_profiles/1",
+        "/service_instances/2",
+    ]
+    reordered_data = deepcopy(data)
+    reordered_data["service_profiles"][0]["logical_service"]["components"].reverse()  # type: ignore[index]
+
+    reordered_plan = resolve_observation_documents([document(reordered_data)], as_of=AS_OF)
+
+    assert [item.component_service_ids for item in reordered_plan.logical_services] == [
+        item.component_service_ids for item in plan.logical_services
+    ]
+    assert [item.health_signal_refs for item in reordered_plan.logical_services] == [
+        item.health_signal_refs for item in plan.logical_services
+    ]
+    assert reordered_plan.plan_digest == plan.plan_digest
+
+
+def test_rejects_duplicate_logical_service_ids() -> None:
+    data = base_data()
+    logical_service = {
+        "id": "web-stack",
+        "components": [{"profile_id": "web", "signal_id": "up"}],
+    }
+    data["service_profiles"][0]["logical_service"] = logical_service  # type: ignore[index]
+    data["service_profiles"].append(  # type: ignore[index]
+        {
+            "id": "proxy",
+            "endpoints": [{"id": "http", "protocol": "http", "port": 8081}],
+            "health": [{"id": "ready", "endpoint_id": "http", "evaluator": "http-status"}],
+            "signals": [{"id": "up", "capability_id": "ready", "evaluator": "capability-state"}],
+            "logical_service": {
+                "id": "web-stack",
+                "components": [{"profile_id": "proxy", "signal_id": "up"}],
+            },
+        }
+    )
+
+    with pytest.raises(PlanValidationError) as error:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert {item.code for item in error.value.report.diagnostics} == {
+        "duplicate-logical-service-id"
+    }
+
+
+def test_rejects_missing_or_ambiguous_logical_service_components() -> None:
+    data = base_data()
+    data["service_profiles"][0]["logical_service"] = {  # type: ignore[index]
+        "id": "web-stack",
+        "components": [
+            {"profile_id": "web", "signal_id": "up"},
+            {"profile_id": "proxy", "signal_id": "up"},
+        ],
+    }
+    data["service_profiles"].append(  # type: ignore[index]
+        {
+            "id": "proxy",
+            "endpoints": [{"id": "http", "protocol": "http", "port": 8081}],
+            "health": [{"id": "ready", "endpoint_id": "http", "evaluator": "http-status"}],
+            "signals": [{"id": "up", "capability_id": "ready", "evaluator": "capability-state"}],
+        }
+    )
+    data["service_instances"].extend(  # type: ignore[index]
+        [
+            {
+                "id": "api-proxy-a",
+                "host_id": "11111111-1111-4111-8111-111111111111",
+                "profile_id": "proxy",
+            },
+            {
+                "id": "api-proxy-b",
+                "host_id": "11111111-1111-4111-8111-111111111111",
+                "profile_id": "proxy",
+            },
+        ]
+    )
+
+    with pytest.raises(PlanValidationError) as error:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert {item.code for item in error.value.report.diagnostics} == {
+        "logical-service-component-unresolved"
+    }
+
+
+def test_rejects_unknown_logical_service_component_signal() -> None:
+    data = base_data()
+    data["service_profiles"][0]["logical_service"] = {  # type: ignore[index]
+        "id": "web-stack",
+        "components": [{"profile_id": "web", "signal_id": "missing"}],
+    }
+
+    with pytest.raises(PlanValidationError) as error:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert {item.code for item in error.value.report.diagnostics} == {
+        "logical-service-component-signal-unknown"
+    }
 
 
 def test_projects_explicit_host_and_service_display_names_without_identity_changes() -> None:

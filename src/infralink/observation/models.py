@@ -209,6 +209,28 @@ class SecretSlot(StrictModel):
     purpose: Annotated[str, Field(min_length=1)]
 
 
+class LogicalServiceComponent(StrictModel):
+    """One required same-host component of an operator-facing service."""
+
+    profile_id: CanonicalId
+    signal_id: CanonicalId
+
+
+class LogicalService(StrictModel):
+    """A profile-owned aggregate of ordinary component profiles."""
+
+    id: CanonicalId
+    display_name: Annotated[str, Field(min_length=1)] | None = None
+    components: Annotated[list[LogicalServiceComponent], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def reject_duplicate_component_profiles(self) -> LogicalService:
+        profile_ids = [component.profile_id for component in self.components]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ValueError("duplicate logical service component profile")
+        return self
+
+
 class ServiceProfile(StrictModel):
     id: CanonicalId
     display_name: Annotated[str, Field(min_length=1)] | None = None
@@ -219,6 +241,7 @@ class ServiceProfile(StrictModel):
     signals: list[LogicalSignal] = Field(default_factory=list)
     secret_slots: list[SecretSlot] = Field(default_factory=list)
     required_host_baseline_capabilities: list[HostBaselineCapability] = Field(default_factory=list)
+    logical_service: LogicalService | None = None
 
     @model_validator(mode="after")
     def validate_endpoint_references(self) -> ServiceProfile:
@@ -226,6 +249,10 @@ class ServiceProfile(StrictModel):
             set(self.required_host_baseline_capabilities)
         ):
             raise ValueError("duplicate host baseline capability in service profile")
+        if self.logical_service is not None and self.id not in {
+            component.profile_id for component in self.logical_service.components
+        }:
+            raise ValueError("logical service must include its owning profile")
         endpoint_id_list = [endpoint.id for endpoint in self.endpoints]
         if len(endpoint_id_list) != len(set(endpoint_id_list)):
             raise ValueError("duplicate endpoint id in service profile")

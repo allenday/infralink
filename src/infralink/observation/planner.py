@@ -84,6 +84,16 @@ class PlannedServiceProfile(PlanModel):
     source_refs: tuple[SourceRef, ...]
 
 
+class PlannedLogicalService(PlanModel):
+    id: str
+    host_id: str
+    primary_service_id: str
+    display_name: Annotated[str, Field(min_length=1)] | None = None
+    component_service_ids: tuple[str, ...]
+    health_signal_refs: tuple[str, ...]
+    source_refs: tuple[SourceRef, ...]
+
+
 class PlannedEndpoint(PlanModel):
     id: str
     service_id: str
@@ -258,6 +268,7 @@ class Plan(PlanModel):
     service_profiles: tuple[PlannedServiceProfile, ...]
     hosts: tuple[PlannedHost, ...]
     services: tuple[PlannedService, ...]
+    logical_services: tuple[PlannedLogicalService, ...] = ()
     endpoints: tuple[PlannedEndpoint, ...]
     applications: tuple[PlannedApplication, ...]
     dependencies: tuple[PlannedDependency, ...]
@@ -430,6 +441,24 @@ def resolve_observation_documents(
         )
 
     profiles = _unique(parsed["service_profiles"], "profile", findings)
+    profile_entries: dict[str, tuple[ServiceProfile, SourceRef]] = {}
+    logical_service_ids: set[str] = set()
+    for profile, ref in profiles.values():
+        assert isinstance(profile, ServiceProfile)
+        profile_entries[profile.id] = (profile, ref)
+        if profile.logical_service is None:
+            continue
+        logical_service_id = profile.logical_service.id
+        if logical_service_id in logical_service_ids:
+            _finding(
+                findings,
+                "duplicate-logical-service-id",
+                _child(_child(ref, "logical_service"), "id"),
+                logical_service_id,
+                "Give every logical service aggregate a unique identity.",
+            )
+        else:
+            logical_service_ids.add(logical_service_id)
     hosts = _unique(parsed["hosts"], "host", findings)
     instance_entries = parsed["service_instances"]
     aliases = _unique(parsed["provider_aliases"], "provider-alias", findings)
@@ -715,6 +744,77 @@ def resolve_observation_documents(
     endpoint_map = _index_planned(planned_endpoints, "endpoint", findings)
     signal_map = _index_planned(planned_signals, "signal", findings)
     service_ids = {service.id for service in planned_services}
+    services_by_host_profile: dict[tuple[str, str], list[PlannedService]] = {}
+    for service in planned_services:
+        services_by_host_profile.setdefault((service.host_id, service.profile_id), []).append(
+            service
+        )
+    planned_logical_services: list[PlannedLogicalService] = []
+    for primary in planned_services:
+        profile = service_profiles[primary.id]
+        aggregate = profile.logical_service
+        if aggregate is None:
+            continue
+        resolved_components: list[tuple[str, str, tuple[SourceRef, ...]]] = []
+        profile_ref = profile_entries[profile.id][1]
+        aggregate_source_refs: list[SourceRef] = [profile_ref, service_refs[primary.id]]
+        for component_index, component in enumerate(aggregate.components):
+            component_ref = _child(
+                _child(profile_ref, "logical_service"), "components", str(component_index)
+            )
+            matches = services_by_host_profile.get((primary.host_id, component.profile_id), [])
+            if len(matches) != 1:
+                _finding(
+                    findings,
+                    "logical-service-component-unresolved",
+                    _child(component_ref, "profile_id"),
+                    f"{primary.host_id}/{aggregate.id}/{component.profile_id}",
+                    "Declare exactly one same-host instance for each logical service component profile.",
+                )
+                continue
+            component_service = matches[0]
+            component_profile = service_profiles[component_service.id]
+            component_profile_ref = profile_entries[component.profile_id][1]
+            component_signal = next(
+                (item for item in component_profile.signals if item.id == component.signal_id),
+                None,
+            )
+            if component_signal is None:
+                _finding(
+                    findings,
+                    "logical-service-component-signal-unknown",
+                    _child(component_ref, "signal_id"),
+                    f"{primary.host_id}/{aggregate.id}/{component.profile_id}/{component.signal_id}",
+                    "Reference a signal declared by the component profile.",
+                )
+                continue
+            resolved_components.append(
+                (
+                    component_service.id,
+                    (
+                        f"service/{component_service.id}/"
+                        f"{component_signal.capability_id}/{component_signal.id}"
+                    ),
+                    (component_ref, component_profile_ref, service_refs[component_service.id]),
+                )
+            )
+        if len(resolved_components) == len(aggregate.components):
+            resolved_components.sort(key=lambda item: item[0])
+            component_services = tuple(item[0] for item in resolved_components)
+            health_signal_refs = tuple(item[1] for item in resolved_components)
+            for _, _, source_refs in resolved_components:
+                aggregate_source_refs.extend(source_refs)
+            planned_logical_services.append(
+                PlannedLogicalService(
+                    id=f"{primary.host_id}/{aggregate.id}",
+                    host_id=primary.host_id,
+                    primary_service_id=primary.id,
+                    display_name=aggregate.display_name or primary.display_name,
+                    component_service_ids=component_services,
+                    health_signal_refs=health_signal_refs,
+                    source_refs=tuple(aggregate_source_refs),
+                )
+            )
     planned_dependencies: list[PlannedDependency] = []
     for edge, ref in dependencies.values():
         assert isinstance(edge, DependencyContract)
@@ -1351,6 +1451,7 @@ def resolve_observation_documents(
         service_profiles=_sorted(planned_profiles),
         hosts=_sorted(planned_hosts),
         services=_sorted(planned_services),
+        logical_services=_sorted(planned_logical_services),
         endpoints=_sorted(planned_endpoints),
         applications=_sorted(planned_apps),
         dependencies=_sorted(planned_dependencies),

@@ -12,7 +12,7 @@
               "type": "null"
             }
           ],
-          "default": null,
+          "default": "gatus",
           "title": "Execution Adapter"
         },
         "health_signal_ref": {
