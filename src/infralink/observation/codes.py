@@ -55,6 +55,8 @@ PLANNER_DIAGNOSTIC_CODES = _DYNAMIC_DUPLICATE_CODES | frozenset(
         "invalid-dependency-health-signal-ref",
         "invalid-document-record",
         "invalid-document-section",
+        "logical-service-component-signal-unknown",
+        "logical-service-component-unresolved",
         "missing-service-host",
         "missing-required-host-baseline-capability",
         "host-metrics-profile-capability-required",

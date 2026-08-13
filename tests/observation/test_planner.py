@@ -117,6 +117,57 @@ def test_resolves_two_hosts_and_exact_signal_namespaces_deterministically() -> N
     assert plan.document_digests == ("contract.yml",)
 
 
+def test_projects_a_same_host_logical_service_from_declared_components() -> None:
+    data = base_data()
+    data["service_profiles"][0]["logical_service"] = {  # type: ignore[index]
+        "id": "web-stack",
+        "display_name": "Web Stack",
+        "components": [
+            {"profile_id": "web", "signal_id": "up"},
+            {"profile_id": "proxy", "signal_id": "up"},
+        ],
+    }
+    data["service_profiles"].append(  # type: ignore[index]
+        {
+            "id": "proxy",
+            "endpoints": [{"id": "http", "protocol": "http", "port": 8081}],
+            "health": [{"id": "ready", "endpoint_id": "http", "evaluator": "http-status"}],
+            "signals": [
+                {"id": "up", "capability_id": "ready", "evaluator": "capability-state"}
+            ],
+        }
+    )
+    data["service_instances"].extend(  # type: ignore[index]
+        [
+            {
+                "id": "api-proxy",
+                "host_id": "11111111-1111-4111-8111-111111111111",
+                "profile_id": "proxy",
+            },
+            {
+                "id": "frontend-proxy",
+                "host_id": "22222222-2222-4222-8222-222222222222",
+                "profile_id": "proxy",
+            },
+        ]
+    )
+
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert [item.id for item in plan.logical_services] == [
+        "11111111-1111-4111-8111-111111111111/web-stack",
+        "22222222-2222-4222-8222-222222222222/web-stack",
+    ]
+    assert plan.logical_services[0].component_service_ids == (
+        "11111111-1111-4111-8111-111111111111/api",
+        "11111111-1111-4111-8111-111111111111/api-proxy",
+    )
+    assert plan.logical_services[0].health_signal_refs == (
+        "service/11111111-1111-4111-8111-111111111111/api/ready/up",
+        "service/11111111-1111-4111-8111-111111111111/api-proxy/ready/up",
+    )
+
+
 def test_projects_explicit_host_and_service_display_names_without_identity_changes() -> None:
     data = base_data()
     data["hosts"][0]["display_name"] = "Operations API"  # type: ignore[index]

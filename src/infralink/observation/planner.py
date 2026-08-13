@@ -84,6 +84,16 @@ class PlannedServiceProfile(PlanModel):
     source_refs: tuple[SourceRef, ...]
 
 
+class PlannedLogicalService(PlanModel):
+    id: str
+    host_id: str
+    primary_service_id: str
+    display_name: Annotated[str, Field(min_length=1)] | None = None
+    component_service_ids: tuple[str, ...]
+    health_signal_refs: tuple[str, ...]
+    source_refs: tuple[SourceRef, ...]
+
+
 class PlannedEndpoint(PlanModel):
     id: str
     service_id: str
@@ -258,6 +268,7 @@ class Plan(PlanModel):
     service_profiles: tuple[PlannedServiceProfile, ...]
     hosts: tuple[PlannedHost, ...]
     services: tuple[PlannedService, ...]
+    logical_services: tuple[PlannedLogicalService, ...] = ()
     endpoints: tuple[PlannedEndpoint, ...]
     applications: tuple[PlannedApplication, ...]
     dependencies: tuple[PlannedDependency, ...]
@@ -715,6 +726,65 @@ def resolve_observation_documents(
     endpoint_map = _index_planned(planned_endpoints, "endpoint", findings)
     signal_map = _index_planned(planned_signals, "signal", findings)
     service_ids = {service.id for service in planned_services}
+    services_by_host_profile: dict[tuple[str, str], list[PlannedService]] = {}
+    for service in planned_services:
+        services_by_host_profile.setdefault((service.host_id, service.profile_id), []).append(service)
+    planned_logical_services: list[PlannedLogicalService] = []
+    for primary in planned_services:
+        profile = service_profiles[primary.id]
+        aggregate = profile.logical_service
+        if aggregate is None:
+            continue
+        component_services: list[str] = []
+        health_signal_refs: list[str] = []
+        profile_ref = next(
+            ref for candidate, ref in profiles.values() if candidate.id == profile.id
+        )
+        for component_index, component in enumerate(aggregate.components):
+            component_ref = _child(
+                _child(profile_ref, "logical_service"), "components", str(component_index)
+            )
+            matches = services_by_host_profile.get((primary.host_id, component.profile_id), [])
+            if len(matches) != 1:
+                _finding(
+                    findings,
+                    "logical-service-component-unresolved",
+                    _child(component_ref, "profile_id"),
+                    f"{primary.host_id}/{aggregate.id}/{component.profile_id}",
+                    "Declare exactly one same-host instance for each logical service component profile.",
+                )
+                continue
+            component_service = matches[0]
+            component_profile = service_profiles[component_service.id]
+            signal = next(
+                (item for item in component_profile.signals if item.id == component.signal_id),
+                None,
+            )
+            if signal is None:
+                _finding(
+                    findings,
+                    "logical-service-component-signal-unknown",
+                    _child(component_ref, "signal_id"),
+                    f"{primary.host_id}/{aggregate.id}/{component.profile_id}/{component.signal_id}",
+                    "Reference a signal declared by the component profile.",
+                )
+                continue
+            component_services.append(component_service.id)
+            health_signal_refs.append(
+                f"service/{component_service.id}/{signal.capability_id}/{signal.id}"
+            )
+        if len(component_services) == len(aggregate.components):
+            planned_logical_services.append(
+                PlannedLogicalService(
+                    id=f"{primary.host_id}/{aggregate.id}",
+                    host_id=primary.host_id,
+                    primary_service_id=primary.id,
+                    display_name=aggregate.display_name or primary.display_name,
+                    component_service_ids=tuple(component_services),
+                    health_signal_refs=tuple(health_signal_refs),
+                    source_refs=(profile_ref, service_refs[primary.id]),
+                )
+            )
     planned_dependencies: list[PlannedDependency] = []
     for edge, ref in dependencies.values():
         assert isinstance(edge, DependencyContract)
@@ -1351,6 +1421,7 @@ def resolve_observation_documents(
         service_profiles=_sorted(planned_profiles),
         hosts=_sorted(planned_hosts),
         services=_sorted(planned_services),
+        logical_services=_sorted(planned_logical_services),
         endpoints=_sorted(planned_endpoints),
         applications=_sorted(planned_apps),
         dependencies=_sorted(planned_dependencies),

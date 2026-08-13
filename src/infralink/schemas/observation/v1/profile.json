@@ -197,6 +197,66 @@
       "title": "LogEvaluator",
       "type": "string"
     },
+    "LogicalService": {
+      "additionalProperties": false,
+      "description": "A profile-owned aggregate of ordinary component profiles.",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/LogicalServiceComponent"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "components"
+      ],
+      "title": "LogicalService",
+      "type": "object"
+    },
+    "LogicalServiceComponent": {
+      "additionalProperties": false,
+      "description": "One required same-host component of an operator-facing service.",
+      "properties": {
+        "profile_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "signal_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Signal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "signal_id"
+      ],
+      "title": "LogicalServiceComponent",
+      "type": "object"
+    },
     "LogicalSignal": {
       "additionalProperties": false,
       "description": "A vendor-neutral assertion derived from one declared capability.",
@@ -398,6 +458,17 @@
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
           "title": "Id",
           "type": "string"
+        },
+        "logical_service": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalService"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "logs": {
           "items": {

@@ -503,6 +503,14 @@
           "title": "Hosts",
           "type": "array"
         },
+        "logical_services": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PlannedLogicalService"
+          },
+          "title": "Logical Services",
+          "type": "array"
+        },
         "opaque_identities": {
           "items": {
             "$ref": "#/$defs/OpaqueIdentity"
@@ -957,6 +965,67 @@
         "source_refs"
       ],
       "title": "PlannedHost",
+      "type": "object"
+    },
+    "PlannedLogicalService": {
+      "additionalProperties": false,
+      "properties": {
+        "component_service_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Component Service Ids",
+          "type": "array"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
+        "health_signal_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Health Signal Refs",
+          "type": "array"
+        },
+        "host_id": {
+          "title": "Host Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "primary_service_id": {
+          "title": "Primary Service Id",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "host_id",
+        "primary_service_id",
+        "component_service_ids",
+        "health_signal_refs",
+        "source_refs"
+      ],
+      "title": "PlannedLogicalService",
       "type": "object"
     },
     "PlannedOperationsView": {
