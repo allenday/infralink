@@ -112,6 +112,7 @@ def test_resolves_two_hosts_and_exact_signal_namespaces_deterministically() -> N
     assert plan.dependencies[0].health_signal_refs == (
         "dependency/api-to-frontend/health/reachable",
     )
+    assert plan.dependencies[0].execution_adapter == "gatus"
     assert plan.schema_version == "infralink.plan.v1"
     assert plan.document_digests == ("contract.yml",)
 

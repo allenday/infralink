@@ -73,6 +73,35 @@ def test_host_baseline_capabilities_are_closed_and_explicit() -> None:
         Host(id="11111111-1111-4111-8111-111111111111", baseline_capabilities=["ssh"])
 
 
+def test_dependency_contract_defaults_to_gatus() -> None:
+    dependency = DependencyContract(
+        id="api-to-frontend",
+        source_service_id="11111111-1111-4111-8111-111111111111/api",
+        target_service_id="22222222-2222-4222-8222-222222222222/frontend",
+        target_endpoint_id="22222222-2222-4222-8222-222222222222/frontend/http",
+        protocol=EndpointProtocol.HTTP,
+        port=8080,
+        health_signal_ref="dependency/api-to-frontend/health/reachable",
+    )
+
+    assert dependency.execution_adapter == "gatus"
+
+
+def test_dependency_contract_preserves_explicit_adapter_or_legacy_null() -> None:
+    base = {
+        "id": "api-to-frontend",
+        "source_service_id": "11111111-1111-4111-8111-111111111111/api",
+        "target_service_id": "22222222-2222-4222-8222-222222222222/frontend",
+        "target_endpoint_id": "22222222-2222-4222-8222-222222222222/frontend/http",
+        "protocol": EndpointProtocol.HTTP,
+        "port": 8080,
+        "health_signal_ref": "dependency/api-to-frontend/health/reachable",
+    }
+
+    assert DependencyContract(**base, execution_adapter="edge-prober").execution_adapter == "edge-prober"
+    assert DependencyContract(**base, execution_adapter=None).execution_adapter is None
+
+
 @pytest.mark.parametrize(
     ("model", "field"),
     [

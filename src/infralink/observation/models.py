@@ -362,7 +362,7 @@ class DependencyContract(StrictModel):
     port: Port
     required: bool = True
     health_signal_ref: QualifiedRef
-    execution_adapter: str | None = None
+    execution_adapter: str | None = "gatus"
 
 
 class Application(StrictModel):
