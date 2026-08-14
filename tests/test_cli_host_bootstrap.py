@@ -4,14 +4,17 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from infralink.cli.contracts import (
     HostBootstrapAction,
     HostControllerBootstrapState,
+    HostReadinessCheck,
     HostReadinessResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode
@@ -21,6 +24,7 @@ from infralink.cli.main import (
     _apply_bootstrap_request,
     _apply_controller_refresh,
     _bootstrap_executor_actions,
+    _bootstrap_plan_actions,
     _bootstrap_tailnet_address,
     _controller_bootstrap_state,
     _controller_refresh_source,
@@ -224,6 +228,108 @@ def test_bootstrap_dry_plan_marks_a_missing_token_as_required() -> None:
     assert not planned.ready
     assert planned.checks[-1].detail == "bws_token_required"
     assert planned.actions[-1].id == "provide_bws_token"
+
+
+def test_bootstrap_cli_plan_advertises_apply_when_only_bws_token_is_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    bws_machine_account: host-machine\n"
+        "    bws_projects: [fleet]\n",
+        encoding="utf-8",
+    )
+
+    @contextmanager
+    def transport(*_args: object):
+        yield type("Transport", (), {"probe": lambda _self, _address: object()})()
+
+    monkeypatch.setattr("infralink.cli.main._bootstrap_pinned_transport", transport)
+    monkeypatch.setattr("infralink.cli.main._require_remote_tailnet_identity", lambda *_args: None)
+    monkeypatch.setattr(
+        "infralink.cli.main._controller_bootstrap_state",
+        lambda *_args: HostControllerBootstrapState.model_validate(
+            {
+                "controller_image": "ghcr.io/example/controller:main",
+                "registry_read_identity_secret": {
+                    "project": "fleet",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                },
+                "registry_repo_url": "https://example.invalid/registry.git",
+                "registry_ref": "main",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.main.evaluate_host_readiness",
+        lambda *_args, **_kwargs: HostReadinessResult(
+            transport="root_ssh", ready=True, checks=[], actions=[]
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--registry", str(registry), "host", "bootstrap", HOST_ID, "--ssh-host", "100.64.68.83"],
+    )
+
+    assert result.exit_code == 1
+    payload = yaml.safe_load(result.output)
+    apply = next(item for item in payload["next_actions"] if item["rel"] == "apply")
+    assert apply["command"] == (
+        "printf '%s\\n' \"$HOST_BWS_TOKEN\" | "
+        f"infralink --registry {registry} host bootstrap {HOST_ID} "
+        "--ssh-host 100.64.68.83 --bws-token-stdin --apply"
+    )
+    assert apply["safe"] is False
+
+
+def test_bootstrap_plan_omits_apply_handoff_when_any_other_prerequisite_is_missing(
+    tmp_path: Path,
+) -> None:
+    context = Context()
+    context.registry_path = tmp_path / "hosts"
+    target = type(
+        "Target",
+        (),
+        {"uuid": HOST_ID, "canonical_name": HOST_NAME},
+    )()
+    readiness = _readiness_with_bws_token_required(
+        HostReadinessResult(
+            transport="root_ssh",
+            ready=False,
+            checks=[
+                HostReadinessCheck(
+                    id="docker",
+                    required=True,
+                    passed=False,
+                    description="Docker is missing.",
+                )
+            ],
+            actions=[
+                HostBootstrapAction(
+                    id="install_docker",
+                    check_id="docker",
+                    description="Install Docker.",
+                )
+            ],
+        )
+    )
+
+    actions = _bootstrap_plan_actions(
+        context,
+        target,
+        "100.64.68.83",
+        readiness,
+        bws_token_supplied=False,
+    )
+
+    assert [item.rel for item in actions] == ["reinspect-readiness"]
 
 
 def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_action() -> None:

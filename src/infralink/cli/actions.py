@@ -69,6 +69,14 @@ def render_action(
     inherited_options: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Render a pasteable action without repeating the current command context."""
+    if not action_value.argv:
+        return {
+            "rel": action_value.rel,
+            "command": action_value.command,
+            "description": action_value.description,
+            "safe": action_value.safe,
+        }
+
     argv: list[str] = []
     index = 0
     while index < len(action_value.argv):
