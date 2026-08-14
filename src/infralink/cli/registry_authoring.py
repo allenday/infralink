@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import Iterable, MutableMapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 import yaml
@@ -194,7 +194,7 @@ def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) ->
 def _mapping_child(node: MappingNode, key: str) -> Node | None:
     for key_node, value_node in node.value:
         if isinstance(key_node, ScalarNode) and key_node.value == key:
-            return value_node
+            return cast(Node, value_node)
     return None
 
 
