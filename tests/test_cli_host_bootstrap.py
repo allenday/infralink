@@ -22,11 +22,11 @@ from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_rea
 from infralink.cli.main import (
     Context,
     _apply_bootstrap_request,
-    _bootstrap_failure_details,
     _apply_controller_refresh,
     _bootstrap_apply_request,
     _bootstrap_executor_actions,
     _bootstrap_executor_source,
+    _bootstrap_failure_details,
     _bootstrap_plan_actions,
     _bootstrap_tailnet_address,
     _controller_bootstrap_state,
@@ -53,7 +53,7 @@ def test_bootstrap_failure_details_exposes_sanitized_failed_task_evidence() -> N
         stdout=(
             "TASK [Bootstrap the controller-owned host runtime] *******************\n"
             "task path: /app/ansible/tasks/infralink_host_baseline.yml:96\n"
-            "fatal: [100.91.194.110]: FAILED! => {\"censored\": \"the output has been hidden\"}\n"
+            'fatal: [100.91.194.110]: FAILED! => {"censored": "the output has been hidden"}\n'
         ),
         stderr=f"[WARNING]: BWS_ACCESS_TOKEN={token} was provided by the environment\n",
     )
