@@ -382,6 +382,36 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "options": [{"name": "last_run", "type": "boolean", "required": True}],
         "examples": ["infralink host logs relaxgg-db-es1 --last-run"],
     },
+    ("registry",): {
+        "description": "Inspect and author local registry declarations.",
+        "arguments": [],
+        "options": [],
+        "examples": ["infralink registry host get relaxgg-db-es1"],
+    },
+    ("registry", "host"): {
+        "description": "Resolve and patch host declarations in an operator working tree.",
+        "arguments": [],
+        "options": [],
+        "examples": ["infralink registry host get relaxgg-db-es1"],
+    },
+    ("registry", "host", "get"): {
+        "description": "Resolve a host to its authoritative manifest and declaration.",
+        "arguments": [{"name": "host_ref", "type": "string", "required": True}],
+        "options": [],
+        "examples": ["infralink registry host get relaxgg-db-es1"],
+    },
+    ("registry", "host", "patch"): {
+        "description": "Preview or explicitly write typed dot-addressed host mutations.",
+        "arguments": [{"name": "host_ref", "type": "string", "required": True}],
+        "options": [
+            {"name": "set", "type": "text", "required": True},
+            {"name": "write", "type": "boolean", "required": False},
+        ],
+        "examples": [
+            "infralink registry host patch HOST --set controller_bootstrap.bootstrap_note=@text:FILE",
+            "infralink registry host patch HOST --set controller_bootstrap.pull_enabled=@yaml:FILE --write",
+        ],
+    },
     ("operation",): {
         "description": "Inspect declared host-local reconcile operations.",
         "arguments": [],
