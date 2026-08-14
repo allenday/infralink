@@ -368,6 +368,59 @@ def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation(
     )
 
 
+def test_bootstrap_reports_missing_controller_declaration_with_inspection_action(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    bws_machine_account: host-machine\n"
+        "    bws_projects: [fleet]\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--registry", str(registry), "host", "bootstrap", HOST_ID, "--ssh-host", "100.64.68.83"],
+    )
+
+    assert result.exit_code == 3
+    payload = yaml.safe_load(result.output)
+    assert payload["error"] == {
+        "code": "configuration_required",
+        "message": "Selected host declaration lacks canonical controller bootstrap state",
+        "details": {
+            "host": HOST_ID,
+            "manifest_path": str(manifest),
+            "deployment_path": str(registry / HOST_ID / "operations" / "deployment.yml"),
+            "required_manifest_fields": [
+                "controller_bootstrap.registry_read_identity_secret.project",
+                "controller_bootstrap.registry_read_identity_secret.id",
+                "controller_bootstrap.registry_repo_url",
+                "controller_bootstrap.registry_ref",
+            ],
+            "required_deployment_fields": [
+                "controller.image.repository",
+                "controller.image.tag",
+                "controller.image.branch (when controller.image.tag is head)",
+            ],
+        },
+    }
+    assert payload["next_actions"] == [
+        {
+            "rel": "inspect",
+            "command": f"infralink --registry {registry} host show {HOST_ID}",
+            "description": "Inspect the target host declaration",
+            "safe": True,
+        }
+    ]
+
+
 def test_bootstrap_dirty_control_checkout_cannot_run_the_privileged_executor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -2414,7 +2414,36 @@ def _controller_bootstrap_state(
             message="Selected host declaration lacks canonical controller bootstrap state",
             exit_code=ExitCode.INPUT_ERROR,
             fix="Declare controller_bootstrap with registry key reference, repository, and ref",
-            details={"host": target.uuid},
+            details={
+                "host": target.uuid,
+                "manifest_path": str(manifest_path),
+                "deployment_path": str(deployment_path),
+                "required_manifest_fields": [
+                    "controller_bootstrap.registry_read_identity_secret.project",
+                    "controller_bootstrap.registry_read_identity_secret.id",
+                    "controller_bootstrap.registry_repo_url",
+                    "controller_bootstrap.registry_ref",
+                ],
+                "required_deployment_fields": [
+                    "controller.image.repository",
+                    "controller.image.tag",
+                    "controller.image.branch (when controller.image.tag is head)",
+                ],
+            },
+            next_actions=[
+                action(
+                    "inspect",
+                    [
+                        *_action_argv_prefix(),
+                        "--registry",
+                        str(registry_path),
+                        "host",
+                        "show",
+                        target.uuid,
+                    ],
+                    "Inspect the target host declaration",
+                )
+            ],
         ) from None
     return state
 
