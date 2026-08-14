@@ -44,13 +44,14 @@ def evaluate_host_readiness(
         )
         probe = transport.probe(str(selected_address))
         transport_name = "root_ssh"
-    requires_v2_registry_layout = bool(getattr(host, "self_deploy_v2_registry_layout_enabled", False))
+    requires_v2_registry_layout = bool(
+        getattr(host, "self_deploy_v2_registry_layout_enabled", False)
+    )
     requires_controller_reconcile = bool(getattr(host, "controller_bootstrap", None))
     # Canonical controller bootstrap hosts must prove the normal reconcile loop;
     # they do not carry legacy V2 declaration flags.
     require_reconcile = bool(
-        getattr(host, "self_deploy_v2_reconcile_enabled", False)
-        or requires_controller_reconcile
+        getattr(host, "self_deploy_v2_reconcile_enabled", False) or requires_controller_reconcile
     )
     probe = replace(
         probe,

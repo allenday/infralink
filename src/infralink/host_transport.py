@@ -187,7 +187,11 @@ def _parse_probe(stdout: str) -> dict[str, str]:
     for line in stdout.splitlines():
         key, separator, value = line.partition("=")
         if separator and key:
-            values[key] = f"{values[key]} {value}".strip() if key == "tailscale_ip" and key in values else value
+            values[key] = (
+                f"{values[key]} {value}".strip()
+                if key == "tailscale_ip" and key in values
+                else value
+            )
     return values
 
 

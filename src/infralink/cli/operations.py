@@ -509,9 +509,15 @@ def _manifest_request(
         try:
             parsed_address = ipaddress.ip_address(address)
         except ValueError:
-            raise _registry_failure("Controller bootstrap Tailnet address is invalid", path) from None
-        if not isinstance(parsed_address, ipaddress.IPv4Address) or parsed_address not in ipaddress.ip_network("100.64.0.0/10"):
-            raise _registry_failure("Controller bootstrap Tailnet address is outside the tailnet range", path)
+            raise _registry_failure(
+                "Controller bootstrap Tailnet address is invalid", path
+            ) from None
+        if not isinstance(
+            parsed_address, ipaddress.IPv4Address
+        ) or parsed_address not in ipaddress.ip_network("100.64.0.0/10"):
+            raise _registry_failure(
+                "Controller bootstrap Tailnet address is outside the tailnet range", path
+            )
         fingerprint = _normalize_manifest_fingerprint(ssh.get("host_key_fingerprint"))
         if fingerprint is None:
             raise _registry_failure("Controller bootstrap SSH fingerprint is invalid", path)
