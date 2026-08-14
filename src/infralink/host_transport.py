@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import subprocess
-from shlex import quote
 from pathlib import Path
+from shlex import quote
 
 from infralink.host_readiness import HostReadinessProbe
 
