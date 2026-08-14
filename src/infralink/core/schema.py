@@ -325,6 +325,8 @@ class HostSchema(NodeSchema):
     bws_project: str | None = None
     bws_machine_account: str | None = None
     bws_extra_projects: list[str] = Field(default_factory=list)
+    bws_projects: list[str] = Field(default_factory=list)
+    controller_bootstrap: dict[str, Any] | None = None
     bootstrap_executor: HostBootstrapExecutorSchema | None = None
 
     # Provider-specific metadata (hcloud_project, robot_id, etc.)

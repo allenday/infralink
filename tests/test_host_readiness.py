@@ -249,10 +249,10 @@ self_deploy_reconcile_exit_timestamp_monotonic=123
     assert probe.self_deploy_reconcile_exit_timestamp_monotonic == 123
 
 
-def test_ssh_transport_requires_a_nonempty_bws_token_in_etc_environment() -> None:
+def test_ssh_transport_requires_a_nonempty_bws_token_in_controller_host_env() -> None:
     from infralink.host_transport import _REMOTE_PROBE
 
-    assert "grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/environment" in _REMOTE_PROBE
+    assert "grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/infralink/host.env" in _REMOTE_PROBE
     assert "bws.json" not in _REMOTE_PROBE
     assert "bws.conf" not in _REMOTE_PROBE
 

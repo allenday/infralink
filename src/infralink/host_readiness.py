@@ -30,6 +30,7 @@ class HostReadinessProbe:
     self_deploy_dependencies: bool = False
     registry_layout: str | None = None
     requires_v2_registry_layout: bool = False
+    requires_controller_reconcile: bool = False
     self_deploy_reconcile_result: str | None = None
     self_deploy_reconcile_exit_status: int | None = None
     self_deploy_reconcile_active_state: str | None = None
@@ -38,6 +39,9 @@ class HostReadinessProbe:
     firewall_rules_expected: int = 0
     firewall_rules_matched: int = 0
     firewall_observable: bool = True
+    tailscale_ips: tuple[str, ...] = ()
+    tailscale_running: bool = False
+    tailscale_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,9 +124,9 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
     ),
     BaselineRequirement(
         "self_deploy_dependencies",
-        "Self-deploy Python dependencies are installed.",
+        "Controller host interface is installed.",
         "install_self_deploy_dependencies",
-        "Install the self-deploy Python dependencies.",
+        "Install controller host prerequisites.",
     ),
     BaselineRequirement(
         "self_deploy_runtime",
@@ -138,7 +142,7 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
     ),
     BaselineRequirement(
         "self_deploy_reconcile",
-        "Latest V2 self-deploy reconciliation completed successfully.",
+        "Latest controller reconciliation completed successfully.",
         "inspect_self_deploy_reconcile",
         "Inspect and repair the latest self-deploy reconciliation failure.",
     ),
@@ -288,8 +292,14 @@ def _reconcile_outcome(probe: HostReadinessProbe) -> tuple[bool, str | None]:
     """Require a successful latest run for V2 without penalizing legacy hosts twice."""
     if not probe.reachable:
         return False, "self_deploy_reconcile_unavailable"
-    if probe.self_deploy_mode != "v2_reconcile":
+    if (
+        probe.self_deploy_mode != "v2_reconcile"
+        and not probe.requires_v2_registry_layout
+        and not probe.requires_controller_reconcile
+    ):
         return True, None
+    if probe.self_deploy_mode != "v2_reconcile":
+        return False, "self_deploy_reconcile_missing"
     if (
         probe.self_deploy_reconcile_result == "success"
         and probe.self_deploy_reconcile_exit_status == 0

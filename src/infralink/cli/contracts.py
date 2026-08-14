@@ -62,9 +62,11 @@ class Action(ContractModel):
 
 
 BootstrapActionId = Literal[
+    "bootstrap_infralink_controller",
     "create_devops_account",
     "configure_devops_authorized_access",
     "install_docker",
+    "install_git",
     "install_jq",
     "install_bws_cli",
     "install_self_deploy_dependencies",
@@ -72,6 +74,24 @@ BootstrapActionId = Literal[
     "install_self_deploy_runtime",
     "enable_self_deploy_timer",
 ]
+
+
+class HostControllerBootstrapSecretRef(ContractModel):
+    """A registry-owned BWS secret reference, never a secret value."""
+
+    project: str = Field(min_length=1, max_length=255)
+    id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+
+
+class HostControllerBootstrapState(ContractModel):
+    """Non-secret desired inputs for the sole host controller bootstrap path."""
+
+    controller_image: str = Field(min_length=1, max_length=512)
+    registry_read_identity_secret: HostControllerBootstrapSecretRef
+    registry_repo_url: str = Field(min_length=1, max_length=1024)
+    registry_ref: str = Field(pattern=r"^[A-Za-z0-9._/-]{1,255}$")
 
 
 class HostBootstrapV2State(ContractModel):
@@ -107,6 +127,7 @@ class HostBootstrapRequest(ContractModel):
     canonical_name: str = Field(min_length=1, max_length=255)
     bootstrap_actions: list[BootstrapActionId] = Field(min_length=1, max_length=9)
     v2: HostBootstrapV2State | None = None
+    controller_bootstrap: HostControllerBootstrapState | None = None
 
     @model_validator(mode="after")
     def require_v2_state_for_v2_materialization(self) -> HostBootstrapRequest:
@@ -115,6 +136,13 @@ class HostBootstrapRequest(ContractModel):
             & set(self.bootstrap_actions)
         ) and self.v2 is None:
             raise ValueError("V2 bootstrap actions require declared V2 state")
+        if (
+            "bootstrap_infralink_controller" in self.bootstrap_actions
+            and self.controller_bootstrap is None
+        ):
+            raise ValueError(
+                "controller bootstrap action requires declared controller bootstrap state"
+            )
         return self
 
     def ansible_extra_vars(self) -> dict[str, Any]:
@@ -127,6 +155,15 @@ class HostBootstrapRequest(ContractModel):
         }
         if self.v2 is not None:
             values.update(self.v2.model_dump())
+        if self.controller_bootstrap is not None:
+            values.update(
+                {
+                    "controller_image": self.controller_bootstrap.controller_image,
+                    "registry_read_identity_secret_uuid": self.controller_bootstrap.registry_read_identity_secret.id,
+                    "registry_repo_url": self.controller_bootstrap.registry_repo_url,
+                    "registry_ref": self.controller_bootstrap.registry_ref,
+                }
+            )
         return values
 
 

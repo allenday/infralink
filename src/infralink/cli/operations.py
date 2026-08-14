@@ -498,6 +498,30 @@ def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:
 def _manifest_request(
     host_uuid: str, canonical_name: str, data: dict[str, Any], path: Path
 ) -> ApplyRequest | None:
+    # Bootstrap-only hosts declare one pinned Tailnet SSH identity alongside the
+    # canonical controller bootstrap state.  They deliberately carry no legacy
+    # V2 promotion/reconcile fields or operations contract.
+    if "controller_bootstrap" in data:
+        ssh = data.get("ssh")
+        address = data.get("tailscale_ip")
+        if not isinstance(ssh, dict) or not isinstance(address, str):
+            raise _registry_failure("Controller bootstrap SSH declaration is invalid", path)
+        try:
+            parsed_address = ipaddress.ip_address(address)
+        except ValueError:
+            raise _registry_failure(
+                "Controller bootstrap Tailnet address is invalid", path
+            ) from None
+        if not isinstance(
+            parsed_address, ipaddress.IPv4Address
+        ) or parsed_address not in ipaddress.ip_network("100.64.0.0/10"):
+            raise _registry_failure(
+                "Controller bootstrap Tailnet address is outside the tailnet range", path
+            )
+        fingerprint = _normalize_manifest_fingerprint(ssh.get("host_key_fingerprint"))
+        if fingerprint is None:
+            raise _registry_failure("Controller bootstrap SSH fingerprint is invalid", path)
+        return ApplyRequest(host_uuid, canonical_name, address, 22, "root", fingerprint, _UNIT)
     if _MANIFEST_V2_APPLY_FIELDS.isdisjoint(data):
         return None
     if data.get("self_deploy_v2_reconcile_enabled") is not True:
@@ -582,7 +606,11 @@ def _normalize_manifest_fingerprint(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     parts = value.split()
-    if len(parts) != 2 or parts[0] != "ssh-rsa" or _FINGERPRINT.fullmatch(parts[1]) is None:
+    if (
+        len(parts) != 2
+        or parts[0] not in {"ssh-rsa", "ssh-ed25519"}
+        or _FINGERPRINT.fullmatch(parts[1]) is None
+    ):
         return None
     return parts[1]
 

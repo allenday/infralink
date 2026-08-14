@@ -115,6 +115,16 @@ class Host:
         return tuple(self._schema.bws_extra_projects)
 
     @property
+    def bws_projects(self) -> tuple[str, ...]:
+        """Canonical Bitwarden project aliases required by a bootstrap target."""
+        return tuple(self._schema.bws_projects)
+
+    @property
+    def controller_bootstrap(self) -> dict[str, Any] | None:
+        """Canonical controller bootstrap declaration, when this host is provisioned."""
+        return self._schema.controller_bootstrap
+
+    @property
     def bootstrap_executor(self) -> dict[str, str] | None:
         """Declared immutable executor for an explicit host baseline apply."""
         if self._schema.bootstrap_executor is None:
