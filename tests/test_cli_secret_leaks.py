@@ -20,7 +20,7 @@ TARGET_ID = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
 SOURCE_ID = "fa2b9872-d94c-4b20-a73a-57a205560769"
 
 
-def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path]:
+def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path, Path]:
     registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
     for host in registry["hosts"].values():
         host["status"] = "terminated"
@@ -51,7 +51,14 @@ def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path]:
         yaml.safe_dump(applications),
         encoding="utf-8",
     )
-    return registry_path, edges_path
+    authoring_registry = tmp_path / "authoring-hosts"
+    manifest = authoring_registry / TARGET_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        yaml.safe_dump({"hosts": {TARGET_ID: registry["hosts"][TARGET_ID]}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    return registry_path, edges_path, authoring_registry
 
 
 def _leaf_paths(group: click.Group, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
@@ -98,7 +105,7 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = "repository-wide-loaded-secret-value-canary"
-    registry_path, edges_path = _write_canary_topology(tmp_path, canary)
+    registry_path, edges_path, authoring_registry = _write_canary_topology(tmp_path, canary)
 
     loaded_registry = Registry.load(registry_path)
     loaded_edge = EdgeSet.load(edges_path).get(EDGE_ID)
@@ -410,6 +417,25 @@ selection:
             0,
             True,
         ),
+        ("registry", "host", "get"): (
+            ["--registry", str(authoring_registry), "registry", "host", "get", TARGET_ID],
+            0,
+            True,
+        ),
+        ("registry", "host", "patch"): (
+            [
+                "--registry",
+                str(authoring_registry),
+                "registry",
+                "host",
+                "patch",
+                TARGET_ID,
+                "--set",
+                "provider_metadata.password_value=rotated",
+            ],
+            0,
+            True,
+        ),
     }
     discovered = _leaf_paths(cli)
     assert discovered == {*(set(invocations) - {()}), ("help",)}
@@ -431,6 +457,8 @@ selection:
         ("app",),
         ("edge",),
         ("host",),
+        ("registry",),
+        ("registry", "host"),
         ("secrets",),
         ("service",),
     }

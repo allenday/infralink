@@ -5,14 +5,17 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import Iterable, MutableMapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import click
 import yaml
+from yaml.nodes import MappingNode, Node, ScalarNode
 
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
+    Binding,
     RegistryHostGetResult,
     RegistryHostIdentity,
     RegistryHostPatchResult,
@@ -40,7 +43,11 @@ def _failure(message: str, fix: str, details: dict[str, Any]) -> CliFailure:
     )
 
 
-def _registry_root(ctx: Context) -> Path:
+def _managed_runtime_registry_root() -> Path:
+    return Path("/var/lib/infralink/registry")
+
+
+def _registry_root(ctx: Context, *, for_write: bool = False) -> Path:
     root = ctx.registry_path
     if root is None or not root.is_dir():
         raise _failure(
@@ -48,13 +55,22 @@ def _registry_root(ctx: Context) -> Path:
             "Provide --registry pointing to the registry hosts directory",
             {"registry": str(root) if root is not None else None},
         )
-    return root
+    resolved = root.resolve()
+    runtime_registry = _managed_runtime_registry_root()
+    if for_write and (resolved == runtime_registry or runtime_registry in resolved.parents):
+        raise _failure(
+            "Registry authoring refuses the managed runtime checkout",
+            "Run this command in an operator registry working tree, never /var/lib/infralink/registry",
+            {"registry": str(root)},
+        )
+    return resolved
 
 
-def _manifest_entries(root: Path) -> Iterable[tuple[Path, MutableMapping[str, Any]]]:
+def _manifest_entries(root: Path) -> Iterable[tuple[Path, str, MutableMapping[str, Any]]]:
     for path in sorted(root.glob("**/manifest.yml")):
         try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            source = path.read_text(encoding="utf-8")
+            document = yaml.safe_load(source) or {}
         except yaml.YAMLError as exc:
             raise _failure(
                 "Registry manifest is not valid YAML",
@@ -67,14 +83,14 @@ def _manifest_entries(root: Path) -> Iterable[tuple[Path, MutableMapping[str, An
                 "Repair the manifest before editing it",
                 {"manifest_path": str(path)},
             )
-        yield path, document
+        yield path, source, document
 
 
 def _find_host(
     root: Path, host_ref: str
-) -> tuple[str, Path, MutableMapping[str, Any], MutableMapping[str, Any]]:
-    matches: list[tuple[str, Path, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
-    for path, document in _manifest_entries(root):
+) -> tuple[str, Path, str, MutableMapping[str, Any], MutableMapping[str, Any]]:
+    matches: list[tuple[str, Path, str, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
+    for path, source, document in _manifest_entries(root):
         hosts = document.get("hosts")
         if not isinstance(hosts, MutableMapping):
             continue
@@ -83,7 +99,7 @@ def _find_host(
                 continue
             canonical_name = declaration.get("canonical_name") or declaration.get("tailscale_name")
             if host_ref == host_id or host_id.startswith(host_ref) or host_ref == canonical_name:
-                matches.append((host_id, path, document, declaration))
+                matches.append((host_id, path, source, document, declaration))
     if not matches:
         raise _failure(
             "Registry host was not found",
@@ -118,6 +134,24 @@ def _parse_assignment(value: str) -> tuple[list[str], Any]:
     return path.split("."), decoded_value
 
 
+def _public_value(value: Any, *, key: str | None = None) -> Any:
+    normalized = (key or "").casefold().replace("-", "_")
+    safe_reference = normalized.endswith(("_ref", "_id", "_uuid"))
+    secret_shaped = not safe_reference and any(
+        marker in normalized for marker in ("password", "token", "secret", "private_key")
+    )
+    if secret_shaped:
+        return "[REDACTED]"
+    if isinstance(value, MutableMapping):
+        return {
+            str(item_key): _public_value(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_public_value(item) for item in value]
+    return value
+
+
 def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) -> dict[str, Any]:
     segments, value = _parse_assignment(assignment)
     current: MutableMapping[str, Any] = declaration
@@ -131,13 +165,121 @@ def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) ->
             )
         current = child
     leaf = segments[-1]
-    before = current.get(leaf)
+    if leaf not in current:
+        raise _failure(
+            "Mutation path does not exist",
+            "Inspect the host declaration and mutate an existing field",
+            {"assignment": assignment, "missing_path": ".".join(segments)},
+        )
+    before = current[leaf]
+    if before is not None and type(value) is not type(before):
+        raise _failure(
+            "Mutation value has the wrong type",
+            "Provide YAML with the same type as the existing declaration value",
+            {
+                "assignment": assignment,
+                "path": ".".join(segments),
+                "expected_type": type(before).__name__,
+                "actual_type": type(value).__name__,
+            },
+        )
     current[leaf] = value
-    return {"path": ".".join(segments), "before": before, "after": value}
+    return {
+        "path": ".".join(segments),
+        "before": _public_value(before, key=leaf),
+        "after": _public_value(value, key=leaf),
+    }
 
 
-def _write_document(path: Path, document: MutableMapping[str, Any]) -> None:
-    rendered = yaml.safe_dump(dict(document), sort_keys=False, allow_unicode=False)
+def _mapping_child(node: MappingNode, key: str) -> Node | None:
+    for key_node, value_node in node.value:
+        if isinstance(key_node, ScalarNode) and key_node.value == key:
+            return value_node
+    return None
+
+
+def _replace_scalar_assignments(source: str, host_id: str, assignments: tuple[str, ...]) -> str:
+    root = yaml.compose(source)
+    if not isinstance(root, MappingNode):
+        raise _failure(
+            "Registry manifest must be a YAML mapping", "Repair the manifest before editing it", {}
+        )
+    hosts = _mapping_child(root, "hosts")
+    if not isinstance(hosts, MappingNode):
+        raise _failure(
+            "Registry manifest must contain hosts", "Repair the manifest before editing it", {}
+        )
+    host = _mapping_child(hosts, host_id)
+    if not isinstance(host, MappingNode):
+        raise _failure(
+            "Registry host declaration could not be located",
+            "Retry after refreshing the registry",
+            {},
+        )
+
+    replacements: list[tuple[int, int, str]] = []
+    seen_paths: set[str] = set()
+    for assignment in assignments:
+        segments, value = _parse_assignment(assignment)
+        dotted_path = ".".join(segments)
+        if dotted_path in seen_paths:
+            raise _failure(
+                "Mutation paths must be unique",
+                "Provide each dot-addressed path at most once",
+                {"path": dotted_path},
+            )
+        seen_paths.add(dotted_path)
+        node: Node = host
+        for segment in segments:
+            if not isinstance(node, MappingNode):
+                raise _failure(
+                    "Mutation path does not address a mapping field",
+                    "Inspect the host declaration and target an existing scalar field",
+                    {"assignment": assignment},
+                )
+            child = _mapping_child(node, segment)
+            if child is None:
+                raise _failure(
+                    "Mutation path does not exist",
+                    "Inspect the host declaration and mutate an existing field",
+                    {"assignment": assignment},
+                )
+            node = child
+        if not isinstance(node, ScalarNode) or isinstance(value, (MutableMapping, list)):
+            raise _failure(
+                "Dot-addressed mutations support existing scalar fields only",
+                "Replace a containing mapping through a dedicated typed command",
+                {"assignment": assignment},
+            )
+        replacement = (
+            yaml.safe_dump(value, default_flow_style=True, allow_unicode=False)
+            .removesuffix("...\n")
+            .strip()
+        )
+        replacements.append((node.start_mark.index, node.end_mark.index, replacement))
+
+    rendered = source
+    for start, end, replacement in sorted(replacements, reverse=True):
+        rendered = f"{rendered[:start]}{replacement}{rendered[end:]}"
+    return rendered
+
+
+def _validate_candidate(document: MutableMapping[str, Any], host_id: str) -> None:
+    from infralink.core.schema import HostSchema
+
+    try:
+        hosts = document["hosts"]
+        assert isinstance(hosts, MutableMapping)
+        HostSchema(**hosts[host_id])
+    except (AssertionError, KeyError, TypeError, ValueError) as exc:
+        raise _failure(
+            "Mutation violates the host declaration schema",
+            "Correct the mutation or inspect the host declaration before writing",
+            {"host_id": host_id},
+        ) from exc
+
+
+def _write_document(path: Path, rendered: str) -> None:
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
@@ -175,14 +317,14 @@ def registry_host() -> None:
 def registry_host_get(ctx: Context, host_ref: str) -> None:
     """Resolve a host to its authoritative manifest and declaration."""
     root = _registry_root(ctx)
-    host_id, manifest_path, _document, declaration = _find_host(root, host_ref)
+    host_id, manifest_path, _source, _document, declaration = _find_host(root, host_ref)
     result = RegistryHostGetResult(
         host=RegistryHostIdentity(
             id=host_id,
             canonical_name=declaration.get("canonical_name"),
         ),
         manifest_path=str(manifest_path),
-        declaration=dict(declaration),
+        declaration=_public_value(declaration),
     )
     _emit(
         ok_envelope(
@@ -201,6 +343,10 @@ def registry_host_get(ctx: Context, host_ref: str) -> None:
                         "{path}={value}",
                     ],
                     "Preview a typed host declaration mutation",
+                    bindings={
+                        "path": Binding(type="string", required=True, source="operator.input"),
+                        "value": Binding(type="string", required=True, source="operator.input"),
+                    },
                 )
             ],
         )
@@ -221,16 +367,22 @@ def registry_host_patch(
     write: bool,
 ) -> None:
     """Preview or explicitly write typed dot-addressed host mutations."""
-    root = _registry_root(ctx)
-    host_id, manifest_path, document, declaration = _find_host(root, host_ref)
-    changes = [_apply_assignment(declaration, assignment) for assignment in assignments]
+    root = _registry_root(ctx, for_write=write)
+    host_id, manifest_path, source, document, declaration = _find_host(root, host_ref)
+    candidate = deepcopy(document)
+    candidate_hosts = candidate.get("hosts")
+    assert isinstance(candidate_hosts, MutableMapping)
+    candidate_declaration = candidate_hosts[host_id]
+    assert isinstance(candidate_declaration, MutableMapping)
+    changes = [_apply_assignment(candidate_declaration, assignment) for assignment in assignments]
+    _validate_candidate(candidate, host_id)
     if write:
-        _write_document(manifest_path, document)
+        _write_document(manifest_path, _replace_scalar_assignments(source, host_id, assignments))
     result = RegistryHostPatchResult(
         mode="written" if write else "preview",
         host=RegistryHostIdentity(
             id=host_id,
-            canonical_name=declaration.get("canonical_name"),
+            canonical_name=candidate_declaration.get("canonical_name"),
         ),
         manifest_path=str(manifest_path),
         changes=[RegistryMutation(**change) for change in changes],
