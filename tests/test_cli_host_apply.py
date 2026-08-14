@@ -181,7 +181,9 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
     tmp_path: Path, host_id: str, canonical_name: str, address: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _manifest_registry_checkout(tmp_path)
-    monkeypatch.setattr("infralink.cli.operations.validate_target_ssh_identity", lambda request: None)
+    monkeypatch.setattr(
+        "infralink.cli.operations.validate_target_ssh_identity", lambda request: None
+    )
 
     response = CliRunner().invoke(
         cli, ["--registry", str(registry), "host", "apply", host_id, "--dry-run"]
