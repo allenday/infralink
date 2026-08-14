@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1847,6 +1848,35 @@ def host_bootstrap(
                 token,
                 transport.known_hosts,
             )
+    actions = _bootstrap_plan_actions(
+        ctx,
+        target,
+        address,
+        readiness,
+        bws_token_supplied=token is not None,
+    )
+    result = HostBootstrapPlanResult(
+        host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        readiness=readiness,
+    )
+    _emit(
+        ok_envelope(
+            _context_for(path=["host", "bootstrap"]),
+            result,
+            actions,
+        )
+    )
+    return 0 if readiness.ready or plan_only else 1
+
+
+def _bootstrap_plan_actions(
+    ctx: Context,
+    target: Any,
+    address: str,
+    readiness: HostReadinessResult,
+    *,
+    bws_token_supplied: bool,
+) -> list[Action]:
     actions = [
         action(
             "reinspect-readiness",
@@ -1861,18 +1891,37 @@ def host_bootstrap(
             "Reinspect live host readiness",
         )
     ]
-    result = HostBootstrapPlanResult(
-        host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
-        readiness=readiness,
+    if not bws_token_supplied and _bootstrap_missing_only_bws_token(readiness):
+        actions.append(_bootstrap_bws_token_apply_action(ctx, target, address))
+    return actions
+
+
+def _bootstrap_missing_only_bws_token(readiness: HostReadinessResult) -> bool:
+    """Identify the one safe handoff state without weakening bootstrap gates."""
+    required_failures = {
+        check.id for check in readiness.checks if check.required and not check.passed
+    }
+    return required_failures == {"bws_token"}
+
+
+def _bootstrap_bws_token_apply_action(ctx: Context, target: Any, address: str) -> Action:
+    apply_argv = [
+        *_root_source_argv(ctx),
+        "host",
+        "bootstrap",
+        target.uuid,
+        "--ssh-host",
+        address,
+        "--bws-token-stdin",
+        "--apply",
+    ]
+    return Action(
+        rel="apply",
+        argv=[],
+        command=(f"printf '%s\\n' \"$HOST_BWS_TOKEN\" | {shlex.join(apply_argv)}"),
+        description="Apply the declared bootstrap with the host machine BWS token.",
+        safe=False,
     )
-    _emit(
-        ok_envelope(
-            _context_for(path=["host", "bootstrap"]),
-            result,
-            actions,
-        )
-    )
-    return 0 if readiness.ready or plan_only else 1
 
 
 _TAILNET_NETWORK = ipaddress.ip_network("100.64.0.0/10")
