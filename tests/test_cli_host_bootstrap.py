@@ -22,6 +22,7 @@ from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_rea
 from infralink.cli.main import (
     Context,
     _apply_bootstrap_request,
+    _bootstrap_failure_details,
     _apply_controller_refresh,
     _bootstrap_apply_request,
     _bootstrap_executor_actions,
@@ -41,6 +42,36 @@ ROOT = Path(__file__).resolve().parents[1]
 HOST_ID = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
 HOST_NAME = "database.example.com"
 HOST_FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+
+def test_bootstrap_failure_details_exposes_sanitized_failed_task_evidence() -> None:
+    """A baseline failure names its task without leaking the BWS handoff token."""
+    token = "0.11111111-1111-4111-8111-111111111111.secret-value"
+    completed = subprocess.CompletedProcess(
+        args=["ansible-playbook"],
+        returncode=2,
+        stdout=(
+            "TASK [Bootstrap the controller-owned host runtime] *******************\n"
+            "task path: /app/ansible/tasks/infralink_host_baseline.yml:96\n"
+            "fatal: [100.91.194.110]: FAILED! => {\"censored\": \"the output has been hidden\"}\n"
+        ),
+        stderr=f"[WARNING]: BWS_ACCESS_TOKEN={token} was provided by the environment\n",
+    )
+
+    details = _bootstrap_failure_details(HOST_ID, completed, token=token)
+
+    assert details == {
+        "host": HOST_ID,
+        "executor": "host_baseline",
+        "return_code": 2,
+        "task_count": 1,
+        "failed_task": {
+            "name": "Bootstrap the controller-owned host runtime",
+            "path": "ansible/tasks/infralink_host_baseline.yml:96",
+        },
+        "stderr": "[WARNING]: BWS_ACCESS_TOKEN=[REDACTED] was provided by the environment",
+    }
+    assert token not in repr(details)
 
 
 def test_control_root_can_be_supplied_by_the_controller_runtime(
@@ -706,6 +737,7 @@ def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
     )
 
     assert any(command[0] == "ansible-playbook" for command in commands)
+    assert ["ansible-playbook", "-vv"] in [command[:2] for command in commands]
     assert ansible_cwds == [executor_root]
     assert not any(command[:2] == ["git", "-C"] for command in commands)
 

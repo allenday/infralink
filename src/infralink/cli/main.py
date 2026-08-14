@@ -2294,6 +2294,7 @@ def _apply_bootstrap_request(
         completed = subprocess.run(
             [
                 "ansible-playbook",
+                "-vv",
                 "-i",
                 f"{request.host_address},",
                 "-u",
@@ -2316,7 +2317,7 @@ def _apply_bootstrap_request(
             message="Host baseline apply failed",
             exit_code=ExitCode.PROVIDER_ERROR,
             fix="Verify the declared bootstrap executor and rerun host bootstrap --apply",
-            details=_bootstrap_failure_details(target.uuid, completed),
+            details=_bootstrap_failure_details(target.uuid, completed, token=token),
         )
     return _bootstrap_operator_readiness(
         evaluate_host_readiness(
@@ -2486,10 +2487,11 @@ def _controller_image_reference(image: Any) -> str:
 
 
 def _bootstrap_failure_details(
-    host_uuid: str, completed: subprocess.CompletedProcess[str]
+    host_uuid: str, completed: subprocess.CompletedProcess[str], *, token: str | None
 ) -> dict[str, Any]:
-    """Expose bounded execution shape only, never controller-rendered task names."""
-    task_count = min(len(re.findall(r"^TASK \[[^\]]+\]", completed.stdout, re.MULTILINE)), 8)
+    """Return bounded, token-safe executor failure evidence."""
+    task_headers = list(re.finditer(r"^TASK \[([^\]]+)\]", completed.stdout, re.MULTILINE))
+    task_count = min(len(task_headers), 8)
     details: dict[str, Any] = {
         "host": host_uuid,
         "executor": "host_baseline",
@@ -2497,8 +2499,41 @@ def _bootstrap_failure_details(
     }
     if task_count:
         details["task_count"] = task_count
-        details["task_output_redacted"] = True
+        failed_task: dict[str, str] = {"name": task_headers[-1].group(1)}
+        following_output = completed.stdout[task_headers[-1].end() :]
+        task_path = re.search(
+            r"^task path: (?:/app/)?(ansible/[A-Za-z0-9_./-]+\.yml:\d+)\s*$",
+            following_output,
+            re.MULTILINE,
+        )
+        if task_path is not None:
+            failed_task["path"] = task_path.group(1)
+        details["failed_task"] = failed_task
+    stderr = _sanitize_bootstrap_diagnostic(completed.stderr, token)
+    if stderr:
+        details["stderr"] = stderr
     return details
+
+
+def _sanitize_bootstrap_diagnostic(value: str, token: str | None) -> str:
+    """Keep a short diagnostic tail while removing BWS credentials."""
+    if token:
+        value = value.replace(token, "[REDACTED]")
+    value = re.sub(
+        r"(?im)(BWS_ACCESS_TOKEN\s*[=:]\s*)\S+",
+        r"\1[REDACTED]",
+        value,
+    )
+    value = re.sub(
+        r"(?im)(Authorization:\s*(?:Bearer\s+)?)\S+",
+        r"\1[REDACTED]",
+        value,
+    )
+    value = value.strip()
+    maximum_length = 1200
+    if len(value) > maximum_length:
+        return "[truncated]\n" + value[-maximum_length:]
+    return value
 
 
 def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str | None) -> None:
