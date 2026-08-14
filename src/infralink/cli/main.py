@@ -1918,10 +1918,7 @@ def _bootstrap_bws_token_apply_action(ctx: Context, target: Any, address: str) -
     return Action(
         rel="apply",
         argv=[],
-        command=(
-            "printf '%s\\n' \"$HOST_BWS_TOKEN\" | "
-            f"{shlex.join(apply_argv)}"
-        ),
+        command=(f"printf '%s\\n' \"$HOST_BWS_TOKEN\" | {shlex.join(apply_argv)}"),
         description="Apply the declared bootstrap with the host machine BWS token.",
         safe=False,
     )
