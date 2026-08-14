@@ -22,6 +22,8 @@ hosts:
     tailscale_ip: 100.64.1.9
     controller_bootstrap:
       controller_image: ghcr.io/example/controller:main
+      bootstrap_note: initial note
+      pull_enabled: false
 """.lstrip(),
         encoding="utf-8",
     )
@@ -124,6 +126,114 @@ def test_registry_host_patch_previews_then_writes_a_typed_dot_addressed_mutation
         ]
         == "ghcr.io/example/controller:v0.5.5"
     )
+
+
+def test_registry_host_patch_reads_literal_multiline_text_from_an_explicit_file_source(
+    tmp_path: Path,
+) -> None:
+    root = _registry_root(tmp_path)
+    source = tmp_path / "bootstrap-note.txt"
+    source.write_text("first line\nsecond line\n", encoding="utf-8")
+    command = [
+        "--registry",
+        str(root),
+        "registry",
+        "host",
+        "patch",
+        "alpha",
+        "--set",
+        f"controller_bootstrap.bootstrap_note=@text:{source}",
+    ]
+
+    preview = CliRunner().invoke(cli, command)
+    preview_payload = _payload(preview)
+    assert preview.exit_code == 0, preview.output
+    assert preview_payload["result"]["changes"][0]["after"] == "first line\nsecond line\n"
+
+    applied = CliRunner().invoke(cli, [*command, "--write"])
+    assert applied.exit_code == 0, applied.output
+    document = yaml.safe_load(
+        (root / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(encoding="utf-8")
+    )
+    assert (
+        document["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
+            "bootstrap_note"
+        ]
+        == "first line\nsecond line\n"
+    )
+
+
+def test_registry_host_patch_help_documents_explicit_file_source_grammars() -> None:
+    result = CliRunner().invoke(cli, ["help", "registry", "host", "patch"])
+
+    payload = _payload(result)
+    assert result.exit_code == 0, result.output
+    assert "@text:FILE" in payload["result"]["examples"][0]
+    assert "@yaml:FILE" in payload["result"]["examples"][1]
+
+
+def test_registry_host_patch_reads_a_typed_yaml_value_from_an_explicit_file_source(
+    tmp_path: Path,
+) -> None:
+    root = _registry_root(tmp_path)
+    source = tmp_path / "pull-enabled.yml"
+    source.write_text("true\n", encoding="utf-8")
+    command = [
+        "--registry",
+        str(root),
+        "registry",
+        "host",
+        "patch",
+        "alpha",
+        "--set",
+        f"controller_bootstrap.pull_enabled=@yaml:{source}",
+    ]
+
+    preview = CliRunner().invoke(cli, command)
+    preview_payload = _payload(preview)
+    assert preview.exit_code == 0, preview.output
+    assert preview_payload["result"]["changes"][0]["after"] is True
+
+    applied = CliRunner().invoke(cli, [*command, "--write"])
+    assert applied.exit_code == 0, applied.output
+    document = yaml.safe_load(
+        (root / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(encoding="utf-8")
+    )
+    assert (
+        document["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
+            "pull_enabled"
+        ]
+        is True
+    )
+
+
+def test_registry_host_patch_rejects_an_unreadable_explicit_file_source_without_writing(
+    tmp_path: Path,
+) -> None:
+    root = _registry_root(tmp_path)
+    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    original = manifest.read_text(encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(root),
+            "registry",
+            "host",
+            "patch",
+            "alpha",
+            "--set",
+            f"controller_bootstrap.bootstrap_note=@text:{tmp_path / 'missing.txt'}",
+            "--write",
+        ],
+    )
+
+    payload = _payload(result)
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "usage_error"
+    assert "file source" in payload["error"]["message"]
+    assert manifest.read_text(encoding="utf-8") == original
 
 
 def test_registry_host_patch_rejects_unknown_parent_paths_without_writing(tmp_path: Path) -> None:

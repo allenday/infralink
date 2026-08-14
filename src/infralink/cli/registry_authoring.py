@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import Iterable, MutableMapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 
 import click
 import yaml
@@ -31,6 +31,9 @@ except ModuleNotFoundError:
 
     def pass_context(func: Any) -> Any:
         return func
+
+
+ResolvedAssignment: TypeAlias = tuple[str, list[str], Any]
 
 
 def _failure(message: str, fix: str, details: dict[str, Any]) -> CliFailure:
@@ -115,6 +118,48 @@ def _find_host(
     return matches[0]
 
 
+def _read_source_value(encoded_value: str, assignment: str) -> Any:
+    source_type, separator, source_name = encoded_value[1:].partition(":")
+    if not separator or not source_name:
+        raise _failure(
+            "Mutation file source is incomplete",
+            "Use @text:PATH for literal text or @yaml:PATH for one typed YAML value",
+            {"assignment": assignment},
+        )
+    if source_type not in {"text", "yaml"}:
+        raise _failure(
+            "Mutation file source is not supported",
+            "Use @text:PATH for literal text or @yaml:PATH for one typed YAML value",
+            {"assignment": assignment, "source_type": source_type},
+        )
+    source_path = Path(source_name)
+    try:
+        source = source_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _failure(
+            "Mutation file source could not be read",
+            "Provide a readable UTF-8 file path after @text: or @yaml:",
+            {"assignment": assignment, "source_path": str(source_path)},
+        ) from exc
+    if source_type == "text":
+        return source
+    try:
+        documents = list(yaml.safe_load_all(source))
+    except yaml.YAMLError as exc:
+        raise _failure(
+            "Mutation YAML file source is not valid YAML",
+            "Provide one valid YAML document after @yaml:",
+            {"assignment": assignment, "source_path": str(source_path)},
+        ) from exc
+    if len(documents) != 1:
+        raise _failure(
+            "Mutation YAML file source must contain exactly one document",
+            "Provide one YAML value in the @yaml: file",
+            {"assignment": assignment, "source_path": str(source_path)},
+        )
+    return documents[0]
+
+
 def _parse_assignment(value: str) -> tuple[list[str], Any]:
     path, separator, encoded_value = value.partition("=")
     if not separator or not path or any(not segment for segment in path.split(".")):
@@ -123,21 +168,25 @@ def _parse_assignment(value: str) -> tuple[list[str], Any]:
             "Use a dot-addressed path, for example controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
             {"assignment": value},
         )
-    try:
-        decoded_value = yaml.safe_load(encoded_value)
-    except yaml.YAMLError as exc:
-        raise _failure(
-            "Mutation value is not valid YAML",
-            "Quote the value or provide a valid YAML scalar, list, or mapping",
-            {"assignment": value},
-        ) from exc
+    if encoded_value.startswith("@"):
+        decoded_value = _read_source_value(encoded_value, value)
+    else:
+        try:
+            decoded_value = yaml.safe_load(encoded_value)
+        except yaml.YAMLError as exc:
+            raise _failure(
+                "Mutation value is not valid YAML",
+                "Quote the value or provide a valid YAML scalar, list, or mapping",
+                {"assignment": value},
+            ) from exc
     return path.split("."), decoded_value
 
 
-def _validate_unique_assignments(assignments: tuple[str, ...]) -> None:
+def _resolve_assignments(assignments: tuple[str, ...]) -> tuple[ResolvedAssignment, ...]:
     paths: set[str] = set()
+    resolved: list[ResolvedAssignment] = []
     for assignment in assignments:
-        segments, _value = _parse_assignment(assignment)
+        segments, decoded_value = _parse_assignment(assignment)
         path = ".".join(segments)
         if path in paths:
             raise _failure(
@@ -146,6 +195,8 @@ def _validate_unique_assignments(assignments: tuple[str, ...]) -> None:
                 {"path": path},
             )
         paths.add(path)
+        resolved.append((assignment, segments, decoded_value))
+    return tuple(resolved)
 
 
 def _public_value(value: Any, *, key: str | None = None) -> Any:
@@ -166,8 +217,10 @@ def _public_value(value: Any, *, key: str | None = None) -> Any:
     return value
 
 
-def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) -> dict[str, Any]:
-    segments, value = _parse_assignment(assignment)
+def _apply_assignment(
+    declaration: MutableMapping[str, Any], assignment: ResolvedAssignment
+) -> dict[str, Any]:
+    source_assignment, segments, value = assignment
     current: MutableMapping[str, Any] = declaration
     for segment in segments[:-1]:
         child = current.get(segment)
@@ -175,7 +228,7 @@ def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) ->
             raise _failure(
                 "Mutation parent path does not exist",
                 "Inspect the host declaration and target an existing mapping path",
-                {"assignment": assignment, "missing_parent": ".".join(segments[:-1])},
+                {"assignment": source_assignment, "missing_parent": ".".join(segments[:-1])},
             )
         current = child
     leaf = segments[-1]
@@ -183,7 +236,7 @@ def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) ->
         raise _failure(
             "Mutation path does not exist",
             "Inspect the host declaration and mutate an existing field",
-            {"assignment": assignment, "missing_path": ".".join(segments)},
+            {"assignment": source_assignment, "missing_path": ".".join(segments)},
         )
     before = current[leaf]
     if before is not None and type(value) is not type(before):
@@ -191,7 +244,7 @@ def _apply_assignment(declaration: MutableMapping[str, Any], assignment: str) ->
             "Mutation value has the wrong type",
             "Provide YAML with the same type as the existing declaration value",
             {
-                "assignment": assignment,
+                "assignment": source_assignment,
                 "path": ".".join(segments),
                 "expected_type": type(before).__name__,
                 "actual_type": type(value).__name__,
@@ -233,7 +286,9 @@ def _node_reference_counts(root: Node) -> dict[int, int]:
     return counts
 
 
-def _replace_scalar_assignments(source: str, host_id: str, assignments: tuple[str, ...]) -> str:
+def _replace_scalar_assignments(
+    source: str, host_id: str, assignments: tuple[ResolvedAssignment, ...]
+) -> str:
     root = yaml.compose(source)
     if not isinstance(root, MappingNode):
         raise _failure(
@@ -254,35 +309,34 @@ def _replace_scalar_assignments(source: str, host_id: str, assignments: tuple[st
 
     replacements: list[tuple[int, int, str]] = []
     reference_counts = _node_reference_counts(root)
-    for assignment in assignments:
-        segments, value = _parse_assignment(assignment)
+    for source_assignment, segments, value in assignments:
         node: Node = host
         for segment in segments:
             if not isinstance(node, MappingNode):
                 raise _failure(
                     "Mutation path does not address a mapping field",
                     "Inspect the host declaration and target an existing scalar field",
-                    {"assignment": assignment},
+                    {"assignment": source_assignment},
                 )
             child = _mapping_child(node, segment)
             if child is None:
                 raise _failure(
                     "Mutation path does not exist",
                     "Inspect the host declaration and mutate an existing field",
-                    {"assignment": assignment},
+                    {"assignment": source_assignment},
                 )
             node = child
         if not isinstance(node, ScalarNode) or isinstance(value, (MutableMapping, list)):
             raise _failure(
                 "Dot-addressed mutations support existing scalar fields only",
                 "Replace a containing mapping through a dedicated typed command",
-                {"assignment": assignment},
+                {"assignment": source_assignment},
             )
         if reference_counts[id(node)] != 1:
             raise _failure(
                 "Dot-addressed mutations refuse alias-backed fields",
                 "Replace the alias with an explicit value manually before using this command",
-                {"assignment": assignment},
+                {"assignment": source_assignment},
             )
         replacement = (
             yaml.safe_dump(value, default_flow_style=True, allow_unicode=False)
@@ -388,7 +442,14 @@ def registry_host_get(ctx: Context, host_ref: str) -> None:
 
 @registry_host.command(name="patch")
 @click.argument("host_ref")
-@click.option("--set", "assignments", multiple=True, required=True, metavar="PATH=YAML_VALUE")
+@click.option(
+    "--set",
+    "assignments",
+    multiple=True,
+    required=True,
+    metavar="PATH=YAML_VALUE|@text:FILE|@yaml:FILE",
+    help="Set an existing scalar from inline YAML, literal UTF-8 text, or one YAML file value",
+)
 @click.option(
     "--write", is_flag=True, help="Atomically write the validated mutation to the manifest"
 )
@@ -402,16 +463,21 @@ def registry_host_patch(
     """Preview or explicitly write typed dot-addressed host mutations."""
     root = _registry_root(ctx, for_write=write)
     host_id, manifest_path, source, document, declaration = _find_host(root, host_ref)
-    _validate_unique_assignments(assignments)
+    resolved_assignments = _resolve_assignments(assignments)
     candidate = deepcopy(document)
     candidate_hosts = candidate.get("hosts")
     assert isinstance(candidate_hosts, MutableMapping)
     candidate_declaration = candidate_hosts[host_id]
     assert isinstance(candidate_declaration, MutableMapping)
-    changes = [_apply_assignment(candidate_declaration, assignment) for assignment in assignments]
+    changes = [
+        _apply_assignment(candidate_declaration, assignment) for assignment in resolved_assignments
+    ]
     _validate_candidate(candidate, host_id)
     if write:
-        _write_document(manifest_path, _replace_scalar_assignments(source, host_id, assignments))
+        _write_document(
+            manifest_path,
+            _replace_scalar_assignments(source, host_id, resolved_assignments),
+        )
     result = RegistryHostPatchResult(
         mode="written" if write else "preview",
         host=RegistryHostIdentity(
