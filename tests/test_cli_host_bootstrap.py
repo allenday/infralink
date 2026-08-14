@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from base64 import b64encode
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -70,6 +71,38 @@ def test_bootstrap_failure_details_exposes_sanitized_failed_task_evidence() -> N
             "path": "ansible/tasks/infralink_host_baseline.yml:96",
         },
         "stderr": "[WARNING]: BWS_ACCESS_TOKEN=[REDACTED] was provided by the environment",
+    }
+    assert token not in repr(details)
+
+
+def test_bootstrap_failure_details_exposes_sanitized_nested_controller_failure() -> None:
+    """The baseline executor returns bounded nested-controller evidence safely."""
+    token = "0.11111111-1111-4111-8111-111111111111.secret-value"
+    nested_failure = json.dumps(
+        {
+            "return_code": "2",
+            "stdout_tail": "registry fetch failed",
+            "stderr_tail": f"BWS_ACCESS_TOKEN={token}",
+        },
+        separators=(",", ":"),
+    )
+    completed = subprocess.CompletedProcess(
+        args=["ansible-playbook"],
+        returncode=2,
+        stdout=(
+            "TASK [Report sanitized controller bootstrap failure] *******************\n"
+            "INFRALINK_BOOTSTRAP_NESTED_FAILURE_B64="
+            f"{b64encode(nested_failure.encode()).decode()}\n"
+        ),
+        stderr="",
+    )
+
+    details = _bootstrap_failure_details(HOST_ID, completed, token=token)
+
+    assert details["nested_failure"] == {
+        "return_code": 2,
+        "stdout_tail": "registry fetch failed",
+        "stderr_tail": "BWS_ACCESS_TOKEN=[REDACTED]",
     }
     assert token not in repr(details)
 
