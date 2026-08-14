@@ -266,6 +266,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "description": "Inspect validated immutable registry releases.",
         "usage": "infralink release inspect --release-validation PATH --admission PATH",
     },
+    "registry": {
+        "description": "Inspect and author local registry declarations.",
+        "usage": "infralink registry host [get|patch] <ref>",
+    },
 }
 
 
@@ -1029,6 +1033,10 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.release import release
 
         return release
+    if name == "registry":
+        from infralink.cli.registry_authoring import registry
+
+        return registry
     return None
 
 

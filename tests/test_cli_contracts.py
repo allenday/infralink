@@ -93,6 +93,8 @@ SCHEMA_NAMES = (
     "release-validate-candidate",
     "release-render-publisher-request",
     "release-inspect-attestation",
+    "registry-host-get",
+    "registry-host-patch",
     "capabilities",
     "observation-validate",
     "explain",

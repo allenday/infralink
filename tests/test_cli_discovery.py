@@ -458,6 +458,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
             "release-render-publisher-request",
             "release-inspect-attestation",
         },
+        "registry": {"registry-host-get", "registry-host-patch"},
         "validate": {"validate", "observation-validate"},
         "capabilities": {"capabilities"},
         "explain": {"explain"},
