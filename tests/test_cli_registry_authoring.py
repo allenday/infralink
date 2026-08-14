@@ -54,7 +54,13 @@ def test_registry_host_get_returns_the_authoritative_manifest_location(tmp_path:
     assert patch["templated"] is True
     assert patch["bindings"] == {
         "path": {"type": "string", "required": True, "source": "operator.input"},
-        "value": {"type": "string", "required": True, "source": "operator.input"},
+        "value": {
+            "type": "string",
+            "required": True,
+            "source": "operator.input",
+            "syntax": "YAML_VALUE | @text:FILE | @yaml:FILE",
+            "examples": ["ghcr.io/example/controller:v0.5.5", "@text:FILE", "@yaml:FILE"],
+        },
     }
 
 

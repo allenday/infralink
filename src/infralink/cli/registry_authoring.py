@@ -432,7 +432,17 @@ def registry_host_get(ctx: Context, host_ref: str) -> None:
                     "Preview a typed host declaration mutation",
                     bindings={
                         "path": Binding(type="string", required=True, source="operator.input"),
-                        "value": Binding(type="string", required=True, source="operator.input"),
+                        "value": Binding(
+                            type="string",
+                            required=True,
+                            source="operator.input",
+                            syntax="YAML_VALUE | @text:FILE | @yaml:FILE",
+                            examples=[
+                                "ghcr.io/example/controller:v0.5.5",
+                                "@text:FILE",
+                                "@yaml:FILE",
+                            ],
+                        ),
                     },
                 )
             ],

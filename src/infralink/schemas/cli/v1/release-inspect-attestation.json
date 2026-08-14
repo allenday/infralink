@@ -81,6 +81,13 @@
     "Binding": {
       "additionalProperties": false,
       "properties": {
+        "examples": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Examples",
+          "type": "array"
+        },
         "required": {
           "title": "Required",
           "type": "boolean"
@@ -88,6 +95,18 @@
         "source": {
           "title": "Source",
           "type": "string"
+        },
+        "syntax": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Syntax"
         },
         "type": {
           "enum": [

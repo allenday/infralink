@@ -47,6 +47,8 @@ class Binding(ContractModel):
     type: Literal["string", "integer", "boolean"]
     required: bool
     source: str
+    syntax: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    examples: list[str] = Field(default_factory=list, exclude_if=lambda value: not value)
 
 
 class Action(ContractModel):
