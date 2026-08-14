@@ -285,6 +285,30 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
                     passed=False,
                     description="Docker is missing.",
                 ),
+                HostReadinessCheck(
+                    id="bws_config",
+                    required=True,
+                    passed=False,
+                    description="BWS configuration is missing.",
+                ),
+                HostReadinessCheck(
+                    id="self_deploy_runtime",
+                    required=True,
+                    passed=False,
+                    description="Controller runtime is missing.",
+                ),
+                HostReadinessCheck(
+                    id="self_deploy_timer",
+                    required=True,
+                    passed=False,
+                    description="Controller timer is inactive.",
+                ),
+                HostReadinessCheck(
+                    id="self_deploy_reconcile",
+                    required=True,
+                    passed=False,
+                    description="Controller reconcile is unavailable.",
+                ),
             ],
             actions=[
                 HostBootstrapAction(
@@ -296,6 +320,26 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
                     id="install_docker",
                     check_id="docker",
                     description="Install Docker.",
+                ),
+                HostBootstrapAction(
+                    id="configure_bws",
+                    check_id="bws_config",
+                    description="Configure BWS.",
+                ),
+                HostBootstrapAction(
+                    id="install_self_deploy_runtime",
+                    check_id="self_deploy_runtime",
+                    description="Install controller runtime.",
+                ),
+                HostBootstrapAction(
+                    id="enable_self_deploy_timer",
+                    check_id="self_deploy_timer",
+                    description="Enable controller timer.",
+                ),
+                HostBootstrapAction(
+                    id="inspect_self_deploy_reconcile",
+                    check_id="self_deploy_reconcile",
+                    description="Inspect controller reconcile.",
                 ),
             ],
         ),
@@ -419,6 +463,26 @@ def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_act
             HostBootstrapAction(id="install_jq", check_id="jq", description="jq."),
             HostBootstrapAction(id="install_bws_cli", check_id="bws", description="BWS."),
             HostBootstrapAction(
+                id="configure_bws",
+                check_id="bws_config",
+                description="Configure BWS.",
+            ),
+            HostBootstrapAction(
+                id="install_self_deploy_runtime",
+                check_id="self_deploy_runtime",
+                description="Install controller runtime.",
+            ),
+            HostBootstrapAction(
+                id="enable_self_deploy_timer",
+                check_id="self_deploy_timer",
+                description="Enable controller timer.",
+            ),
+            HostBootstrapAction(
+                id="inspect_self_deploy_reconcile",
+                check_id="self_deploy_reconcile",
+                description="Inspect controller reconcile.",
+            ),
+            HostBootstrapAction(
                 id="create_devops_account", check_id="devops", description="obsolete"
             ),
         ],
@@ -456,6 +520,10 @@ def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_act
         ),
     )
     assert "initialize_machine_id" not in request.bootstrap_actions
+    assert "configure_bws" not in request.bootstrap_actions
+    assert "install_self_deploy_runtime" not in request.bootstrap_actions
+    assert "enable_self_deploy_timer" not in request.bootstrap_actions
+    assert "inspect_self_deploy_reconcile" not in request.bootstrap_actions
 
 
 def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation() -> None:

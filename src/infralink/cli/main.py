@@ -1912,6 +1912,15 @@ _BOOTSTRAP_EXECUTOR_ACTION_IDS = _BOOTSTRAP_HANDOFF_ACTION_IDS - {
     "initialize_machine_id",
 }
 
+_BOOTSTRAP_CONTROLLER_BACKED_CHECK_IDS = frozenset(
+    {
+        "bws_config",
+        "self_deploy_runtime",
+        "self_deploy_timer",
+        "self_deploy_reconcile",
+    }
+)
+
 
 def _bootstrap_apply_handoff_is_safe(readiness: HostReadinessResult) -> bool:
     """Advertise stdin apply only when every failed gate is executor-backed."""
@@ -1923,7 +1932,9 @@ def _bootstrap_apply_handoff_is_safe(readiness: HostReadinessResult) -> bool:
         for action in readiness.actions
         if action.id in _BOOTSTRAP_HANDOFF_ACTION_IDS
     }
-    return bool(required_failures) and required_failures <= (executor_checks | {"bws_token"})
+    return bool(required_failures) and required_failures <= (
+        executor_checks | _BOOTSTRAP_CONTROLLER_BACKED_CHECK_IDS | {"bws_token"}
+    )
 
 
 def _bootstrap_bws_token_apply_action(ctx: Context, target: Any, address: str) -> Action:
