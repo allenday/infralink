@@ -23,6 +23,7 @@ from infralink.cli.main import (
     Context,
     _apply_bootstrap_request,
     _apply_controller_refresh,
+    _bootstrap_apply_request,
     _bootstrap_executor_actions,
     _bootstrap_plan_actions,
     _bootstrap_tailnet_address,
@@ -230,7 +231,7 @@ def test_bootstrap_dry_plan_marks_a_missing_token_as_required() -> None:
     assert planned.actions[-1].id == "provide_bws_token"
 
 
-def test_bootstrap_cli_plan_advertises_apply_when_only_bws_token_is_missing(
+def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisites(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     registry = tmp_path / "hosts"
@@ -269,7 +270,34 @@ def test_bootstrap_cli_plan_advertises_apply_when_only_bws_token_is_missing(
     monkeypatch.setattr(
         "infralink.cli.main.evaluate_host_readiness",
         lambda *_args, **_kwargs: HostReadinessResult(
-            transport="root_ssh", ready=True, checks=[], actions=[]
+            transport="root_ssh",
+            ready=False,
+            checks=[
+                HostReadinessCheck(
+                    id="machine_id",
+                    required=True,
+                    passed=False,
+                    description="Machine UUID is missing.",
+                ),
+                HostReadinessCheck(
+                    id="docker",
+                    required=True,
+                    passed=False,
+                    description="Docker is missing.",
+                ),
+            ],
+            actions=[
+                HostBootstrapAction(
+                    id="initialize_machine_id",
+                    check_id="machine_id",
+                    description="Initialize machine UUID.",
+                ),
+                HostBootstrapAction(
+                    id="install_docker",
+                    check_id="docker",
+                    description="Install Docker.",
+                ),
+            ],
         ),
     )
 
@@ -289,7 +317,7 @@ def test_bootstrap_cli_plan_advertises_apply_when_only_bws_token_is_missing(
     assert apply["safe"] is False
 
 
-def test_bootstrap_plan_omits_apply_handoff_when_any_other_prerequisite_is_missing(
+def test_bootstrap_plan_advertises_apply_handoff_for_declared_executor_prerequisites(
     tmp_path: Path,
 ) -> None:
     context = Context()
@@ -329,6 +357,49 @@ def test_bootstrap_plan_omits_apply_handoff_when_any_other_prerequisite_is_missi
         bws_token_supplied=False,
     )
 
+    assert [item.rel for item in actions] == ["reinspect-readiness", "apply"]
+
+
+def test_bootstrap_plan_omits_apply_handoff_for_manual_ssh_prerequisite(
+    tmp_path: Path,
+) -> None:
+    context = Context()
+    context.registry_path = tmp_path / "hosts"
+    target = type(
+        "Target",
+        (),
+        {"uuid": HOST_ID, "canonical_name": HOST_NAME},
+    )()
+    readiness = _readiness_with_bws_token_required(
+        HostReadinessResult(
+            transport="root_ssh",
+            ready=False,
+            checks=[
+                HostReadinessCheck(
+                    id="ssh",
+                    required=True,
+                    passed=False,
+                    description="Root SSH is unavailable.",
+                )
+            ],
+            actions=[
+                HostBootstrapAction(
+                    id="establish_root_ssh",
+                    check_id="ssh",
+                    description="Establish root SSH.",
+                )
+            ],
+        )
+    )
+
+    actions = _bootstrap_plan_actions(
+        context,
+        target,
+        "100.64.68.83",
+        readiness,
+        bws_token_supplied=False,
+    )
+
     assert [item.rel for item in actions] == ["reinspect-readiness"]
 
 
@@ -338,6 +409,11 @@ def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_act
         ready=False,
         checks=[],
         actions=[
+            HostBootstrapAction(
+                id="initialize_machine_id",
+                check_id="machine_id",
+                description="Machine UUID.",
+            ),
             HostBootstrapAction(id="install_git", check_id="git", description="Git."),
             HostBootstrapAction(id="install_docker", check_id="docker", description="Docker."),
             HostBootstrapAction(id="install_jq", check_id="jq", description="jq."),
@@ -354,6 +430,32 @@ def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_act
         "install_bws_cli",
         "bootstrap_infralink_controller",
     ]
+    target = type(
+        "Target",
+        (),
+        {
+            "uuid": HOST_ID,
+            "canonical_name": HOST_NAME,
+            "tailscale_ip": "100.64.68.83",
+        },
+    )()
+    request = _bootstrap_apply_request(
+        Context(),
+        target,
+        _bootstrap_executor_actions(readiness),
+        controller_state=HostControllerBootstrapState.model_validate(
+            {
+                "controller_image": "ghcr.io/example/controller:main",
+                "registry_read_identity_secret": {
+                    "project": "fleet",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                },
+                "registry_repo_url": "https://example.invalid/registry.git",
+                "registry_ref": "main",
+            }
+        ),
+    )
+    assert "initialize_machine_id" not in request.bootstrap_actions
 
 
 def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation() -> None:

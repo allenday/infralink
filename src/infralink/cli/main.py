@@ -1891,17 +1891,39 @@ def _bootstrap_plan_actions(
             "Reinspect live host readiness",
         )
     ]
-    if not bws_token_supplied and _bootstrap_missing_only_bws_token(readiness):
+    if not bws_token_supplied and _bootstrap_apply_handoff_is_safe(readiness):
         actions.append(_bootstrap_bws_token_apply_action(ctx, target, address))
     return actions
 
 
-def _bootstrap_missing_only_bws_token(readiness: HostReadinessResult) -> bool:
-    """Identify the one safe handoff state without weakening bootstrap gates."""
+_BOOTSTRAP_HANDOFF_ACTION_IDS = frozenset(
+    {
+        "initialize_machine_id",
+        "install_git",
+        "install_docker",
+        "install_jq",
+        "install_bws_cli",
+        "install_self_deploy_dependencies",
+        "bootstrap_infralink_controller",
+    }
+)
+
+_BOOTSTRAP_EXECUTOR_ACTION_IDS = _BOOTSTRAP_HANDOFF_ACTION_IDS - {
+    "initialize_machine_id",
+}
+
+
+def _bootstrap_apply_handoff_is_safe(readiness: HostReadinessResult) -> bool:
+    """Advertise stdin apply only when every failed gate is executor-backed."""
     required_failures = {
         check.id for check in readiness.checks if check.required and not check.passed
     }
-    return required_failures == {"bws_token"}
+    executor_checks = {
+        action.check_id
+        for action in readiness.actions
+        if action.id in _BOOTSTRAP_HANDOFF_ACTION_IDS
+    }
+    return bool(required_failures) and required_failures <= (executor_checks | {"bws_token"})
 
 
 def _bootstrap_bws_token_apply_action(ctx: Context, target: Any, address: str) -> Action:
@@ -2219,14 +2241,11 @@ def _bootstrap_operator_readiness(readiness: HostReadinessResult) -> HostReadine
 
 def _bootstrap_executor_actions(readiness: HostReadinessResult) -> list[str]:
     """Translate only declared bootstrap prerequisites into executor actions."""
-    executor_actions = {
-        "install_git",
-        "install_docker",
-        "install_jq",
-        "install_bws_cli",
-        "install_self_deploy_dependencies",
-    }
-    actions = [item.id for item in readiness.actions if item.id in executor_actions]
+    actions = [
+        item.id
+        for item in readiness.actions
+        if item.id in _BOOTSTRAP_EXECUTOR_ACTION_IDS - {"bootstrap_infralink_controller"}
+    ]
     if not readiness.ready:
         actions.append("bootstrap_infralink_controller")
     return actions
