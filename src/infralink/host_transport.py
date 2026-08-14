@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from shlex import quote
 
 from infralink.host_readiness import HostReadinessProbe
@@ -65,26 +66,43 @@ fi
 class SshReadinessTransport:
     """Collect the bootstrap baseline over root SSH without remote mutation."""
 
-    def __init__(self, expected_firewall_rules: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, expected_firewall_rules: tuple[str, ...] = (), known_hosts: Path | None = None
+    ) -> None:
         self._expected_firewall_rules = expected_firewall_rules
+        self._known_hosts = known_hosts
 
     def probe(self, address: str) -> HostReadinessProbe:
         if not address:
             return _unreachable("host_address_missing")
         try:
-            completed = subprocess.run(
+            command = [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "LogLevel=ERROR",
+            ]
+            if self._known_hosts is not None:
+                command.extend(
+                    [
+                        "-o",
+                        "StrictHostKeyChecking=yes",
+                        "-o",
+                        f"UserKnownHostsFile={self._known_hosts}",
+                    ]
+                )
+            command.extend(
                 [
-                    "ssh",
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    "ConnectTimeout=10",
-                    "-o",
-                    "LogLevel=ERROR",
                     f"root@{address}",
                     "sh",
                     "-s",
-                ],
+                ]
+            )
+            completed = subprocess.run(
+                command,
                 input=_REMOTE_PROBE + _firewall_probe(self._expected_firewall_rules),
                 text=True,
                 capture_output=True,

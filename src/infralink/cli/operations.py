@@ -448,6 +448,19 @@ def operation_provider() -> OperationProvider:
     return SshOperationProvider()
 
 
+def validate_target_ssh_identity(request: ApplyRequest) -> None:
+    """Validate the declared target key without opening an SSH session."""
+    with _pinned_known_hosts(request):
+        return
+
+
+@contextmanager
+def pinned_target_ssh_identity(request: ApplyRequest) -> Iterator[Path]:
+    """Yield a temporary known-hosts file bound to the declared target key."""
+    with _pinned_known_hosts(request) as known_hosts:
+        yield known_hosts
+
+
 def inspect_verifier(request: ApplyRequest) -> HostVerifierDiagnostic:
     """Return fixed, read-only V2 verifier facts over the declared SSH transport."""
     return SshOperationProvider().inspect_verifier(request)

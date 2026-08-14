@@ -178,9 +178,12 @@ def _explicit_legacy_verifier_layout(registry: Path) -> None:
 
 @pytest.mark.parametrize(("host_id", "canonical_name", "address"), CORE_HOSTS)
 def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
-    tmp_path: Path, host_id: str, canonical_name: str, address: str
+    tmp_path: Path, host_id: str, canonical_name: str, address: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _manifest_registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.validate_target_ssh_identity", lambda request: None
+    )
 
     response = CliRunner().invoke(
         cli, ["--registry", str(registry), "host", "apply", host_id, "--dry-run"]
@@ -191,6 +194,7 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
     assert_schema(payload, "host-apply")
     assert payload["result"] == {
         "dry_run": True,
+        "ssh_host_identity": "passed",
         "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
         "plan": {
             "registry_revision": _git(registry.parent, "rev-parse", "HEAD"),
@@ -526,6 +530,7 @@ def test_host_apply_starts_only_declared_reconcile_unit_and_returns_opaque_run_r
             "id": f"ssh/{HOST_ID}/{INVOCATION}",
             "state": "applying",
         },
+        "ssh_host_identity": "passed",
         "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
         "dispatch": {"provider": "ssh", "status": "accepted"},
     }

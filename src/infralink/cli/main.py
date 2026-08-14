@@ -2313,6 +2313,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
     from infralink.cli.operations import (
         operation_provider,
         resolve_apply_request,
+        validate_target_ssh_identity,
         wait_for_terminal,
     )
 
@@ -2339,6 +2340,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
                 fix="Use a Git checkout containing the selected registry revision",
                 details={"registry": str(ctx.registry_path)},
             )
+        validate_target_ssh_identity(request)
         _emit(
             ok_envelope(
                 _context_for(path=["host", "apply"]),
@@ -2351,6 +2353,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
                         reconcile_mode="timer",
                         action_categories=["registry_checkout", "render", "reconcile"],
                     ),
+                    ssh_host_identity="passed",
                 ),
                 [
                     action(
@@ -2408,6 +2411,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         ),
         target=doctor_target,
         dispatch=HostDispatch(provider="ssh", status="accepted"),
+        ssh_host_identity="passed",
         failure=record.failure,
     )
     actions = []
