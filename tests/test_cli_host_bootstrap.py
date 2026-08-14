@@ -53,7 +53,7 @@ def test_bootstrap_failure_details_exposes_sanitized_failed_task_evidence() -> N
         stdout=(
             "TASK [Bootstrap the controller-owned host runtime] *******************\n"
             "task path: /app/ansible/tasks/infralink_host_baseline.yml:96\n"
-            "fatal: [100.91.194.110]: FAILED! => {\"censored\": \"the output has been hidden\"}\n"
+            'fatal: [100.91.194.110]: FAILED! => {"censored": "the output has been hidden"}\n'
         ),
         stderr=f"[WARNING]: BWS_ACCESS_TOKEN={token} was provided by the environment\n",
     )
