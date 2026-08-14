@@ -2342,6 +2342,7 @@ def _controller_bootstrap_state(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Controller bootstrap requires a registry directory checkout",
             exit_code=ExitCode.INPUT_ERROR,
+            fix="Provide the registry hosts directory with --registry and rerun host bootstrap",
         )
     manifest_path = registry_path / target.uuid / "manifest.yml"
     deployment_path = registry_path / target.uuid / "operations" / "deployment.yml"

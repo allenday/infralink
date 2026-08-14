@@ -22,6 +22,7 @@ from infralink.cli.main import (
     _apply_controller_refresh,
     _bootstrap_executor_actions,
     _bootstrap_tailnet_address,
+    _controller_bootstrap_state,
     _controller_refresh_source,
     _readiness_with_bws_token_required,
     _require_remote_tailnet_identity,
@@ -247,6 +248,18 @@ def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_act
         "install_bws_cli",
         "bootstrap_infralink_controller",
     ]
+
+
+def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation() -> None:
+    target = type("Target", (), {"uuid": HOST_ID})()
+
+    with pytest.raises(CliFailure) as raised:
+        _controller_bootstrap_state(None, target)
+
+    assert raised.value.code is ErrorCode.CONFIGURATION_REQUIRED
+    assert raised.value.fix == (
+        "Provide the registry hosts directory with --registry and rerun host bootstrap"
+    )
 
 
 def test_bootstrap_dirty_control_checkout_cannot_run_the_privileged_executor(
