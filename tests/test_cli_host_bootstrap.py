@@ -22,11 +22,11 @@ from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_rea
 from infralink.cli.main import (
     Context,
     _apply_bootstrap_request,
-    _bootstrap_failure_details,
     _apply_controller_refresh,
     _bootstrap_apply_request,
     _bootstrap_executor_actions,
     _bootstrap_executor_source,
+    _bootstrap_failure_details,
     _bootstrap_plan_actions,
     _bootstrap_tailnet_address,
     _controller_bootstrap_state,
