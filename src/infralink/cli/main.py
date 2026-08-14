@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -2509,10 +2510,39 @@ def _bootstrap_failure_details(
         if task_path is not None:
             failed_task["path"] = task_path.group(1)
         details["failed_task"] = failed_task
+    nested_failure = _bootstrap_nested_failure_details(completed.stdout, token)
+    if nested_failure is not None:
+        details["nested_failure"] = nested_failure
     stderr = _sanitize_bootstrap_diagnostic(completed.stderr, token)
     if stderr:
         details["stderr"] = stderr
     return details
+
+
+def _bootstrap_nested_failure_details(value: str, token: str | None) -> dict[str, Any] | None:
+    """Decode the baseline's bounded, already-sanitized nested-controller evidence."""
+    match = re.search(
+        r"INFRALINK_BOOTSTRAP_NESTED_FAILURE_B64=([A-Za-z0-9+/=]+)", value
+    )
+    if match is None:
+        return None
+    try:
+        payload = json.loads(base64.b64decode(match.group(1), validate=True))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return_code = payload.get("return_code")
+    if isinstance(return_code, str) and return_code.isdecimal():
+        return_code = int(return_code)
+    if not isinstance(return_code, int):
+        return None
+    result: dict[str, Any] = {"return_code": return_code}
+    for key in ("stdout_tail", "stderr_tail"):
+        diagnostic = payload.get(key)
+        if isinstance(diagnostic, str):
+            result[key] = _sanitize_bootstrap_diagnostic(diagnostic, token)
+    return result
 
 
 def _sanitize_bootstrap_diagnostic(value: str, token: str | None) -> str:
