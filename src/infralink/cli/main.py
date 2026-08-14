@@ -2529,9 +2529,7 @@ def _bootstrap_failure_details(
 
 def _bootstrap_nested_failure_details(value: str, token: str | None) -> dict[str, Any] | None:
     """Decode the baseline's bounded, already-sanitized nested-controller evidence."""
-    match = re.search(
-        r"INFRALINK_BOOTSTRAP_NESTED_FAILURE_B64=([A-Za-z0-9+/=]+)", value
-    )
+    match = re.search(r"INFRALINK_BOOTSTRAP_NESTED_FAILURE_B64=([A-Za-z0-9+/=]+)", value)
     if match is None:
         return None
     try:
