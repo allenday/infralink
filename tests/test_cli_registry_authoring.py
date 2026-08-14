@@ -216,3 +216,68 @@ def test_registry_host_patch_refuses_a_managed_runtime_checkout(
     assert result.exit_code == 2
     assert payload["error"]["code"] == "usage_error"
     assert "managed runtime checkout" in payload["error"]["message"]
+
+
+def test_registry_host_patch_rejects_alias_backed_fields_without_writing(tmp_path: Path) -> None:
+    root = _registry_root(tmp_path)
+    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    manifest.write_text(
+        """
+controller_default: &controller ghcr.io/example/controller:main
+hosts:
+  11111111-1111-4111-8111-111111111111:
+    canonical_name: alpha
+    status: provisioning
+    tailscale_ip: 100.64.1.9
+    controller_bootstrap:
+      controller_image: *controller
+""".lstrip(),
+        encoding="utf-8",
+    )
+    original = manifest.read_text(encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(root),
+            "registry",
+            "host",
+            "patch",
+            "alpha",
+            "--set",
+            "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
+            "--write",
+        ],
+    )
+
+    payload = _payload(result)
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "usage_error"
+    assert "alias-backed" in payload["error"]["message"]
+    assert manifest.read_text(encoding="utf-8") == original
+
+
+def test_registry_host_patch_rejects_duplicate_paths_during_preview(tmp_path: Path) -> None:
+    root = _registry_root(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(root),
+            "registry",
+            "host",
+            "patch",
+            "alpha",
+            "--set",
+            "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
+            "--set",
+            "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.6",
+        ],
+    )
+
+    payload = _payload(result)
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "usage_error"
+    assert "unique" in payload["error"]["message"]

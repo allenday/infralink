@@ -134,6 +134,20 @@ def _parse_assignment(value: str) -> tuple[list[str], Any]:
     return path.split("."), decoded_value
 
 
+def _validate_unique_assignments(assignments: tuple[str, ...]) -> None:
+    paths: set[str] = set()
+    for assignment in assignments:
+        segments, _value = _parse_assignment(assignment)
+        path = ".".join(segments)
+        if path in paths:
+            raise _failure(
+                "Mutation paths must be unique",
+                "Provide each dot-addressed path at most once",
+                {"path": path},
+            )
+        paths.add(path)
+
+
 def _public_value(value: Any, *, key: str | None = None) -> Any:
     normalized = (key or "").casefold().replace("-", "_")
     safe_reference = normalized.endswith(("_ref", "_id", "_uuid"))
@@ -198,6 +212,27 @@ def _mapping_child(node: MappingNode, key: str) -> Node | None:
     return None
 
 
+def _node_reference_counts(root: Node) -> dict[int, int]:
+    counts: dict[int, int] = {}
+
+    def visit(node: Node, active: set[int]) -> None:
+        node_id = id(node)
+        counts[node_id] = counts.get(node_id, 0) + 1
+        if node_id in active:
+            return
+        next_active = {*active, node_id}
+        if isinstance(node, MappingNode):
+            for key_node, value_node in node.value:
+                visit(cast(Node, key_node), next_active)
+                visit(cast(Node, value_node), next_active)
+        elif hasattr(node, "value") and isinstance(node.value, list):
+            for child in node.value:
+                visit(cast(Node, child), next_active)
+
+    visit(root, set())
+    return counts
+
+
 def _replace_scalar_assignments(source: str, host_id: str, assignments: tuple[str, ...]) -> str:
     root = yaml.compose(source)
     if not isinstance(root, MappingNode):
@@ -218,17 +253,9 @@ def _replace_scalar_assignments(source: str, host_id: str, assignments: tuple[st
         )
 
     replacements: list[tuple[int, int, str]] = []
-    seen_paths: set[str] = set()
+    reference_counts = _node_reference_counts(root)
     for assignment in assignments:
         segments, value = _parse_assignment(assignment)
-        dotted_path = ".".join(segments)
-        if dotted_path in seen_paths:
-            raise _failure(
-                "Mutation paths must be unique",
-                "Provide each dot-addressed path at most once",
-                {"path": dotted_path},
-            )
-        seen_paths.add(dotted_path)
         node: Node = host
         for segment in segments:
             if not isinstance(node, MappingNode):
@@ -249,6 +276,12 @@ def _replace_scalar_assignments(source: str, host_id: str, assignments: tuple[st
             raise _failure(
                 "Dot-addressed mutations support existing scalar fields only",
                 "Replace a containing mapping through a dedicated typed command",
+                {"assignment": assignment},
+            )
+        if reference_counts[id(node)] != 1:
+            raise _failure(
+                "Dot-addressed mutations refuse alias-backed fields",
+                "Replace the alias with an explicit value manually before using this command",
                 {"assignment": assignment},
             )
         replacement = (
@@ -369,6 +402,7 @@ def registry_host_patch(
     """Preview or explicitly write typed dot-addressed host mutations."""
     root = _registry_root(ctx, for_write=write)
     host_id, manifest_path, source, document, declaration = _find_host(root, host_ref)
+    _validate_unique_assignments(assignments)
     candidate = deepcopy(document)
     candidate_hosts = candidate.get("hosts")
     assert isinstance(candidate_hosts, MutableMapping)
