@@ -20,6 +20,7 @@ from infralink.cli.contracts import (
     DoctorEvidenceSummary,
     DoctorResult,
     DoctorTarget,
+    HostReadinessCheck,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.host_readiness import evaluate_host_readiness
@@ -594,8 +595,33 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
     host = ctx.registry.get(target_ref)
     if host is None:
         return None
-    return evaluate_host_readiness(
+    readiness = evaluate_host_readiness(
         host, SshReadinessTransport(_declared_firewall_rules(ctx, str(host.uuid)))
+    )
+    if not bool(getattr(host, "self_deploy_v2_reconcile_enabled", False)):
+        return readiness
+    try:
+        from infralink.cli.operations import resolve_apply_request, validate_target_ssh_identity
+
+        if ctx.registry_path is None:
+            raise ValueError
+        validate_target_ssh_identity(resolve_apply_request(ctx.registry_path, host))
+        check = HostReadinessCheck(
+            id="ssh_host_fingerprint",
+            required=True,
+            passed=True,
+            description="Declared SSH host key matches the live target.",
+        )
+    except (CliFailure, ValueError):
+        check = HostReadinessCheck(
+            id="ssh_host_fingerprint",
+            required=True,
+            passed=False,
+            description="Declared SSH host key matches the live target.",
+            detail="ssh_host_fingerprint_mismatch",
+        )
+    return readiness.model_copy(
+        update={"ready": readiness.ready and check.passed, "checks": [*readiness.checks, check]}
     )
 
 

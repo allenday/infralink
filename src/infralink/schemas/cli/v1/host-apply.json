@@ -258,6 +258,19 @@
           ],
           "default": null
         },
+        "ssh_host_identity": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ssh Host Identity"
+        },
         "target": {
           "$ref": "#/$defs/DoctorTarget"
         },

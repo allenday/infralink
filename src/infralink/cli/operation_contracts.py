@@ -76,6 +76,9 @@ class HostApplyResult(ContractModel):
     dry_run: bool = Field(default=False, exclude_if=lambda value: not value)
     plan: HostApplyPlan | None = Field(default=None, exclude_if=lambda value: value is None)
     dispatch: HostDispatch | None = Field(default=None, exclude_if=lambda value: value is None)
+    ssh_host_identity: Literal["passed"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     target_status: TargetReconcileStatus | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
