@@ -25,6 +25,7 @@ from infralink.cli.main import (
     _apply_controller_refresh,
     _bootstrap_apply_request,
     _bootstrap_executor_actions,
+    _bootstrap_executor_source,
     _bootstrap_plan_actions,
     _bootstrap_tailnet_address,
     _controller_bootstrap_state,
@@ -65,6 +66,43 @@ def test_control_root_can_be_supplied_by_the_controller_runtime(
 
     assert completed.returncode == 0
     assert completed.stdout.strip() == str(tmp_path)
+
+
+def test_bootstrap_executor_uses_image_local_source_without_git(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The baked executor must not depend on a controller Git checkout."""
+    executor_root = tmp_path / "app"
+    manifest = executor_root / "ansible/executors/infralink-host-baseline.json"
+    playbook = executor_root / "ansible/playbooks/infralink_host_baseline.yml"
+    manifest.parent.mkdir(parents=True)
+    playbook.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.host-bootstrap-executor/v1",
+                "id": "infra-management-host-baseline",
+                "playbook": "ansible/playbooks/infralink_host_baseline.yml",
+                "allowed_actions": ["bootstrap_infralink_controller"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook.write_text("---\n- hosts: all\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def fail_on_subprocess(args: list[str], **_kwargs: object) -> None:
+        commands.append(args)
+        raise AssertionError(f"bootstrap executor must not run subprocesses: {args}")
+
+    monkeypatch.setattr("infralink.cli.main._BOOTSTRAP_EXECUTOR_ROOT", executor_root)
+    monkeypatch.setattr("infralink.cli.main.subprocess.run", fail_on_subprocess)
+
+    with _bootstrap_executor_source(["bootstrap_infralink_controller"]) as (source, selected):
+        assert source == executor_root
+        assert selected == playbook
+
+    assert commands == []
 
 
 def _git(root: Path, *args: str) -> str:
@@ -591,13 +629,16 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
     ]
 
 
-def test_bootstrap_dirty_control_checkout_cannot_run_the_privileged_executor(
+def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Bootstrap must execute only a detached source selected by the registry."""
-    control, revision = _controller_source_repository(tmp_path)
-    manifest = control / "ansible/executors/infralink-host-baseline.json"
-    playbook = control / "ansible/playbooks/infralink_host_baseline.yml"
+    """Bootstrap ignores the controller checkout and uses the image executor."""
+    control, _revision = _controller_source_repository(tmp_path)
+    (control / "dirty").write_text("must not select bootstrap code", encoding="utf-8")
+
+    executor_root = tmp_path / "app"
+    manifest = executor_root / "ansible/executors/infralink-host-baseline.json"
+    playbook = executor_root / "ansible/playbooks/infralink_host_baseline.yml"
     manifest.parent.mkdir(parents=True)
     playbook.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
@@ -614,17 +655,14 @@ def test_bootstrap_dirty_control_checkout_cannot_run_the_privileged_executor(
         encoding="utf-8",
     )
     playbook.write_text("---\n- hosts: all\n", encoding="utf-8")
-    _git(control, "add", ".")
-    _git(control, "commit", "--quiet", "-m", "baseline executor")
-    _configure_self_remote(monkeypatch, control)
-    (control / "dirty").write_text("must never execute", encoding="utf-8")
-
     commands: list[list[str]] = []
+    ansible_cwds: list[Path] = []
     real_run = subprocess.run
 
     def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(args)
         if args[0] == "ansible-playbook":
+            ansible_cwds.append(kwargs["cwd"])
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
@@ -648,6 +686,7 @@ def test_bootstrap_dirty_control_checkout_cannot_run_the_privileged_executor(
         }
     )
     monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control)
+    monkeypatch.setattr("infralink.cli.main._BOOTSTRAP_EXECUTOR_ROOT", executor_root)
     monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
     monkeypatch.setattr(
         "infralink.cli.main.evaluate_host_readiness",
@@ -656,19 +695,19 @@ def test_bootstrap_dirty_control_checkout_cannot_run_the_privileged_executor(
         ),
     )
 
-    with pytest.raises(CliFailure) as failed:
-        _apply_bootstrap_request(
-            Context(),
-            target,
-            "100.64.68.83",
-            ["bootstrap_infralink_controller"],
-            controller,
-            "bws-token",
-            tmp_path / "known_hosts",
-        )
+    _apply_bootstrap_request(
+        Context(),
+        target,
+        "100.64.68.83",
+        ["bootstrap_infralink_controller"],
+        controller,
+        "bws-token",
+        tmp_path / "known_hosts",
+    )
 
-    assert failed.value.code is ErrorCode.PROVIDER_UNAVAILABLE
-    assert not any(command[0] == "ansible-playbook" for command in commands)
+    assert any(command[0] == "ansible-playbook" for command in commands)
+    assert ansible_cwds == [executor_root]
+    assert not any(command[:2] == ["git", "-C"] for command in commands)
 
 
 def test_bootstrap_rejects_remote_without_the_declared_tailnet_address() -> None:
