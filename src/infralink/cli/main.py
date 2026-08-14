@@ -81,6 +81,7 @@ _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", d
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
 _CONTROL_ROOT = Path(os.environ.get("INFRALINK_CONTROL_ROOT", "/opt/infra"))
+_BOOTSTRAP_EXECUTOR_ROOT = Path("/app")
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
 
@@ -2289,7 +2290,7 @@ def _apply_bootstrap_request(
     request = _bootstrap_apply_request(
         ctx, target, actions, address=address, controller_state=controller_state
     )
-    with _bootstrap_executor_source(_CONTROL_ROOT, actions) as (source, playbook):
+    with _bootstrap_executor_source(actions) as (source, playbook):
         completed = subprocess.run(
             [
                 "ansible-playbook",
@@ -2325,51 +2326,44 @@ def _apply_bootstrap_request(
 
 
 @contextmanager
-def _bootstrap_executor_source(
-    control_root: Path, actions: Sequence[str]
-) -> Iterator[tuple[Path, Path]]:
-    """Use a clean detached snapshot of the authoritative management main branch."""
+def _bootstrap_executor_source(actions: Sequence[str]) -> Iterator[tuple[Path, Path]]:
+    """Resolve the bootstrap executor baked into the controller image."""
     manifest_path = "ansible/executors/infralink-host-baseline.json"
-    with _controller_refresh_source(
-        control_root,
-        None,
-        required_path=manifest_path,
-        capability="host_bootstrap",
-    ) as source:
-        try:
-            manifest = json.loads((source / manifest_path).read_text(encoding="utf-8"))
-            playbook_path = manifest["playbook"]
-            allowed_actions = manifest["allowed_actions"]
-        except (OSError, KeyError, TypeError, json.JSONDecodeError):
-            manifest = None
-            playbook_path = None
-            allowed_actions = None
-        if (
-            not isinstance(manifest, dict)
-            or manifest.get("schema_version") != "infralink.host-bootstrap-executor/v1"
-            or manifest.get("id") != "infra-management-host-baseline"
-            or playbook_path != "ansible/playbooks/infralink_host_baseline.yml"
-            or not isinstance(allowed_actions, list)
-            or not all(isinstance(action_id, str) for action_id in allowed_actions)
-            or not set(actions).issubset(allowed_actions)
-        ):
-            raise CliFailure(
-                code=ErrorCode.CONFIGURATION_REQUIRED,
-                message="Selected host bootstrap executor does not support the requested actions",
-                exit_code=ExitCode.INPUT_ERROR,
-                fix="Publish a valid immutable infralink host-bootstrap executor",
-                details={"capability": "host_bootstrap"},
-            )
-        playbook = source / playbook_path
-        if not playbook.is_file():
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Selected host bootstrap executor playbook is unavailable",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Publish the declared executor playbook at the selected revision",
-                details={"capability": "host_bootstrap"},
-            )
-        yield source, playbook
+    source = _BOOTSTRAP_EXECUTOR_ROOT
+    try:
+        manifest = json.loads((source / manifest_path).read_text(encoding="utf-8"))
+        playbook_path = manifest["playbook"]
+        allowed_actions = manifest["allowed_actions"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        manifest = None
+        playbook_path = None
+        allowed_actions = None
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != "infralink.host-bootstrap-executor/v1"
+        or manifest.get("id") != "infra-management-host-baseline"
+        or playbook_path != "ansible/playbooks/infralink_host_baseline.yml"
+        or not isinstance(allowed_actions, list)
+        or not all(isinstance(action_id, str) for action_id in allowed_actions)
+        or not set(actions).issubset(allowed_actions)
+    ):
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Controller bootstrap executor does not support the requested actions",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Publish a controller image with a valid infralink host-bootstrap executor",
+            details={"capability": "host_bootstrap"},
+        )
+    playbook = source / playbook_path
+    if not playbook.is_file():
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Controller bootstrap executor playbook is unavailable",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Publish a controller image with the infralink host-bootstrap executor playbook",
+            details={"capability": "host_bootstrap"},
+        )
+    yield source, playbook
 
 
 def _bootstrap_apply_request(
