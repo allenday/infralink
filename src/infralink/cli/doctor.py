@@ -21,6 +21,7 @@ from infralink.cli.contracts import (
     DoctorResult,
     DoctorTarget,
     HostReadinessCheck,
+    HostReadinessResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.host_readiness import evaluate_host_readiness
@@ -595,33 +596,66 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
     host = ctx.registry.get(target_ref)
     if host is None:
         return None
-    readiness = evaluate_host_readiness(
-        host, SshReadinessTransport(_declared_firewall_rules(ctx, str(host.uuid)))
+    fingerprint_check: HostReadinessCheck | None = None
+    manifest_path = (
+        ctx.registry_path / str(host.uuid) / "manifest.yml" if ctx.registry_path else None
     )
-    if not bool(getattr(host, "self_deploy_v2_reconcile_enabled", False)):
-        return readiness
     try:
-        from infralink.cli.operations import resolve_apply_request, validate_target_ssh_identity
+        manifest = (
+            yaml.safe_load(manifest_path.read_text(encoding="utf-8")) if manifest_path else {}
+        )
+        declared_v2 = bool(
+            manifest.get("hosts", {})
+            .get(str(host.uuid), {})
+            .get("self_deploy_v2_target_ssh_host_fingerprint")
+        )
+    except (OSError, TypeError, yaml.YAMLError):
+        declared_v2 = False
+    if declared_v2:
+        try:
+            from infralink.cli.operations import pinned_target_ssh_identity, resolve_apply_request
 
-        if ctx.registry_path is None:
-            raise ValueError
-        validate_target_ssh_identity(resolve_apply_request(ctx.registry_path, host))
-        check = HostReadinessCheck(
-            id="ssh_host_fingerprint",
-            required=True,
-            passed=True,
-            description="Declared SSH host key matches the live target.",
+            if ctx.registry_path is None:
+                raise ValueError
+            request = resolve_apply_request(ctx.registry_path, host)
+            with pinned_target_ssh_identity(request) as known_hosts:
+                readiness = evaluate_host_readiness(
+                    host,
+                    SshReadinessTransport(
+                        _declared_firewall_rules(ctx, str(host.uuid)), known_hosts
+                    ),
+                )
+            fingerprint_check = HostReadinessCheck(
+                id="ssh_host_fingerprint",
+                required=True,
+                passed=True,
+                description="Declared SSH host key matches the live target.",
+            )
+        except (CliFailure, ValueError):
+            return HostReadinessResult(
+                transport="root_ssh",
+                ready=False,
+                checks=[
+                    HostReadinessCheck(
+                        id="ssh_host_fingerprint",
+                        required=True,
+                        passed=False,
+                        description="Declared SSH host key matches the live target.",
+                        detail="ssh_host_fingerprint_mismatch",
+                    )
+                ],
+                actions=[],
+            )
+    if fingerprint_check is None:
+        readiness = evaluate_host_readiness(
+            host, SshReadinessTransport(_declared_firewall_rules(ctx, str(host.uuid)))
         )
-    except (CliFailure, ValueError):
-        check = HostReadinessCheck(
-            id="ssh_host_fingerprint",
-            required=True,
-            passed=False,
-            description="Declared SSH host key matches the live target.",
-            detail="ssh_host_fingerprint_mismatch",
+    return (
+        readiness
+        if fingerprint_check is None
+        else readiness.model_copy(
+            update={"ready": readiness.ready, "checks": [*readiness.checks, fingerprint_check]}
         )
-    return readiness.model_copy(
-        update={"ready": readiness.ready and check.passed, "checks": [*readiness.checks, check]}
     )
 
 
