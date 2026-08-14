@@ -266,6 +266,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "description": "Inspect validated immutable registry releases.",
         "usage": "infralink release inspect --release-validation PATH --admission PATH",
     },
+    "registry": {
+        "description": "Inspect and author local registry declarations.",
+        "usage": "infralink registry host [get|patch] <ref>",
+    },
 }
 
 
@@ -1029,6 +1033,10 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.release import release
 
         return release
+    if name == "registry":
+        from infralink.cli.registry_authoring import registry
+
+        return registry
     return None
 
 
@@ -2521,9 +2529,7 @@ def _bootstrap_failure_details(
 
 def _bootstrap_nested_failure_details(value: str, token: str | None) -> dict[str, Any] | None:
     """Decode the baseline's bounded, already-sanitized nested-controller evidence."""
-    match = re.search(
-        r"INFRALINK_BOOTSTRAP_NESTED_FAILURE_B64=([A-Za-z0-9+/=]+)", value
-    )
+    match = re.search(r"INFRALINK_BOOTSTRAP_NESTED_FAILURE_B64=([A-Za-z0-9+/=]+)", value)
     if match is None:
         return None
     try:

@@ -61,6 +61,30 @@ class Action(ContractModel):
     bindings: dict[str, Binding] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
+class RegistryHostIdentity(ContractModel):
+    id: str = Field(min_length=1)
+    canonical_name: str | None = None
+
+
+class RegistryHostGetResult(ContractModel):
+    host: RegistryHostIdentity
+    manifest_path: str = Field(min_length=1)
+    declaration: dict[str, Any]
+
+
+class RegistryMutation(ContractModel):
+    path: str = Field(min_length=1)
+    before: Any = None
+    after: Any
+
+
+class RegistryHostPatchResult(ContractModel):
+    mode: Literal["preview", "written"]
+    host: RegistryHostIdentity
+    manifest_path: str = Field(min_length=1)
+    changes: list[RegistryMutation]
+
+
 BootstrapActionId = Literal[
     "bootstrap_infralink_controller",
     "create_devops_account",
