@@ -33,9 +33,12 @@ from infralink.cli.contracts import (
     HelpNavigationAction,
     HelpResult,
     HelpSubcommand,
+    HostBootstrapAction,
     HostBootstrapPlanResult,
     HostBootstrapRequest,
-    HostBootstrapV2State,
+    HostControllerBootstrapState,
+    HostReadinessCheck,
+    HostReadinessResult,
     InfoResult,
     InfoSources,
     InfoSummary,
@@ -63,6 +66,7 @@ from infralink.cli.output import (
     error_envelope,
     ok_envelope,
 )
+from infralink.host_readiness import HostReadinessProbe
 from infralink.host_transport import SshReadinessTransport
 
 # Topology sources are intentionally explicit. Examples are demo/test fixtures,
@@ -76,22 +80,6 @@ _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", d
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
 _CONTROL_ROOT = Path(os.environ.get("INFRALINK_CONTROL_ROOT", "/opt/infra"))
-BASELINE_EXECUTOR_ACTIONS: frozenset[str] = frozenset(
-    {
-        "create_devops_account",
-        "configure_devops_authorized_access",
-        "install_docker",
-        "install_jq",
-        "install_bws_cli",
-        "install_self_deploy_dependencies",
-        "enable_self_deploy_timer",
-        "migrate_v2_registry_layout",
-        "install_self_deploy_runtime",
-    }
-)
-_V2_BOOTSTRAP_ACTIONS: frozenset[str] = frozenset(
-    {"migrate_v2_registry_layout", "install_self_deploy_runtime"}
-)
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
 
@@ -349,15 +337,17 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink host show host-1"],
     },
     ("host", "bootstrap"): {
-        "description": "Plan host bootstrap actions or refresh a failed V2 controller.",
+        "description": "Plan or apply a declared Tailnet host bootstrap.",
         "arguments": [{"name": "host_id", "type": "string", "required": True}],
         "options": [
+            {"name": "ssh_host", "type": "text", "required": True},
+            {"name": "bws_token_stdin", "type": "boolean", "required": False},
             {"name": "plan", "type": "boolean", "required": False},
             {"name": "apply", "type": "boolean", "required": False},
         ],
         "examples": [
-            "infralink host bootstrap host-1 --plan",
-            "infralink host bootstrap host-1 --apply",
+            "infralink host bootstrap host-1 --ssh-host 100.64.0.1",
+            "printf '%s\\n' \"$HOST_BWS_TOKEN\" | infralink host bootstrap host-1 --ssh-host 100.64.0.1 --bws-token-stdin --apply",
         ],
     },
     ("host", "apply"): {
@@ -1785,6 +1775,17 @@ def host_show(
 @host.command(name="bootstrap")
 @click.argument("host_id")
 @click.option(
+    "--ssh-host",
+    required=True,
+    metavar="TAILNET_IPV4",
+    help="Declared Tailnet IPv4 address used for the bootstrap SSH connection.",
+)
+@click.option(
+    "--bws-token-stdin",
+    is_flag=True,
+    help="Read the host machine BWS token from standard input.",
+)
+@click.option(
     "--plan",
     "plan_only",
     is_flag=True,
@@ -1797,103 +1798,69 @@ def host_show(
     help="Apply failed host baseline actions or the declared V2 controller refresh.",
 )
 @pass_context
-def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: bool) -> int:
+def host_bootstrap(
+    ctx: Context,
+    host_id: str,
+    ssh_host: str,
+    bws_token_stdin: bool,
+    plan_only: bool,
+    apply_changes: bool,
+) -> int:
     """Plan required bootstrap actions or refresh a failed V2 controller."""
     target = ctx.registry.get(host_id)
     if target is None:
         raise entity_not_found("host", host_id)
-    readiness = evaluate_host_readiness(target, SshReadinessTransport())
-    if plan_only == apply_changes:
-        raise click.UsageError("pass exactly one of --plan or --apply")
-    v2_bootstrap_declared = bool(getattr(target, "self_deploy_v2_registry_layout_enabled", False))
-    required_v2_actions = (
-        [item.id for item in readiness.actions if item.id in _V2_BOOTSTRAP_ACTIONS]
-        if v2_bootstrap_declared
-        else []
-    )
-    if required_v2_actions:
-        _bootstrap_apply_request(ctx, target, required_v2_actions)
-    automated_actions = [
-        item.id
-        for item in readiness.actions
-        if item.id in BASELINE_EXECUTOR_ACTIONS
-        and (item.id not in _V2_BOOTSTRAP_ACTIONS or v2_bootstrap_declared)
-    ]
-    refresh_controller = any(
-        item.id == "inspect_self_deploy_reconcile" for item in readiness.actions
-    )
-    controller_runtime_revision: str | None = None
-    if refresh_controller and ctx.registry_path is not None and ctx.registry_path.is_dir():
-        controller_runtime_revision, _ = _controller_refresh_extra_vars(ctx.registry_path, target)
-    if (
-        apply_changes
-        and refresh_controller
-        and ctx.registry_path is not None
-        and ctx.registry_path.is_dir()
-    ):
-        _apply_controller_refresh(ctx, target, controller_runtime_revision)
-        readiness = evaluate_host_readiness(target, SshReadinessTransport())
-    elif apply_changes and automated_actions:
-        request = _bootstrap_apply_request(ctx, target, automated_actions)
-        control_root = _CONTROL_ROOT
-        playbook = control_root / "ansible/playbooks/infralink_host_baseline.yml"
-        if not playbook.is_file():
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Bastion host-bootstrap capability is not installed",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Install the current infra-management host-bootstrap capability on Bastion",
-                details={"capability": "host_bootstrap"},
-            )
-        completed = subprocess.run(
-            [
-                "ansible-playbook",
-                "-i",
-                f"{request.host_address},",
-                "-u",
-                "root",
-                str(playbook),
-                "-e",
-                json.dumps(request.ansible_extra_vars(), sort_keys=True),
-            ],
-            cwd=control_root,
-            text=True,
-            capture_output=True,
-            check=False,
+    if plan_only and apply_changes:
+        raise click.UsageError("pass at most one of --plan or --apply")
+    address = _bootstrap_tailnet_address(target, ssh_host)
+    if apply_changes and not bws_token_stdin:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host bootstrap apply requires a BWS token on standard input",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Pipe the host machine token to infralink host bootstrap --bws-token-stdin --apply",
+            details={"host": target.uuid, "requirement": "bws_token_stdin"},
         )
-        if completed.returncode != 0:
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Host baseline apply failed",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Verify the declared bootstrap executor and rerun host bootstrap --apply",
-                details=_bootstrap_failure_details(target.uuid, completed),
+    projects = _bootstrap_declared_bws_projects(ctx, target)
+    token = _read_bootstrap_bws_token() if bws_token_stdin else None
+    controller_state = _controller_bootstrap_state(ctx.registry_path, target)
+    if token is not None:
+        _validate_bootstrap_bws_access(
+            ctx, projects, token, controller_secret=controller_state.registry_read_identity_secret
+        )
+    with _bootstrap_pinned_transport(ctx, target, address) as transport:
+        probe = transport.probe(address)
+        _require_remote_tailnet_identity(target, probe, address)
+        readiness = _bootstrap_operator_readiness(
+            evaluate_host_readiness(target, _BootstrapProbeTransport(probe), address=address)
+        )
+        if token is None:
+            readiness = _readiness_with_bws_token_required(readiness)
+        automated_actions = _bootstrap_executor_actions(readiness)
+        if apply_changes and automated_actions:
+            readiness = _apply_bootstrap_request(
+                ctx,
+                target,
+                address,
+                automated_actions,
+                controller_state,
+                token,
+                transport.known_hosts,
             )
-        readiness = evaluate_host_readiness(target, SshReadinessTransport())
     actions = [
         action(
             "reinspect-readiness",
-            [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--plan"],
+            [
+                *_root_source_argv(ctx),
+                "host",
+                "bootstrap",
+                target.uuid,
+                "--ssh-host",
+                address,
+            ],
             "Reinspect live host readiness",
         )
     ]
-    if any(item.id == "inspect_self_deploy_reconcile" for item in readiness.actions):
-        if controller_runtime_revision is not None:
-            actions.append(
-                action(
-                    "refresh-controller",
-                    [*_root_source_argv(ctx), "host", "bootstrap", target.uuid, "--apply"],
-                    f"Refresh controller runtime {controller_runtime_revision}",
-                    safe=False,
-                )
-            )
-        actions.append(
-            action(
-                "verifier",
-                [*_root_source_argv(ctx), "host", "verifier", target.uuid],
-                "Inspect the read-only self-deploy verifier facts",
-            )
-        )
     result = HostBootstrapPlanResult(
         host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
         readiness=readiness,
@@ -1908,53 +1875,451 @@ def host_bootstrap(ctx: Context, host_id: str, plan_only: bool, apply_changes: b
     return 0 if readiness.ready or plan_only else 1
 
 
+_TAILNET_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _bootstrap_tailnet_address(target: Any, ssh_host: str) -> str:
+    """Accept only the exact registry-owned Tailnet SSH target."""
+    try:
+        supplied = ipaddress.ip_address(ssh_host)
+        declared = ipaddress.ip_address(str(target.tailscale_ip))
+    except ValueError:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host bootstrap requires a declared Tailnet IPv4 address",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare the host Tailnet IPv4 and pass it with --ssh-host",
+            details={"host": target.uuid},
+        ) from None
+    if (
+        not isinstance(supplied, ipaddress.IPv4Address)
+        or supplied not in _TAILNET_NETWORK
+        or supplied != declared
+    ):
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap SSH host must exactly match the declared Tailnet IPv4",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Pass the registry tailscale_ip with --ssh-host",
+            details={"host": target.uuid, "declared_tailscale_ip": str(declared)},
+        )
+    return str(supplied)
+
+
+def _bootstrap_declared_bws_projects(ctx: Context, target: Any) -> tuple[str, ...]:
+    """Resolve the new explicit BWS access contract, without legacy fallbacks."""
+    projects = tuple(getattr(target, "bws_projects", ()))
+    machine_account = getattr(target, "bws_machine_account", None)
+    if not projects or not isinstance(machine_account, str) or not machine_account.strip():
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host bootstrap requires bws_projects and bws_machine_account",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare the host machine account and one or more canonical bws_projects",
+            details={"host": target.uuid},
+        )
+    if len(set(projects)) != len(projects) or any(
+        not isinstance(item, str) or not item for item in projects
+    ):
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Host bootstrap bws_projects must be a unique nonempty list",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Correct the host bws_projects declaration",
+            details={"host": target.uuid},
+        )
+    return projects
+
+
+def _read_bootstrap_bws_token() -> str:
+    token = sys.stdin.read().strip()
+    if not token:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="BWS token standard input was empty",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Pipe the host machine token to host bootstrap --bws-token-stdin --apply",
+            details={"requirement": "bws_token_stdin"},
+        )
+    return token
+
+
+def _bws_project_catalog(ctx: Context) -> dict[str, str]:
+    if ctx.registry_path is None:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap BWS validation requires a registry directory checkout",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Use the checked-out registry hosts directory",
+        )
+    catalog = ctx.registry_path.parent / "ansible" / "inventory" / "bws_projects.yml"
+    try:
+        data = yaml.safe_load(catalog.read_text(encoding="utf-8"))
+        raw_projects = data["projects"]
+        projects = {
+            alias: entry["uuid"]
+            for alias, entry in raw_projects.items()
+            if isinstance(alias, str)
+            and isinstance(entry, dict)
+            and isinstance(entry.get("uuid"), str)
+        }
+    except (OSError, TypeError, KeyError, yaml.YAMLError):
+        projects = {}
+    if not projects:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap BWS project catalog is unavailable",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Provide a valid ansible/inventory/bws_projects.yml in the selected registry",
+        )
+    return projects
+
+
+def _validate_bootstrap_bws_access(
+    ctx: Context, aliases: tuple[str, ...], token: str, *, controller_secret: Any | None = None
+) -> None:
+    catalog = _bws_project_catalog(ctx)
+    missing = [alias for alias in aliases if alias not in catalog]
+    if missing:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Declared BWS project is absent from the registry catalog",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare only catalogued BWS project aliases",
+            details={"projects": missing},
+        )
+    environment = {**os.environ, "BWS_ACCESS_TOKEN": token}
+    for alias in aliases:
+        completed = subprocess.run(
+            ["bws", "project", "get", catalog[alias], "--output", "none"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=20,
+            env=environment,
+        )
+        if completed.returncode != 0:
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+                message="BWS token cannot access a declared bootstrap project",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Grant the declared machine account access to every bws_projects entry",
+                details={"project": alias},
+            )
+    if controller_secret is not None:
+        expected_project = catalog.get(controller_secret.project)
+        if expected_project is None:
+            raise CliFailure(
+                code=ErrorCode.CONFIGURATION_REQUIRED,
+                message="Controller bootstrap secret project is absent from the registry catalog",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Declare a catalogued project for controller_bootstrap.registry_read_identity_secret",
+                details={"project": controller_secret.project},
+            )
+        completed = subprocess.run(
+            ["bws", "secret", "get", controller_secret.id, "--output", "json"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=20,
+            env=environment,
+        )
+        try:
+            secret = json.loads(completed.stdout) if completed.returncode == 0 else {}
+            actual_project = secret.get("projectId")
+        except json.JSONDecodeError:
+            actual_project = None
+        if actual_project != expected_project:
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+                message="BWS token cannot read the declared controller registry secret",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Grant the host machine account access to the declared secret project",
+                details={"project": controller_secret.project, "secret_id": controller_secret.id},
+            )
+
+
+class _BootstrapProbeTransport:
+    """Reuse one pinned SSH observation without issuing a second connection."""
+
+    def __init__(self, probe: HostReadinessProbe) -> None:
+        self._probe = probe
+
+    def probe(self, _address: str) -> HostReadinessProbe:
+        return self._probe
+
+
+@contextmanager
+def _bootstrap_pinned_transport(
+    ctx: Context, target: Any, address: str
+) -> Iterator[SshReadinessTransport]:
+    """Bootstrap uses the same declared SSH identity contract as reconcile."""
+    from infralink.cli.operations import _pinned_known_hosts, resolve_apply_request
+
+    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap requires a directory registry checkout",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Use the selected registry hosts directory",
+            details={"host": target.uuid},
+        )
+    request = resolve_apply_request(ctx.registry_path, target)
+    if request.address != address:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap SSH address differs from the declared pinned host identity",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Correct the declared Tailnet address and SSH fingerprint",
+            details={"host": target.uuid},
+        )
+    with _pinned_known_hosts(request) as known_hosts:
+        yield SshReadinessTransport(known_hosts=known_hosts)
+
+
+def _require_remote_tailnet_identity(target: Any, probe: HostReadinessProbe, address: str) -> None:
+    # The SSH probe intentionally exposes only addresses, never Tailnet auth material.
+    if not probe.reachable:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bootstrap SSH connection failed",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Install the authorized key and verify root SSH over the declared Tailnet address",
+            details={"host": target.uuid, "ssh_host": address},
+        )
+    if address not in probe.tailscale_ips:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Remote host is not enrolled at its declared Tailnet address",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Enroll Tailscale manually and correct the host declaration before bootstrap",
+            details={"host": target.uuid, "declared_tailscale_ip": address},
+        )
+    expected_name = target.tailscale_name or target.canonical_name
+    if not probe.tailscale_running or probe.tailscale_name != expected_name:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Remote Tailscale identity does not match the declared host",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Start Tailscale and correct its host name before bootstrap",
+            details={"host": target.uuid, "expected_name": expected_name},
+        )
+
+
+def _readiness_with_bws_token_required(readiness: HostReadinessResult) -> HostReadinessResult:
+    return readiness.model_copy(
+        update={
+            "ready": False,
+            "checks": [
+                *readiness.checks,
+                HostReadinessCheck(
+                    id="bws_token",
+                    required=True,
+                    passed=False,
+                    description="A host machine BWS token was supplied for bootstrap validation.",
+                    detail="bws_token_required",
+                ),
+            ],
+            "actions": [
+                *readiness.actions,
+                HostBootstrapAction(
+                    id="provide_bws_token",
+                    check_id="bws_token",
+                    description="Rerun bootstrap with --bws-token-stdin and provide the host machine token on standard input.",
+                ),
+            ],
+        }
+    )
+
+
+def _bootstrap_operator_readiness(readiness: HostReadinessResult) -> HostReadinessResult:
+    """Show only actionable prerequisites plus the one controller action."""
+    executable_prerequisites = {
+        "establish_root_ssh",
+        "correct_host_identity",
+        "initialize_machine_id",
+        "install_git",
+        "install_docker",
+        "install_tailscale",
+        "install_jq",
+        "install_bws_cli",
+        "install_self_deploy_dependencies",
+    }
+    checks = [
+        check
+        for check in readiness.checks
+        if check.id not in {"devops_account", "devops_authorized_access", "registry_layout"}
+    ]
+    actions = [item for item in readiness.actions if item.id in executable_prerequisites]
+    if not readiness.ready:
+        actions.append(
+            HostBootstrapAction(
+                id="bootstrap_infralink_controller",
+                check_id="controller_bootstrap",
+                description="Install the declared Infralink controller and reconcile timer.",
+            )
+        )
+    return readiness.model_copy(
+        update={
+            "checks": checks,
+            "actions": actions,
+            "ready": all(not check.required or check.passed for check in checks),
+        }
+    )
+
+
+def _bootstrap_executor_actions(readiness: HostReadinessResult) -> list[str]:
+    """Translate only declared bootstrap prerequisites into executor actions."""
+    executor_actions = {
+        "install_git",
+        "install_docker",
+        "install_jq",
+        "install_bws_cli",
+        "install_self_deploy_dependencies",
+    }
+    actions = [item.id for item in readiness.actions if item.id in executor_actions]
+    if not readiness.ready:
+        actions.append("bootstrap_infralink_controller")
+    return actions
+
+
+def _bootstrap_execution_env(token: str | None) -> dict[str, str]:
+    if token is None:
+        return dict(os.environ)
+    return {**os.environ, "BWS_ACCESS_TOKEN": token}
+
+
+def _apply_bootstrap_request(
+    ctx: Context,
+    target: Any,
+    address: str,
+    actions: list[str],
+    controller_state: HostControllerBootstrapState,
+    token: str | None,
+    known_hosts: Path | None,
+) -> HostReadinessResult:
+    """Run the sole baseline executor with the probe's pinned host identity."""
+    if known_hosts is None:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap requires a pinned SSH host key",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare ssh.host_key_fingerprint before bootstrap",
+            details={"host": target.uuid},
+        )
+    request = _bootstrap_apply_request(
+        ctx, target, actions, address=address, controller_state=controller_state
+    )
+    with _bootstrap_executor_source(_CONTROL_ROOT, actions) as (source, playbook):
+        completed = subprocess.run(
+            [
+                "ansible-playbook",
+                "-i",
+                f"{request.host_address},",
+                "-u",
+                "root",
+                "--ssh-common-args",
+                f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}",
+                str(playbook),
+                "-e",
+                json.dumps(request.ansible_extra_vars(), sort_keys=True),
+            ],
+            cwd=source,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_bootstrap_execution_env(token),
+        )
+    if completed.returncode != 0:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Host baseline apply failed",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Verify the declared bootstrap executor and rerun host bootstrap --apply",
+            details=_bootstrap_failure_details(target.uuid, completed),
+        )
+    return _bootstrap_operator_readiness(
+        evaluate_host_readiness(
+            target, SshReadinessTransport(known_hosts=known_hosts), address=address
+        )
+    )
+
+
+@contextmanager
+def _bootstrap_executor_source(
+    control_root: Path, actions: Sequence[str]
+) -> Iterator[tuple[Path, Path]]:
+    """Use a clean detached snapshot of the authoritative management main branch."""
+    manifest_path = "ansible/executors/infralink-host-baseline.json"
+    with _controller_refresh_source(
+        control_root,
+        None,
+        required_path=manifest_path,
+        capability="host_bootstrap",
+    ) as source:
+        try:
+            manifest = json.loads((source / manifest_path).read_text(encoding="utf-8"))
+            playbook_path = manifest["playbook"]
+            allowed_actions = manifest["allowed_actions"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            manifest = None
+            playbook_path = None
+            allowed_actions = None
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schema_version") != "infralink.host-bootstrap-executor/v1"
+            or manifest.get("id") != "infra-management-host-baseline"
+            or playbook_path != "ansible/playbooks/infralink_host_baseline.yml"
+            or not isinstance(allowed_actions, list)
+            or not all(isinstance(action_id, str) for action_id in allowed_actions)
+            or not set(actions).issubset(allowed_actions)
+        ):
+            raise CliFailure(
+                code=ErrorCode.CONFIGURATION_REQUIRED,
+                message="Selected host bootstrap executor does not support the requested actions",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Publish a valid immutable infralink host-bootstrap executor",
+                details={"capability": "host_bootstrap"},
+            )
+        playbook = source / playbook_path
+        if not playbook.is_file():
+            raise CliFailure(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message="Selected host bootstrap executor playbook is unavailable",
+                exit_code=ExitCode.PROVIDER_ERROR,
+                fix="Publish the declared executor playbook at the selected revision",
+                details={"capability": "host_bootstrap"},
+            )
+        yield source, playbook
+
+
 def _bootstrap_apply_request(
-    ctx: Context, target: Any, automated_actions: list[str]
+    ctx: Context,
+    target: Any,
+    automated_actions: list[str],
+    *,
+    address: str | None = None,
+    controller_state: HostControllerBootstrapState | None = None,
 ) -> HostBootstrapRequest:
     """Resolve a bounded executor request before any remote mutation begins."""
-    address = target.tailscale_ip or target.public_ip
+    address = address or target.tailscale_ip
     if not address:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Host address is required for bootstrap",
             exit_code=ExitCode.INPUT_ERROR,
-            fix="Declare a Tailscale or public address for the host",
+            fix="Declare a Tailnet address for the host",
             details={"host": target.uuid},
         )
     try:
-        v2: HostBootstrapV2State | None = None
-        if _V2_BOOTSTRAP_ACTIONS & set(automated_actions):
-            if ctx.registry_path is None or not ctx.registry_path.is_dir():
-                raise CliFailure(
-                    code=ErrorCode.CONFIGURATION_REQUIRED,
-                    message="V2 bootstrap actions require a directory registry checkout",
-                    exit_code=ExitCode.INPUT_ERROR,
-                    fix="Provide the selected registry hosts directory with its operations lock",
-                    details={"host": target.uuid},
-                )
-            runtime_revision, desired = _controller_refresh_extra_vars(ctx.registry_path, target)
-            v2 = HostBootstrapV2State.model_validate(
-                {
-                    "self_deploy_v2_runtime_revision": runtime_revision,
-                    **{
-                        name: value
-                        for name, value in desired.items()
-                        if name
-                        not in {
-                            "uuid",
-                            "canonical_name",
-                            "self_deploy_v2_runtime_revision",
-                        }
-                    },
-                }
-            )
+        controller_bootstrap: HostControllerBootstrapState | None = controller_state
         return HostBootstrapRequest.model_validate(
             {
                 "host_address": str(address),
                 "host_uuid": target.uuid,
                 "canonical_name": target.canonical_name,
                 "bootstrap_actions": automated_actions,
-                "v2": v2,
+                "controller_bootstrap": controller_bootstrap,
             }
         )
     except CliFailure:
@@ -1967,6 +2332,54 @@ def _bootstrap_apply_request(
             fix="Declare complete V2 bootstrap state and rerun host bootstrap --plan",
             details={"host": target.uuid},
         ) from None
+
+
+def _controller_bootstrap_state(
+    registry_path: Path | None, target: Any
+) -> HostControllerBootstrapState:
+    if registry_path is None:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Controller bootstrap requires a registry directory checkout",
+            exit_code=ExitCode.INPUT_ERROR,
+        )
+    manifest_path = registry_path / target.uuid / "manifest.yml"
+    deployment_path = registry_path / target.uuid / "operations" / "deployment.yml"
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["hosts"][target.uuid]
+        bootstrap = manifest["controller_bootstrap"]
+        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+        image = deployment["controller"]["image"]
+        state = HostControllerBootstrapState.model_validate(
+            {
+                "controller_image": _controller_image_reference(image),
+                "registry_read_identity_secret": bootstrap["registry_read_identity_secret"],
+                "registry_repo_url": bootstrap["registry_repo_url"],
+                "registry_ref": bootstrap["registry_ref"],
+            }
+        )
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError):
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Selected host declaration lacks canonical controller bootstrap state",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare controller_bootstrap with registry key reference, repository, and ref",
+            details={"host": target.uuid},
+        ) from None
+    return state
+
+
+def _controller_image_reference(image: Any) -> str:
+    """Use the same head/branch selector semantics for bootstrap and reconcile."""
+    if not isinstance(image, dict):
+        raise ValueError("controller image must be a mapping")
+    repository = image.get("repository")
+    tag = image.get("tag")
+    if tag == "head":
+        tag = image.get("branch", "main")
+    if not isinstance(repository, str) or not repository or not isinstance(tag, str) or not tag:
+        raise ValueError("controller image reference is incomplete")
+    return f"{repository}:{tag}"
 
 
 def _bootstrap_failure_details(
@@ -2052,8 +2465,15 @@ def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str |
 
 
 @contextmanager
-def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Path]:
-    """Materialize the selected immutable controller tree, never the live checkout."""
+def _controller_refresh_source(
+    control_root: Path,
+    revision: str | None,
+    *,
+    required_path: str | None = None,
+    capability: str = "controller_refresh",
+) -> Iterator[Path]:
+    """Materialize an immutable management tree, never the live checkout."""
+    required_path = required_path or _CONTROLLER_REFRESH_PLAYBOOK
     status = subprocess.run(
         ["git", "-C", str(control_root), "status", "--porcelain"],
         text=True,
@@ -2064,10 +2484,10 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
     if status.returncode != 0 or status.stdout:
         raise CliFailure(
             code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot materialize the selected immutable controller source",
+            message="Bastion cannot materialize the selected immutable management source",
             exit_code=ExitCode.PROVIDER_ERROR,
             fix="Clean and refresh the Bastion infra-management checkout at the selected revision",
-            details={"capability": "controller_refresh", "required_revision": revision},
+            details={"capability": capability, "required_revision": revision},
         )
     remote = subprocess.run(
         ["git", "-C", str(control_root), "remote", "get-url", "origin"],
@@ -2081,10 +2501,10 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
     ) != _controller_remote_identity(_CONTROLLER_REFRESH_SOURCE_REMOTE):
         raise CliFailure(
             code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot fetch the selected immutable controller source",
+            message="Bastion cannot fetch the selected immutable management source",
             exit_code=ExitCode.PROVIDER_ERROR,
             fix="Configure the expected infra-management origin and rerun host bootstrap --apply",
-            details={"capability": "controller_refresh", "required_revision": revision},
+            details={"capability": capability, "required_revision": revision},
         )
     # `main` is transport only: the candidate-selected revision remains the
     # sole executable identity and must be reachable from the expected remote.
@@ -2104,6 +2524,23 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
         check=False,
         env=_isolated_git_environment(),
     )
+    if revision is None and fetched.returncode == 0:
+        resolved = subprocess.run(
+            ["git", "-C", str(control_root), "rev-parse", "origin/main"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_isolated_git_environment(),
+        )
+        revision = resolved.stdout.strip() if resolved.returncode == 0 else ""
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise CliFailure(
+            code=ErrorCode.PROVIDER_UNAVAILABLE,
+            message="Bastion cannot resolve the immutable management source",
+            exit_code=ExitCode.PROVIDER_ERROR,
+            fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
+            details={"capability": capability},
+        )
     present = subprocess.run(
         ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
         text=True,
@@ -2121,10 +2558,10 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
     if fetched.returncode != 0 or present.returncode != 0 or selected_from_main.returncode != 0:
         raise CliFailure(
             code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot fetch the selected immutable controller source",
+            message="Bastion cannot fetch the selected immutable management source",
             exit_code=ExitCode.PROVIDER_ERROR,
             fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
-            details={"capability": "controller_refresh", "required_revision": revision},
+            details={"capability": capability, "required_revision": revision},
         )
     with tempfile.TemporaryDirectory(prefix="infralink-controller-refresh-") as temporary:
         source = Path(temporary) / "source"
@@ -2151,19 +2588,19 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
             check=False,
             env=_isolated_git_environment(),
         )
-        playbook = source / _CONTROLLER_REFRESH_PLAYBOOK
+        required = source / required_path
         if (
             created.returncode != 0
             or head.returncode != 0
             or head.stdout.strip() != revision
-            or not playbook.is_file()
+            or not required.is_file()
         ):
             raise CliFailure(
                 code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Bastion could not materialize the selected controller source",
+                message="Bastion could not materialize the selected immutable management source",
                 exit_code=ExitCode.PROVIDER_ERROR,
                 fix="Refresh the Bastion infra-management clone with the selected controller revision",
-                details={"capability": "controller_refresh", "required_revision": revision},
+                details={"capability": capability, "required_revision": revision},
             )
         completed = False
         try:
@@ -2180,10 +2617,10 @@ def _controller_refresh_source(control_root: Path, revision: str) -> Iterator[Pa
             if completed and removed.returncode != 0:
                 raise CliFailure(
                     code=ErrorCode.ARTIFACT_IO_FAILED,
-                    message="Bastion could not remove the temporary controller source",
+                    message="Bastion could not remove the temporary management source",
                     exit_code=ExitCode.ARTIFACT_IO_ERROR,
                     fix="Remove the temporary controller worktree and rerun host bootstrap --apply",
-                    details={"capability": "controller_refresh", "required_revision": revision},
+                    details={"capability": capability, "required_revision": revision},
                 )
 
 

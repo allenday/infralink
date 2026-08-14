@@ -291,7 +291,9 @@ selection:
             0,
             True,
         ),
-        ("host", "bootstrap"): ([*source, "host", "bootstrap", TARGET_ID, "--plan"], 0, True),
+        # The fixture deliberately has a public documentation address; bootstrap
+        # now rejects it before any provider or secret interaction.
+        ("host", "bootstrap"): ([*source, "host", "bootstrap", TARGET_ID, "--plan"], 2, False),
         ("host", "apply"): ([*source, "host", "apply", TARGET_ID, "--dry-run"], 3, False),
         ("host", "status"): ([*source, "host", "status", TARGET_ID], 3, False),
         ("host", "logs"): ([*source, "host", "logs", TARGET_ID, "--last-run"], 3, False),

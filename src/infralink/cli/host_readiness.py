@@ -16,6 +16,8 @@ class ReadinessTransport(Protocol):
 def evaluate_host_readiness(
     host: Any,
     transport: ReadinessTransport | None,
+    *,
+    address: str | None = None,
 ) -> HostReadinessResult:
     """Return one typed baseline evaluation; no command owns its own checks."""
     canonical_name = str(host.canonical_name)
@@ -35,14 +37,26 @@ def evaluate_host_readiness(
         )
         transport_name = "declaration_only"
     else:
-        address = getattr(host, "tailscale_ip", None) or getattr(host, "public_ip", None) or ""
-        probe = transport.probe(str(address))
+        selected_address = (
+            address
+            if address is not None
+            else getattr(host, "tailscale_ip", None) or getattr(host, "public_ip", None) or ""
+        )
+        probe = transport.probe(str(selected_address))
         transport_name = "root_ssh"
-    requires_v2_registry_layout = bool(
-        getattr(host, "self_deploy_v2_registry_layout_enabled", False)
+    requires_v2_registry_layout = bool(getattr(host, "self_deploy_v2_registry_layout_enabled", False))
+    requires_controller_reconcile = bool(getattr(host, "controller_bootstrap", None))
+    # Canonical controller bootstrap hosts must prove the normal reconcile loop;
+    # they do not carry legacy V2 declaration flags.
+    require_reconcile = bool(
+        getattr(host, "self_deploy_v2_reconcile_enabled", False)
+        or requires_controller_reconcile
     )
-    require_reconcile = bool(getattr(host, "self_deploy_v2_reconcile_enabled", True))
-    probe = replace(probe, requires_v2_registry_layout=requires_v2_registry_layout)
+    probe = replace(
+        probe,
+        requires_v2_registry_layout=requires_v2_registry_layout,
+        requires_controller_reconcile=requires_controller_reconcile,
+    )
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name=canonical_name,
         probe=probe,

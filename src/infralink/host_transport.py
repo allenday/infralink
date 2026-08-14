@@ -14,10 +14,15 @@ printf 'machine_id='; cat /etc/machine-id 2>/dev/null || true
 for command in git docker tailscale jq bws; do
   if command -v \"$command\" >/dev/null 2>&1; then printf '%s=1\\n' \"$command\"; else printf '%s=0\\n' \"$command\"; fi
 done
+if command -v tailscale >/dev/null 2>&1; then
+  tailscale ip -4 2>/dev/null | while IFS= read -r ip; do printf 'tailscale_ip=%s\n' "$ip"; done
+  tailscale status --json 2>/dev/null | python3 -c 'import json,sys; state=json.load(sys.stdin); print("tailscale_running=" + ("1" if state.get("BackendState") == "Running" else "0")); print("tailscale_name=" + str(state.get("Self", {}).get("HostName", "")))' 2>/dev/null || printf 'tailscale_running=0\ntailscale_name=\n'
+fi
 if id devops >/dev/null 2>&1; then printf 'devops_account=1\\n'; else printf 'devops_account=0\\n'; fi
 if test -s /home/devops/.ssh/authorized_keys; then printf 'devops_authorized_access=1\\n'; else printf 'devops_authorized_access=0\\n'; fi
-if test -r /etc/environment && grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/environment; then printf 'bws_config=1\\n'; else printf 'bws_config=0\\n'; fi
-if python3 -c 'import yaml, jinja2' >/dev/null 2>&1; then printf 'self_deploy_dependencies=1\\n'; else printf 'self_deploy_dependencies=0\\n'; fi
+if test -r /etc/infralink/host.env && grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/infralink/host.env; then printf 'bws_config=1\\n'; else printf 'bws_config=0\\n'; fi
+# The controller image contains its renderer dependencies; the host needs only its launcher.
+if test -x /usr/local/sbin/infralink-host; then printf 'self_deploy_dependencies=1\\n'; else printf 'self_deploy_dependencies=0\\n'; fi
 if test -d /var/lib/infralink/registry && systemctl cat infralink-host-reconcile.timer >/dev/null 2>&1; then
   printf 'self_deploy_runtime=1\\nself_deploy_mode=v2_reconcile\\n'
 elif test -x /opt/infra/scripts/self-deploy.sh && test -f /etc/cron.d/self-deploy; then
@@ -71,6 +76,11 @@ class SshReadinessTransport:
     ) -> None:
         self._expected_firewall_rules = expected_firewall_rules
         self._known_hosts = known_hosts
+
+    @property
+    def known_hosts(self) -> Path | None:
+        """Pinned known-hosts file used by this transport, if declared."""
+        return self._known_hosts
 
     def probe(self, address: str) -> HostReadinessProbe:
         if not address:
@@ -147,6 +157,11 @@ class SshReadinessTransport:
             firewall_rules_expected=len(self._expected_firewall_rules),
             firewall_rules_matched=_optional_int(values.get("firewall_rules_matched")) or 0,
             firewall_observable=values.get("firewall_observable", "1") == "1",
+            tailscale_ips=tuple(values.get("tailscale_ip", "").split())
+            if values.get("tailscale_ip")
+            else (),
+            tailscale_running=values.get("tailscale_running") == "1",
+            tailscale_name=values.get("tailscale_name") or None,
         )
 
 
@@ -172,7 +187,7 @@ def _parse_probe(stdout: str) -> dict[str, str]:
     for line in stdout.splitlines():
         key, separator, value = line.partition("=")
         if separator and key:
-            values[key] = value
+            values[key] = f"{values[key]} {value}".strip() if key == "tailscale_ip" and key in values else value
     return values
 
 
