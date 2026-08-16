@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from enum import Enum
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
@@ -30,6 +31,16 @@ class HostStatus(str, Enum):
     TERMINATED = "terminated"
     PROVISIONING = "provisioning"
     MAINTENANCE = "maintenance"
+
+
+class HostEpitaph(StrictModel):
+    """Structured retirement record for an inactive host."""
+
+    retired_at: date
+    reason: str
+    rollback_ref: str | None = None
+    rollback_path: str | None = None
+    external_release: str | None = None
 
 
 class HostBootstrapExecutorSchema(StrictModel):
@@ -246,6 +257,7 @@ class HostSchema(NodeSchema):
     status: HostStatus = HostStatus.ACTIVE
     projects: list[str] = Field(default_factory=list)
     cloud: str | None = None
+    epitaph: HostEpitaph | None = None
 
     @model_validator(mode="before")
     @classmethod
