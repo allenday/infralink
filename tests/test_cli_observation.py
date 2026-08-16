@@ -84,6 +84,54 @@ def test_project_observation_and_capabilities_are_offline_yaml(tmp_path: Path) -
     assert "redis-ready" in advertised["evaluator_types"]["health"]
 
 
+def test_project_view_exposes_profile_metrics_membership(tmp_path: Path) -> None:
+    source = _source(
+        tmp_path,
+        (
+            SOURCE
+            + """\
+observation_backends:
+  - {id: metrics-primary, kind: metrics, backend_ref: prometheus}
+datasource_bindings:
+  - {id: primary-metrics, observation_backend_id: metrics-primary, datasource_ref: main}
+operations_views:
+  - id: nginx
+    purpose: Fleet NGINX metrics.
+    kind: profile_metrics
+    metric_profile_id: web
+    datasource_binding_id: primary-metrics
+    sections: []
+"""
+        ).replace(
+            "    health:\n",
+            "    metrics:\n      - {id: metrics, endpoint_id: http, evaluator: prometheus-scrape}\n    health:\n",
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "project",
+            "view",
+            "nginx",
+            "--source",
+            str(source),
+            "--as-of",
+            "2026-08-04T00:00:00Z",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = yaml.safe_load(result.output)
+    assert payload["result"]["view"]["kind"] == "profile_metrics"
+    assert payload["result"]["view"]["host_ids"] == ["11111111-1111-4111-8111-111111111111"]
+    assert payload["result"]["view"]["service_ids"] == [
+        "11111111-1111-4111-8111-111111111111/frontend"
+    ]
+    assert payload["result"]["view"]["source_refs"][0]["path"] == source.name
+    assert any(action["rel"] == "validate" for action in payload["next_actions"])
+
+
 def test_observation_errors_are_typed_and_exact_exit_codes(tmp_path: Path) -> None:
     unsupported = _source(tmp_path, "schema_version: infralink.observation/v99\n")
     invalid = CliRunner().invoke(

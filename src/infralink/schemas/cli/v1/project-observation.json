@@ -1091,7 +1091,8 @@
           "enum": [
             "standard",
             "fleet_convergence",
-            "host_metrics"
+            "host_metrics",
+            "profile_metrics"
           ],
           "title": "Kind",
           "type": "string"
@@ -1117,6 +1118,14 @@
             "$ref": "#/$defs/PlannedViewSection"
           },
           "title": "Sections",
+          "type": "array"
+        },
+        "service_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Service Ids",
           "type": "array"
         },
         "source_refs": {
