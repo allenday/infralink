@@ -120,7 +120,8 @@
           "enum": [
             "standard",
             "fleet_convergence",
-            "host_metrics"
+            "host_metrics",
+            "profile_metrics"
           ],
           "title": "Kind",
           "type": "string"

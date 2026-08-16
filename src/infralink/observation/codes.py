@@ -77,6 +77,8 @@ PLANNER_DIAGNOSTIC_CODES = _DYNAMIC_DUPLICATE_CODES | frozenset(
         "unknown-endpoint-override",
         "unknown-host",
         "unknown-host-metrics-profile",
+        "profile-metrics-profile-capability-required",
+        "unknown-profile-metrics-profile",
         "unknown-observation-backend",
         "unknown-profile",
         "unknown-provider-alias",

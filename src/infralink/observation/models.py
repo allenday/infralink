@@ -474,7 +474,7 @@ class OperationsView(StrictModel):
     id: CanonicalId
     purpose: Annotated[str, Field(min_length=1)]
     sections: list[OperationsViewSection]
-    kind: Literal["standard", "fleet_convergence", "host_metrics"] = "standard"
+    kind: Literal["standard", "fleet_convergence", "host_metrics", "profile_metrics"] = "standard"
     freshness_seconds: PositiveSeconds | None = None
     datasource_binding_id: CanonicalId | None = None
     metric_profile_id: CanonicalId | None = None
@@ -505,7 +505,7 @@ class OperationsView(StrictModel):
             or self.datasource_binding_id is None
             or self.metric_profile_id is None
         ):
-            raise ValueError("host metrics view has an invalid declaration")
+            raise ValueError(f"{self.kind} view has an invalid declaration")
         return self
 
 

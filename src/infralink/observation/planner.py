@@ -228,8 +228,9 @@ class PlannedOperationsView(PlanModel):
     id: str
     purpose: str
     sections: tuple[PlannedViewSection, ...]
-    kind: Literal["standard", "fleet_convergence", "host_metrics"] = "standard"
+    kind: Literal["standard", "fleet_convergence", "host_metrics", "profile_metrics"] = "standard"
     host_ids: tuple[str, ...] = ()
+    service_ids: tuple[str, ...] = ()
     freshness_seconds: int | None = None
     datasource_binding_id: str | None = None
     metric_profile_id: str | None = None
@@ -1107,8 +1108,9 @@ def resolve_observation_documents(
                 )
             )
             continue
-        if view.kind == "host_metrics":
+        if view.kind in {"host_metrics", "profile_metrics"}:
             metric_profile_supports_host_metrics = False
+            metric_profile_exposes_metrics = False
             if view.datasource_binding_id not in datasources:
                 _finding(
                     findings,
@@ -1117,14 +1119,38 @@ def resolve_observation_documents(
                     view.id,
                     "Reference a declared datasource binding.",
                 )
+            else:
+                datasource = datasources[view.datasource_binding_id][0]
+                assert isinstance(datasource, DatasourceBinding)
+                backend_entry = backends.get(datasource.observation_backend_id)
+                if backend_entry is not None:
+                    backend = backend_entry[0]
+                    assert isinstance(backend, ObservationBackend)
+                    if backend.kind != BackendKind.METRICS:
+                        _finding(
+                            findings,
+                            "view-datasource-kind-incompatible",
+                            _child(ref, "datasource_binding_id"),
+                            view.id,
+                            "Bind metrics views to a metrics observation backend.",
+                        )
             if view.metric_profile_id not in profiles:
-                _finding(
-                    findings,
-                    "unknown-host-metrics-profile",
-                    _child(ref, "metric_profile_id"),
-                    view.id,
-                    "Reference a declared service profile.",
-                )
+                if view.kind == "host_metrics":
+                    _finding(
+                        findings,
+                        "unknown-host-metrics-profile",
+                        _child(ref, "metric_profile_id"),
+                        view.id,
+                        "Reference a declared service profile.",
+                    )
+                else:
+                    _finding(
+                        findings,
+                        "unknown-profile-metrics-profile",
+                        _child(ref, "metric_profile_id"),
+                        view.id,
+                        "Reference a declared service profile.",
+                    )
             else:
                 metric_profile = profiles[view.metric_profile_id][0]
                 assert isinstance(metric_profile, ServiceProfile)
@@ -1132,7 +1158,12 @@ def resolve_observation_documents(
                     HostBaselineCapability.HOST_METRICS
                     in metric_profile.required_host_baseline_capabilities
                 )
-            if not metric_profile_supports_host_metrics and view.metric_profile_id in profiles:
+                metric_profile_exposes_metrics = bool(metric_profile.metrics)
+            if (
+                view.kind == "host_metrics"
+                and not metric_profile_supports_host_metrics
+                and view.metric_profile_id in profiles
+            ):
                 _finding(
                     findings,
                     "host-metrics-profile-capability-required",
@@ -1140,22 +1171,45 @@ def resolve_observation_documents(
                     view.id,
                     "Reference a profile that requires the host-metrics baseline capability.",
                 )
+            if (
+                view.kind == "profile_metrics"
+                and not metric_profile_exposes_metrics
+                and view.metric_profile_id in profiles
+            ):
+                _finding(
+                    findings,
+                    "profile-metrics-profile-capability-required",
+                    _child(ref, "metric_profile_id"),
+                    view.id,
+                    "Reference a profile that declares at least one metrics capability.",
+                )
+            matching_services = tuple(
+                sorted(
+                    (
+                        service
+                        for service in planned_services
+                        if service.profile_id == view.metric_profile_id
+                    ),
+                    key=lambda service: service.id,
+                )
+            )
+            membership_source_refs = (
+                (ref, profiles[view.metric_profile_id][1])
+                + tuple(service_refs[service.id] for service in matching_services)
+                if view.kind == "profile_metrics" and view.metric_profile_id in profiles
+                else (ref,)
+            )
             planned_views.append(
                 PlannedOperationsView(
                     id=view.id,
                     purpose=view.purpose,
                     sections=(),
-                    kind="host_metrics",
-                    host_ids=tuple(
-                        sorted(
-                            service.host_id
-                            for service in planned_services
-                            if service.profile_id == view.metric_profile_id
-                        )
-                    ),
+                    kind=view.kind,
+                    host_ids=tuple(sorted({service.host_id for service in matching_services})),
+                    service_ids=tuple(service.id for service in matching_services),
                     datasource_binding_id=view.datasource_binding_id,
                     metric_profile_id=view.metric_profile_id,
-                    source_refs=(ref,),
+                    source_refs=membership_source_refs,
                 )
             )
             continue
