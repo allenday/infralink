@@ -616,9 +616,7 @@ def resolve_observation_documents(
                 profile_id=profile.id,
                 display_name=instance.display_name or profile.display_name,
                 network_scope=(
-                    instance.network_scope.value
-                    if instance.network_scope is not None
-                    else None
+                    instance.network_scope.value if instance.network_scope is not None else None
                 ),
                 source_refs=service_source_refs,
             )
@@ -773,18 +771,22 @@ def resolve_observation_documents(
             target = services_by_host_instance.get((host_id, ingress.service_instance_id))
             identity = f"{host_id}/{ingress.service_instance_id}/{ingress.protocol}/{ingress.port}"
             if target is None:
-                code = (
-                    "nonlocal-host-bridge-ingress-service"
-                    if ingress.service_instance_id in instance_keys
-                    else "unknown-host-bridge-ingress-service"
-                )
-                _finding(
-                    findings,
-                    code,
-                    _child(ingress_ref, "service_instance_id"),
-                    identity,
-                    "Declare the ingress service instance on this host.",
-                )
+                if ingress.service_instance_id in instance_keys:
+                    _finding(
+                        findings,
+                        "nonlocal-host-bridge-ingress-service",
+                        _child(ingress_ref, "service_instance_id"),
+                        identity,
+                        "Declare the ingress service instance on this host.",
+                    )
+                else:
+                    _finding(
+                        findings,
+                        "unknown-host-bridge-ingress-service",
+                        _child(ingress_ref, "service_instance_id"),
+                        identity,
+                        "Declare the ingress service instance on this host.",
+                    )
             elif target.network_scope != "host":
                 _finding(
                     findings,

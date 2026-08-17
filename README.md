@@ -2,17 +2,23 @@
 
 Infralink is a Python library and agent-oriented CLI for modeling infrastructure
 topology with UUID-based hosts, typed edges, bounded queries, health checks,
-safe connection templates, diagrams, and generated documentation.
+safe connection templates, offline observation contracts, diagrams, generated
+documentation, and release evidence inspection.
 
-## Installation
+Current package version: `0.5.6`.
 
-Infralink supports Python 3.10 through 3.12. Artifact-generating commands require POSIX
-filesystem semantics and currently support Linux for secure transactional writes.
+## Install
+
+Infralink supports Python 3.10 through 3.12. Artifact-generating commands require POSIX/Linux
+filesystem semantics and are validated on Linux in CI.
 
 ```bash
 python -m pip install infralink
-python -m pip install "infralink[bws]"  # optional hosted Bitwarden Secrets Manager audit
+python -m pip install "infralink[bws]"  # optional hosted BWS audit
 ```
+
+For local development, see [CONTRIBUTING.md](CONTRIBUTING.md). Coding agents
+should also read [AGENTS.md](AGENTS.md).
 
 ## Public Example
 
@@ -51,57 +57,19 @@ edges:
       secret_ref: example/database-password
 ```
 
-## CLI Contract
-
-Every invocation writes exactly one structured envelope to stdout. YAML is the
-default for topology and offline observation commands; use `--output json` for
-explicit compact JSON. Envelopes include `ok`, a shallow parsed command view, a
-typed `result` or redacted `error`, and bounded next actions. Lists use explicit
-limits and opaque cursors. `infralink help` is a compact generated index of the
-currently registered immediate commands; `infralink help <command>` supplies
-that command's detailed arguments and options.
-
-Topology commands use the `infralink.cli/v1` envelope and offline observation
-commands use `agent-cli.response.v1`:
-
-```bash
-infralink capabilities
-infralink help
-infralink help resolve
-infralink --output json help resolve
-infralink validate --source examples/observation --as-of "$AS_OF"
-infralink project observation --source examples/observation --as-of "$AS_OF"
-infralink project secrets --source examples/observation --as-of "$AS_OF"
-infralink project view service-overview --source examples/observation --as-of "$AS_OF"
-infralink project readiness ci-release --source examples/observation --as-of "$AS_OF"
-infralink explain schema-version-unsupported
-```
-
-Topology commands require declared sources. Set `INFRALINK_REGISTRY` and
-`INFRALINK_EDGES` for an operator environment, or provide `--registry` and
-`--edges` per invocation; command-line flags take precedence. Packaged examples
-remain explicit demo and test inputs only.
-
-Observation documents declare `schema_version: infralink.observation/v1` and
-may be validated against the packaged schemas under
-`infralink/schemas/observation/v1`. The examples declare service, dependency,
-and view signals in the `service/...`, `dependency/...`, and `view/...`
-namespaces. Planning is deliberately offline: provider, renderer, datasource,
-observation backend, and secret backend identifiers remain opaque. Public
-outputs contain aliases and binding metadata, never secret values or private
-provider data.
+Validate and inspect explicit sources:
 
 ```bash
 infralink --registry registry.yml --edges edges.yml validate
+infralink --registry registry.yml --edges edges.yml info
 infralink --registry registry.yml --edges edges.yml host show \
   d1b9e5d5-36b0-459d-a556-96622811fbd5
 infralink --registry registry.yml --edges edges.yml resolve \
   058e29ff-57b9-47c8-b6fa-0914ac03e25c --user app --database app
-infralink --registry registry.yml --edges edges.yml secrets inspect
 ```
 
-Resolution returns endpoint metadata, declared secret references, and a safe
-template such as:
+Resolution returns endpoint metadata, declared secret references, and safe
+templates such as:
 
 ```text
 postgresql://app:${secret:example/database-password}@192.0.2.10:5432/app
@@ -110,7 +78,43 @@ postgresql://app:${secret:example/database-password}@192.0.2.10:5432/app
 The CLI never returns resolved secret values and accepts no arbitrary secret
 identifier lookup.
 
-Exit codes are stable:
+## CLI Contract
+
+Every invocation writes exactly one structured envelope to stdout. YAML is the
+default for topology and offline observation commands; use `--output json` for
+explicit compact JSON. Envelopes include `ok`, a shallow parsed command view, a
+typed `result` or redacted `error`, and bounded next actions. Lists use explicit
+limits and opaque cursors.
+
+Topology commands use `infralink.cli/v1`. Offline observation commands use
+`agent-cli.response.v1`.
+
+Useful discovery commands:
+
+```bash
+infralink capabilities
+infralink help
+infralink help resolve
+infralink --output json help resolve
+infralink explain schema-version-unsupported
+```
+
+Offline observation examples:
+
+```bash
+AS_OF=2026-08-17T00:00:00Z
+infralink validate --source examples/observation --as-of "$AS_OF"
+infralink project observation --source examples/observation --as-of "$AS_OF"
+infralink project secrets --source examples/observation --as-of "$AS_OF"
+infralink project view service-overview --source examples/observation --as-of "$AS_OF"
+infralink project readiness ci-release --source examples/observation --as-of "$AS_OF"
+```
+
+Observation documents declare `schema_version: infralink.observation/v1` and may
+be validated against packaged schemas under
+`src/infralink/schemas/observation/v1`.
+
+## Exit Codes
 
 | Code | Meaning |
 | --- | --- |
@@ -148,48 +152,30 @@ Legacy Python URL helpers remain available for compatibility but are
 deprecated. New integrations should use secret references and connection
 templates.
 
-## Hosted BWS
+## Development And Operations
 
-`infralink secrets inspect` is offline. Provider audit requires the optional
-extra and hosted Bitwarden Secrets Manager credentials:
-
-```bash
-export BWS_ACCESS_TOKEN="<machine-account-token>"
-export BWS_ORGANIZATION_ID="<organization-uuid>"
-infralink --registry registry.yml --edges edges.yml secrets audit --provider bws
-```
-
-Production `v0.5.0` accepts Bitwarden's hosted endpoints only. Endpoint override
-environment variables are rejected; custom endpoints remain deferred. Audit is
-read-only, is restricted to references declared by topology, and does not fetch
-secret values.
+- Contribution flow and canonical checks: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Agent instructions: [AGENTS.md](AGENTS.md)
+- Architecture/navigation: [docs/architecture.md](docs/architecture.md)
+- Security boundaries: [docs/security-boundaries.md](docs/security-boundaries.md)
+- Release workflow: [docs/release-operator-workflow.md](docs/release-operator-workflow.md)
+- v0.2 migration history: [docs/compatibility/v0.2.md](docs/compatibility/v0.2.md)
+- Current and historical release notes: [docs/releases/](docs/releases/)
 
 ## Release Adoption And Rollback
 
-The manual Woodpecker release step runs only for `main` on Python 3.12 after
-all three parallel Python-version quality gates. It requires `RELEASE_VERSION`
-to equal the package version and the pipeline commit to equal the current
-`main` commit. It then rebuilds and publishes exactly the wheel, sdist,
-`SHA256SUMS`, and `SHA256SUMS.sigstore.json` to the corresponding GitHub
-Release tag. Existing tags or releases stop the process for operator inspection.
+Woodpecker is the only CI release executor. The manual release step runs only
+for `main` on Python 3.12 after all three parallel Python-version quality gates.
+It requires `RELEASE_VERSION` to match the package version and the pipeline
+commit to equal the current `main` commit. It rebuilds and publishes exactly the
+wheel, sdist, `SHA256SUMS`, and `SHA256SUMS.sigstore.json` to the matching
+GitHub Release tag. Existing tags or releases stop the process for operator
+inspection.
 
 Consumers verify the Cosign bundle and `SHA256SUMS` before installing the
-wheel, and record the source commit and wheel digest in consumer configuration.
+wheel, then record the source commit and wheel digest in consumer configuration.
 Rollback restores the previously verified release revision and digest; it does
 not rebuild old source or mutate the existing public release.
-
-## Development
-
-```bash
-python -m pip install -e ".[dev]"
-ruff format --check src tests scripts
-ruff check src tests scripts
-mypy src scripts
-python -m pytest
-```
-
-See [the v0.2 compatibility guide](docs/compatibility/v0.2.md), [PRD](PRD.md),
-and [backlog](BACKLOG.md).
 
 ## License
 

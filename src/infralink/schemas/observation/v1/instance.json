@@ -122,6 +122,13 @@
           "default": null,
           "title": "Display Name"
         },
+        "host_bridge_ingress": {
+          "items": {
+            "$ref": "#/$defs/HostBridgeIngress"
+          },
+          "title": "Host Bridge Ingress",
+          "type": "array"
+        },
         "id": {
           "title": "Id",
           "type": "string"
@@ -147,6 +154,47 @@
         "log-forwarding"
       ],
       "title": "HostBaselineCapability",
+      "type": "string"
+    },
+    "HostBridgeIngress": {
+      "additionalProperties": false,
+      "description": "One registry-declared bridge-to-host firewall allowance.",
+      "properties": {
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "enum": [
+            "tcp",
+            "udp"
+          ],
+          "title": "Protocol",
+          "type": "string"
+        },
+        "service_instance_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Service Instance Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service_instance_id",
+        "protocol",
+        "port"
+      ],
+      "title": "HostBridgeIngress",
+      "type": "object"
+    },
+    "RuntimeNetworkScope": {
+      "description": "The service network namespace derived from its registry Compose declaration.",
+      "enum": [
+        "bridge",
+        "host"
+      ],
+      "title": "RuntimeNetworkScope",
       "type": "string"
     },
     "ServiceInstance": {
@@ -196,6 +244,17 @@
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
           "title": "Id",
           "type": "string"
+        },
+        "network_scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeNetworkScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "profile_id": {
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
