@@ -16,6 +16,7 @@ ROOT_PUBLIC_FILES = (
 )
 EXPECTED_PUBLIC_FILES = ROOT_PUBLIC_FILES + (
     PROJECT_ROOT / "docs" / "architecture.md",
+    PROJECT_ROOT / "docs" / "release-operator-workflow.md",
     PROJECT_ROOT / "docs" / "security-boundaries.md",
     PROJECT_ROOT / "examples" / "registry.yml",
     PROJECT_ROOT / "examples" / "edges.yml",
@@ -96,14 +97,19 @@ SAFE_DOTTED_TOKENS = {
     "app-database.md",
     "contracts.py",
     "backlog.md",
+    "admission.yml",
+    "candidate.json",
     "edges.yml",
     "edges.py",
     "edgeset.load",
+    "command.parsed",
+    "command.raw",
     "infralink-0.2.0-py3-none-any.whl",
     "infralink-0.2.0.tar.gz",
     "infralink.cli",
     "infralink.release-attestation.v1",
     "infralink.release-attestation.v2",
+    "infralink.publisher-request.v1",
     "infralink.publisher-request.v2",
     "infralink.publisher-request.v3",
     "infralink.release-candidate.v1",
@@ -117,6 +123,10 @@ SAFE_DOTTED_TOKENS = {
     "readme.md",
     "registry.py",
     "release-operator-workflow.md",
+    "release-attestation.json",
+    "release-attestation.v1.schema.json",
+    "release-candidate.v1.schema.json",
+    "release.py",
     "resolver.py",
     "security-boundaries.md",
     "template.py",
@@ -161,6 +171,7 @@ def tracked_public_files() -> tuple[Path, ...]:
                 "PRD.md",
                 "BACKLOG.md",
                 "docs/architecture.md",
+                "docs/release-operator-workflow.md",
                 "docs/security-boundaries.md",
                 "examples",
                 "docs/compatibility",
@@ -996,6 +1007,13 @@ def test_tracked_public_docs_and_examples_respect_boundary() -> None:
         if path.exists() and boundary_violations(path.read_text(encoding="utf-8"))
     }
     assert failures == {}
+
+
+def test_release_operator_workflow_rejects_private_host_fixture() -> None:
+    release_workflow = PROJECT_ROOT / "docs" / "release-operator-workflow.md"
+    fixture = f"{release_workflow.read_text(encoding='utf-8')}\nhost: privatehost\n"
+
+    assert "non-example hostname: privatehost" in boundary_violations(fixture)
 
 
 def test_public_file_inventory_tracks_all_shipped_examples_and_compatibility_docs() -> None:
