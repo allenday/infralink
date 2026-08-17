@@ -118,6 +118,47 @@ def test_resolves_two_hosts_and_exact_signal_namespaces_deterministically() -> N
     assert plan.document_digests == ("contract.yml",)
 
 
+def test_projects_registry_derived_runtime_network_contract() -> None:
+    data = base_data()
+    data["hosts"][0]["host_bridge_ingress"] = [  # type: ignore[index]
+        {"service_instance_id": "api", "protocol": "tcp", "port": 8080}
+    ]
+    data["service_instances"][1]["network_scope"] = "host"  # type: ignore[index]
+
+    plan = resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert plan.services[0].network_scope == "host"
+    assert plan.services[0].source_refs[-1].pointer == "/service_instances/1/network_scope"
+    assert plan.hosts[0].host_bridge_ingress[0].service_instance_id == "api"
+    assert plan.hosts[0].host_bridge_ingress[0].protocol == "tcp"
+    assert plan.hosts[0].host_bridge_ingress[0].port == 8080
+
+
+@pytest.mark.parametrize(
+    ("service_instance_id", "scopes", "code"),
+    [
+        ("missing", {"api": "host"}, "unknown-host-bridge-ingress-service"),
+        ("frontend", {"api": "host", "frontend": "host"}, "nonlocal-host-bridge-ingress-service"),
+        ("api", {"api": "bridge"}, "nonhost-host-bridge-ingress-service"),
+    ],
+)
+def test_rejects_invalid_registry_derived_bridge_ingress(
+    service_instance_id: str, scopes: dict[str, str], code: str
+) -> None:
+    data = base_data()
+    data["hosts"][0]["host_bridge_ingress"] = [  # type: ignore[index]
+        {"service_instance_id": service_instance_id, "protocol": "tcp", "port": 8080}
+    ]
+    for instance in data["service_instances"]:  # type: ignore[union-attr]
+        if instance["id"] in scopes:
+            instance["network_scope"] = scopes[instance["id"]]
+
+    with pytest.raises(PlanValidationError) as error:
+        resolve_observation_documents([document(data)], as_of=AS_OF)
+
+    assert {item.code for item in error.value.report.diagnostics} == {code}
+
+
 def test_projects_a_same_host_logical_service_from_declared_components() -> None:
     data = base_data()
     data["service_profiles"][0]["logical_service"] = {  # type: ignore[index]

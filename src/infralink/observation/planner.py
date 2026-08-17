@@ -26,6 +26,7 @@ from infralink.observation.models import (
     HealthCapability,
     Host,
     HostBaselineCapability,
+    HostBridgeIngress,
     LogCapability,
     LogicalSignal,
     MetricsCapability,
@@ -60,6 +61,7 @@ class PlannedHost(PlanModel):
     display_name: Annotated[str, Field(min_length=1)] | None = None
     baseline_capabilities: tuple[HostBaselineCapability, ...] = ()
     self_deploy_v2_reconcile_enabled: bool = False
+    host_bridge_ingress: tuple[HostBridgeIngress, ...] = ()
     source_refs: tuple[SourceRef, ...]
 
 
@@ -69,6 +71,7 @@ class PlannedService(PlanModel):
     instance_key: str
     profile_id: str
     display_name: Annotated[str, Field(min_length=1)] | None = None
+    network_scope: Literal["bridge", "host"] | None = None
     source_refs: tuple[SourceRef, ...]
 
 
@@ -511,6 +514,8 @@ def resolve_observation_documents(
             host_source_refs += (_child(ref, "baseline_capabilities"),)
         if "self_deploy_v2_reconcile_enabled" in host.model_fields_set:
             host_source_refs += (_child(ref, "self_deploy_v2_reconcile_enabled"),)
+        if "host_bridge_ingress" in host.model_fields_set:
+            host_source_refs += (_child(ref, "host_bridge_ingress"),)
         planned_hosts.append(
             PlannedHost(
                 id=str(host.id),
@@ -519,6 +524,12 @@ def resolve_observation_documents(
                     sorted(host.baseline_capabilities, key=lambda item: item.value)
                 ),
                 self_deploy_v2_reconcile_enabled=host.self_deploy_v2_reconcile_enabled,
+                host_bridge_ingress=tuple(
+                    sorted(
+                        host.host_bridge_ingress,
+                        key=lambda item: (item.service_instance_id, item.protocol, item.port),
+                    )
+                ),
                 source_refs=host_source_refs,
             )
         )
@@ -594,6 +605,9 @@ def resolve_observation_documents(
                     f"Declare {baseline_capability.value} in baseline_capabilities on host {host_id}.",
                 )
             continue
+        service_source_refs: tuple[SourceRef, ...] = (ref, profile_entry[1])
+        if "network_scope" in instance.model_fields_set:
+            service_source_refs += (_child(ref, "network_scope"),)
         planned_services.append(
             PlannedService(
                 id=service_id,
@@ -601,7 +615,12 @@ def resolve_observation_documents(
                 instance_key=instance.id,
                 profile_id=profile.id,
                 display_name=instance.display_name or profile.display_name,
-                source_refs=(ref, profile_entry[1]),
+                network_scope=(
+                    instance.network_scope.value
+                    if instance.network_scope is not None
+                    else None
+                ),
+                source_refs=service_source_refs,
             )
         )
         service_profiles[service_id] = profile
@@ -741,6 +760,39 @@ def resolve_observation_documents(
                     source_refs=(_child(profile_entry[1], "secret_slots", str(slot_index)), ref),
                 )
             )
+
+    services_by_host_instance = {
+        (service.host_id, service.instance_key): service for service in planned_services
+    }
+    instance_keys = {service.instance_key for service in planned_services}
+    for host, host_ref in hosts.values():
+        assert isinstance(host, Host)
+        host_id = str(host.id)
+        for ingress_index, ingress in enumerate(host.host_bridge_ingress):
+            ingress_ref = _child(host_ref, "host_bridge_ingress", str(ingress_index))
+            target = services_by_host_instance.get((host_id, ingress.service_instance_id))
+            identity = f"{host_id}/{ingress.service_instance_id}/{ingress.protocol}/{ingress.port}"
+            if target is None:
+                code = (
+                    "nonlocal-host-bridge-ingress-service"
+                    if ingress.service_instance_id in instance_keys
+                    else "unknown-host-bridge-ingress-service"
+                )
+                _finding(
+                    findings,
+                    code,
+                    _child(ingress_ref, "service_instance_id"),
+                    identity,
+                    "Declare the ingress service instance on this host.",
+                )
+            elif target.network_scope != "host":
+                _finding(
+                    findings,
+                    "nonhost-host-bridge-ingress-service",
+                    _child(ingress_ref, "service_instance_id"),
+                    identity,
+                    "Declare host network scope for the bridge ingress target.",
+                )
 
     endpoint_map = _index_planned(planned_endpoints, "endpoint", findings)
     signal_map = _index_planned(planned_signals, "signal", findings)
