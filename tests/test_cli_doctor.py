@@ -16,6 +16,7 @@ EXAMPLES = ROOT / "examples"
 HOST_ID = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
 EDGE_ID = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
 OBSERVATION_ID = "declared-gatus-edge"
+GATUS_FRAGMENT = ROOT / "tests/fixtures/gatus-fragment.yml"
 
 
 def _sources() -> list[str]:
@@ -143,8 +144,69 @@ def _add_host_metrics_projection(plan: Path, bindings: Path) -> None:
     bindings.write_text(yaml.safe_dump(binding_document), encoding="utf-8")
 
 
+def _host_metrics_gatus_fragment(tmp_path: Path) -> Path:
+    fragment = tmp_path / "gatus-fragment.yml"
+    fragment.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infra-observe.gatus-fragment.v1",
+                "checks": [
+                    {
+                        "id": OBSERVATION_ID,
+                        "display_name": "Declared Gatus edge",
+                        "group": "Core dependencies",
+                        "adapter": "gatus",
+                        "conditions": ["[STATUS] == 200"],
+                        "url": "http://gatus.test/declared-gatus-edge",
+                    },
+                    {
+                        "id": "prometheus-to-host-node-exporter",
+                        "display_name": "Prometheus to Example host node exporter",
+                        "group": "Core dependencies",
+                        "adapter": "gatus",
+                        "conditions": ["[STATUS] == 200"],
+                        "url": "http://gatus.test/node-exporter",
+                    },
+                    {
+                        "id": f"prometheus/{HOST_ID}/scrape",
+                        "display_name": "Example host Prometheus scrape",
+                        "group": "Prometheus",
+                        "adapter": "prometheus",
+                        "signal_refs": [f"service/{HOST_ID}/node-exporter/metrics/clock-present"],
+                        "conditions": ["[STATUS] == 200"],
+                        "url": "http://gatus.test/prometheus-scrape",
+                    },
+                ],
+                "unsupported": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return fragment
+
+
 def _invoke(*args: str):
-    return CliRunner().invoke(cli, ["--output", "json", *_sources(), "doctor", *args])
+    return CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            *_sources(),
+            "doctor",
+            "--gatus-fragment",
+            str(GATUS_FRAGMENT),
+            *args,
+        ],
+    )
+
+
+def _gatus_status(results: list[object]) -> dict[str, object]:
+    return {
+        "group": "Core dependencies",
+        "name": "Declared Gatus edge",
+        "results": results,
+    }
 
 
 def test_global_doctor_requires_declared_observation_inputs() -> None:
@@ -164,7 +226,7 @@ def test_doctor_help_discloses_host_qualified_logical_service_targets() -> None:
     result = CliRunner().invoke(cli, ["help", "doctor"])
     payload = yaml.safe_load(result.output)
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert payload["result"]["examples"] == [
         "infralink doctor host cyberstorm-watchtower",
         "infralink doctor service <host-uuid>/<logical-service-id>",
@@ -185,6 +247,8 @@ def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network
         str(plan),
         "--adapter-bindings",
         str(bindings),
+        "--gatus-fragment",
+        str(GATUS_FRAGMENT),
         "host",
         "database.example.com",
         "--validate",
@@ -234,6 +298,8 @@ def test_doctor_fails_closed_when_host_metrics_baseline_lacks_a_projected_contra
         str(plan),
         "--adapter-bindings",
         str(bindings),
+        "--gatus-fragment",
+        str(GATUS_FRAGMENT),
         "host",
         HOST_ID,
         "--validate",
@@ -264,12 +330,15 @@ def test_doctor_fails_closed_when_host_metrics_baseline_lacks_a_projected_contra
 def test_doctor_accepts_a_complete_active_host_metrics_projection(tmp_path: Path) -> None:
     plan, bindings = _observation_inputs(tmp_path)
     _add_host_metrics_projection(plan, bindings)
+    fragment = _host_metrics_gatus_fragment(tmp_path)
 
     result = _invoke(
         "--observation-plan",
         str(plan),
         "--adapter-bindings",
         str(bindings),
+        "--gatus-fragment",
+        str(fragment),
         "host",
         HOST_ID,
         "--validate",
@@ -278,13 +347,89 @@ def test_doctor_accepts_a_complete_active_host_metrics_projection(tmp_path: Path
 
     assert result.exit_code == 0
     assert payload["result"]["coverage"] == {
-        "required": 2,
-        "bound": 2,
+        "required": 3,
+        "bound": 3,
         "unbound": 0,
         "unsupported": 0,
         "valid": True,
     }
     assert payload["result"]["reason"] == "gatus_not_configured"
+
+
+def test_doctor_requires_a_gatus_fragment_for_declared_observer_evidence(tmp_path: Path) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            *_sources(),
+            "doctor",
+            "--observation-plan",
+            str(plan),
+            "--adapter-bindings",
+            str(bindings),
+            "--validate",
+            "edge",
+            OBSERVATION_ID,
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 2
+    assert payload["error"]["code"] == "configuration_required"
+    assert payload["error"]["details"] == {"source": "gatus_fragment"}
+
+
+def test_doctor_requires_healthy_prometheus_scrape_evidence_for_host_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    _add_host_metrics_projection(plan, bindings)
+    fragment = _host_metrics_gatus_fragment(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            {
+                "group": "Core dependencies",
+                "name": "Declared Gatus edge",
+                "results": [{"success": True, "timestamp": "2026-08-09T00:00:00Z"}],
+            },
+            {
+                "group": "Prometheus",
+                "name": "Example host Prometheus scrape",
+                "results": [{"success": False, "timestamp": "2026-08-09T00:00:00Z"}],
+            },
+            {
+                "group": "Core dependencies",
+                "name": "Prometheus to Example host node exporter",
+                "results": [{"success": True, "timestamp": "2026-08-09T00:00:00Z"}],
+            },
+        ],
+    )
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-fragment",
+        str(fragment),
+        "--gatus-url",
+        "http://gatus.test",
+        "host",
+        HOST_ID,
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unhealthy"
+    assert any(
+        item["id"] == f"host/{HOST_ID}/baseline/host-metrics/prometheus-scrape"
+        and item["status"] == "unhealthy"
+        for item in payload["result"]["evidence"]
+    )
 
 
 def test_doctor_does_not_require_host_metrics_projection_for_non_active_host(
@@ -313,6 +458,8 @@ def test_doctor_does_not_require_host_metrics_projection_for_non_active_host(
             str(plan),
             "--adapter-bindings",
             str(bindings),
+            "--gatus-fragment",
+            str(GATUS_FRAGMENT),
             "host",
             HOST_ID,
             "--validate",
@@ -335,6 +482,8 @@ def test_normal_doctor_requires_a_configured_gatus_observer(
         str(plan),
         "--adapter-bindings",
         str(bindings),
+        "--gatus-fragment",
+        str(GATUS_FRAGMENT),
         "edge",
         EDGE_ID,
     )
@@ -360,6 +509,8 @@ def test_verbose_doctor_includes_all_declared_evidence(tmp_path: Path) -> None:
             str(plan),
             "--adapter-bindings",
             str(bindings),
+            "--gatus-fragment",
+            str(GATUS_FRAGMENT),
             "edge",
             EDGE_ID,
         ],
@@ -395,7 +546,9 @@ def test_doctor_profile_resolves_declared_observation_profile_not_service_or_rol
     assert payload["result"]["coverage"]["valid"] is True
 
 
-def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path) -> None:
+def test_doctor_service_uses_fragment_locator_for_logical_service_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     plan, bindings = _observation_inputs(tmp_path)
     payload = json.loads(plan.read_text(encoding="utf-8"))
     logical_service_id = f"{HOST_ID}/database-stack"
@@ -431,6 +584,29 @@ def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path
             "signal_ref": "dependency/database-stack-internal/health/reachable",
         }
     )
+    fragment = _host_metrics_gatus_fragment(tmp_path)
+    fragment_payload = yaml.safe_load(fragment.read_text(encoding="utf-8"))
+    fragment_payload["checks"].extend(
+        [
+            {
+                "id": "database-stack-internal",
+                "display_name": "Database stack internal",
+                "group": "Core dependencies",
+                "adapter": "gatus",
+                "conditions": ["[STATUS] == 200"],
+                "url": "http://gatus.test/database-stack",
+            },
+            {
+                "id": "postgresql-ready",
+                "display_name": "PostgreSQL ready",
+                "group": "Core dependencies",
+                "adapter": "gatus",
+                "conditions": ["[STATUS] == 200"],
+                "url": "http://gatus.test/postgresql",
+            },
+        ]
+    )
+    fragment.write_text(yaml.safe_dump(fragment_payload, sort_keys=False), encoding="utf-8")
     binding_payload["bindings"].append(
         {
             "id": "gatus-postgresql-ready",
@@ -442,19 +618,43 @@ def test_doctor_service_resolves_a_host_qualified_logical_service(tmp_path: Path
     )
     bindings.write_text(yaml.safe_dump(binding_payload, sort_keys=False), encoding="utf-8")
     plan.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            {
+                "group": "Core dependencies",
+                "name": "Declared Gatus edge",
+                "results": [{"success": True}],
+            },
+            {
+                "group": "Core dependencies",
+                "name": "Database stack internal",
+                "results": [{"success": True}],
+            },
+            {
+                "group": "Core dependencies",
+                "name": "PostgreSQL ready",
+                "results": [{"success": True}],
+            },
+        ],
+    )
 
     result = _invoke(
         "--observation-plan",
         str(plan),
         "--adapter-bindings",
         str(bindings),
+        "--gatus-fragment",
+        str(fragment),
+        "--gatus-url",
+        "http://gatus.test",
         "service",
         logical_service_id,
-        "--validate",
     )
     response = json.loads(result.output)
 
     assert result.exit_code == 0
+    assert response["result"]["status"] == "healthy"
     assert response["result"]["target"] == {
         "type": "service",
         "id": logical_service_id,
@@ -534,6 +734,7 @@ def test_doctor_observation_inputs_use_environment_defaults_and_flags_override(
     environment = {
         "INFRALINK_OBSERVATION_PLAN": str(plan),
         "INFRALINK_ADAPTER_BINDINGS": str(bindings),
+        "INFRALINK_GATUS_FRAGMENT": str(GATUS_FRAGMENT),
     }
 
     from_environment = CliRunner().invoke(
@@ -552,6 +753,8 @@ def test_doctor_observation_inputs_use_environment_defaults_and_flags_override(
             str(alternate_plan),
             "--adapter-bindings",
             str(alternate_bindings),
+            "--gatus-fragment",
+            str(GATUS_FRAGMENT),
             "host",
             "database.example.com",
             "--validate",
@@ -604,12 +807,7 @@ def test_doctor_uses_gatus_statuses_only_outside_declaration_validation(
         "infralink.cli.doctor._fetch_gatus_statuses",
         lambda url, token: (
             calls.append((url, token))
-            or [
-                {
-                    "name": OBSERVATION_ID,
-                    "results": [{"success": True, "timestamp": "2026-08-09T00:00:00Z"}],
-                }
-            ]
+            or [_gatus_status([{"success": True, "timestamp": "2026-08-09T00:00:00Z"}])]
         ),
     )
 
@@ -678,10 +876,7 @@ def test_configured_unhealthy_required_gatus_evidence_is_nonzero(
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
         lambda url, token: [
-            {
-                "name": OBSERVATION_ID,
-                "results": [{"success": False, "timestamp": "2026-08-09T00:00:00Z"}],
-            }
+            _gatus_status([{"success": False, "timestamp": "2026-08-09T00:00:00Z"}])
         ],
     )
     result = _invoke(
@@ -702,6 +897,121 @@ def test_configured_unhealthy_required_gatus_evidence_is_nonzero(
     assert payload["result"]["reason"] == "gatus_observation_unhealthy"
 
 
+def test_doctor_does_not_match_gatus_status_on_name_or_group_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            {
+                "group": "wrong group",
+                "name": "Declared Gatus edge",
+                "results": [{"success": True}],
+            },
+            {
+                "group": "Core dependencies",
+                "name": "wrong name",
+                "results": [{"success": True}],
+            },
+        ],
+    )
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        OBSERVATION_ID,
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unknown"
+    assert payload["result"]["evidence"][0]["reason"] == "gatus_result_locator_missing"
+
+
+def test_doctor_uses_declared_gatus_result_for_edge_prober_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    document["dependencies"].append(
+        {
+            "id": "edge-prober-dependency",
+            "source_service_id": "fa2b9872-d94c-4b20-a73a-57a205560769/app-worker",
+            "target_service_id": f"{HOST_ID}/postgresql",
+            "target_endpoint_id": f"{HOST_ID}/postgresql/tcp",
+            "required": True,
+            "execution_adapter": "edge-prober",
+            "health_signal_refs": ["dependency/edge-prober-dependency/health/reachable"],
+        }
+    )
+    plan.write_text(json.dumps(document), encoding="utf-8")
+    binding_document = yaml.safe_load(bindings.read_text(encoding="utf-8"))
+    binding_document["bindings"].extend(
+        [
+            {
+                "id": "edge-prober-edge-prober-dependency",
+                "renderer_kind": "edge-prober",
+                "output_identity": "edge-prober-dependency",
+                "signal_ref": "dependency/edge-prober-dependency/health/reachable",
+            },
+            {
+                "id": "gatus-edge-prober-dependency",
+                "renderer_kind": "gatus",
+                "output_identity": "edge-prober-dependency",
+                "signal_ref": "dependency/edge-prober-dependency/health/reachable",
+            },
+        ]
+    )
+    bindings.write_text(yaml.safe_dump(binding_document, sort_keys=False), encoding="utf-8")
+    fragment = _host_metrics_gatus_fragment(tmp_path)
+    fragment_document = yaml.safe_load(fragment.read_text(encoding="utf-8"))
+    fragment_document["checks"].append(
+        {
+            "id": "edge-prober-dependency",
+            "display_name": "Edge prober dependency",
+            "group": "Core dependencies",
+            "adapter": "edge-prober",
+            "conditions": ["[STATUS] == 200"],
+            "url": "http://gatus.test/edge-prober-dependency",
+        }
+    )
+    fragment.write_text(yaml.safe_dump(fragment_document, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            _gatus_status([{"success": True}]),
+            {
+                "group": "Core dependencies",
+                "name": "Edge prober dependency",
+                "results": [{"success": True}],
+            },
+        ],
+    )
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-fragment",
+        str(fragment),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        "edge-prober-dependency",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert payload["result"]["status"] == "healthy"
+
+
 def test_doctor_uses_the_latest_gatus_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -709,13 +1019,12 @@ def test_doctor_uses_the_latest_gatus_result(
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
         lambda url, token: [
-            {
-                "name": OBSERVATION_ID,
-                "results": [
+            _gatus_status(
+                [
                     {"success": False, "timestamp": "2026-08-09T00:00:00Z"},
                     {"success": True, "timestamp": "2026-08-09T00:01:00Z"},
-                ],
-            }
+                ]
+            )
         ],
     )
 
@@ -742,12 +1051,7 @@ def test_doctor_rejects_a_malformed_latest_gatus_result(
     plan, bindings = _observation_inputs(tmp_path)
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
-        lambda url, token: [
-            {
-                "name": OBSERVATION_ID,
-                "results": [{"success": True}, "malformed"],
-            }
-        ],
+        lambda url, token: [_gatus_status([{"success": True}, "malformed"])],
     )
 
     result = _invoke(
@@ -803,7 +1107,7 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
     plan, bindings = _observation_inputs(tmp_path)
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
-        lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": True}]}],
+        lambda url, token: [_gatus_status([{"success": True}])],
     )
     result = _invoke(
         "--observation-plan",
@@ -874,7 +1178,7 @@ def test_doctor_host_fails_closed_when_latest_v2_reconcile_failed(
     plan, bindings = _observation_inputs(tmp_path)
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
-        lambda url, token: [{"name": OBSERVATION_ID, "results": [{"success": True}]}],
+        lambda url, token: [_gatus_status([{"success": True}])],
     )
 
     result = _invoke(

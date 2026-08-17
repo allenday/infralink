@@ -33,6 +33,7 @@ from infralink.host_transport import SshReadinessTransport
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
 ADAPTER_BINDINGS_ENVVAR = "INFRALINK_ADAPTER_BINDINGS"
+GATUS_FRAGMENT_ENVVAR = "INFRALINK_GATUS_FRAGMENT"
 GATUS_URL_ENVVAR = "INFRALINK_GATUS_URL"
 GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
 
@@ -51,9 +52,50 @@ def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _gatus_fragment_locators(
+    fragment: dict[str, Any] | None, bindings: dict[str, Any] | None
+) -> tuple[dict[str, tuple[str, str]], dict[str, tuple[str, str]]]:
+    """Return declared Gatus API locators keyed by dependency and metric signal."""
+    checks = fragment.get("checks", []) if isinstance(fragment, dict) else []
+    valid_checks = [
+        item
+        for item in checks
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("display_name"), str)
+        and isinstance(item.get("group"), str)
+        and item["id"]
+        and item["display_name"]
+        and item["group"]
+    ]
+    by_id = {item["id"]: (item["group"], item["display_name"]) for item in valid_checks}
+    if len(by_id) != len(valid_checks):
+        return {}, {}
+    direct: dict[str, tuple[str, str]] = {}
+    prometheus: dict[str, tuple[str, str]] = {}
+    for binding in (bindings or {}).get("bindings", []):
+        if not isinstance(binding, dict):
+            continue
+        output_identity = binding.get("output_identity")
+        signal_ref = binding.get("signal_ref")
+        if binding.get("renderer_kind") == "gatus" and isinstance(output_identity, str):
+            locator = by_id.get(output_identity)
+            if locator is not None:
+                direct[output_identity] = locator
+        if binding.get("renderer_kind") == "prometheus" and isinstance(signal_ref, str):
+            matches = [
+                (item["group"], item["display_name"])
+                for item in valid_checks
+                if item.get("adapter") == "prometheus" and signal_ref in item.get("signal_refs", [])
+            ]
+            if len(matches) == 1:
+                prometheus[signal_ref] = matches[0]
+    return direct, prometheus
+
+
 def _gatus_evidence(
     evidence: list[DoctorEvidence],
-    bindings: dict[str, Any] | None,
+    locators: dict[str, tuple[str, str]],
     url: str | None,
     token: str | None,
 ) -> list[DoctorEvidence]:
@@ -68,22 +110,20 @@ def _gatus_evidence(
             else item
             for item in evidence
         ]
-    binding_by_identity = {
-        item.get("output_identity"): item
-        for item in (bindings or {}).get("bindings", [])
-        if isinstance(item, dict) and item.get("renderer_kind") == "gatus"
-    }
-    by_identity = {item.get("name"): item for item in statuses if isinstance(item.get("name"), str)}
+    by_locator: dict[tuple[str, str], dict[str, Any]] = {}
+    for status_record in statuses:
+        group = status_record.get("group")
+        name = status_record.get("name")
+        if isinstance(group, str) and isinstance(name, str):
+            by_locator[(group, name)] = status_record
     updated: list[DoctorEvidence] = []
     for item in evidence:
-        binding = binding_by_identity.get(item.id)
-        status = (
-            by_identity.get(binding.get("output_identity")) if isinstance(binding, dict) else None
-        )
+        locator = locators.get(item.id)
+        status = by_locator.get(locator) if locator is not None else None
         if item.adapter != "gatus" or item.reason != "no_live_observation_evidence":
             updated.append(item)
         elif status is None:
-            updated.append(item.model_copy(update={"reason": "gatus_output_identity_missing"}))
+            updated.append(item.model_copy(update={"reason": "gatus_result_locator_missing"}))
         else:
             results = status.get("results")
             latest = (
@@ -135,12 +175,14 @@ def _doctor_prefix(
     ctx: Context,
     observation_plan: Path | None = None,
     adapter_bindings: Path | None = None,
+    gatus_fragment: Path | None = None,
 ) -> list[str]:
     return [
         *_root_source_argv(ctx),
         "doctor",
         *(["--observation-plan", str(observation_plan)] if observation_plan else []),
         *(["--adapter-bindings", str(adapter_bindings)] if adapter_bindings else []),
+        *(["--gatus-fragment", str(gatus_fragment)] if gatus_fragment else []),
     ]
 
 
@@ -148,8 +190,9 @@ def _verbose_doctor_prefix(
     ctx: Context,
     observation_plan: Path | None,
     adapter_bindings: Path | None,
+    gatus_fragment: Path | None,
 ) -> list[str]:
-    prefix = _doctor_prefix(ctx, observation_plan, adapter_bindings)
+    prefix = _doctor_prefix(ctx, observation_plan, adapter_bindings, gatus_fragment)
     return [prefix[0], "--verbose", *prefix[1:]]
 
 
@@ -190,11 +233,13 @@ def _configuration_required(ctx: Context, source: str) -> CliFailure:
     labels = {
         "observation_plan": "Observation plan",
         "adapter_bindings": "Adapter bindings",
+        "gatus_fragment": "Gatus fragment",
         "gatus_url": "Gatus URL",
     }
     envvars = {
         "observation_plan": OBSERVATION_PLAN_ENVVAR,
         "adapter_bindings": ADAPTER_BINDINGS_ENVVAR,
+        "gatus_fragment": GATUS_FRAGMENT_ENVVAR,
         "gatus_url": GATUS_URL_ENVVAR,
     }
     return CliFailure(
@@ -391,11 +436,12 @@ def _observer_dependency_id(edge: Any, plan: dict[str, Any] | None) -> str | Non
 def _coverage(
     plan: dict[str, Any],
     bindings: dict[str, Any] | None,
+    gatus_fragment: dict[str, Any] | None,
     target_type: DoctorKind | None,
     target_id: str,
     *,
     active_host: bool = False,
-) -> tuple[DoctorCoverage, list[DoctorEvidence]]:
+) -> tuple[DoctorCoverage, list[DoctorEvidence], dict[str, tuple[str, str]]]:
     logical_service = next(
         (
             item
@@ -445,11 +491,15 @@ def _coverage(
             )
         )
     ]
-    binding_by_identity = {
+    gatus_binding_by_identity = {
         item.get("output_identity"): item
         for item in (bindings or {}).get("bindings", [])
-        if isinstance(item, dict) and isinstance(item.get("output_identity"), str)
+        if isinstance(item, dict)
+        and item.get("renderer_kind") == "gatus"
+        and isinstance(item.get("output_identity"), str)
     }
+    direct_locators, prometheus_locators = _gatus_fragment_locators(gatus_fragment, bindings)
+    evidence_locators: dict[str, tuple[str, str]] = {}
     evidence: list[DoctorEvidence] = []
     required = bound = unbound = unsupported = 0
     for dependency in sorted(dependencies, key=lambda item: str(item.get("id", ""))):
@@ -460,14 +510,21 @@ def _coverage(
         adapter = dependency.get("execution_adapter")
         signals = dependency.get("health_signal_refs", [])
         signal_refs = [value for value in signals if isinstance(value, str)]
-        binding = binding_by_identity.get(identity)
+        binding = gatus_binding_by_identity.get(identity)
         supported = (
-            adapter == "gatus" and binding is not None and binding.get("renderer_kind") == "gatus"
+            adapter in {"gatus", "edge-prober"}
+            and binding is not None
+            and isinstance(identity, str)
+            and identity in direct_locators
         )
         if supported:
             if required_dependency:
                 bound += 1
             reason = "no_live_observation_evidence"
+        elif binding is not None:
+            if required_dependency:
+                unbound += 1
+            reason = "observation_contract_missing"
         elif adapter == "edge-prober":
             if required_dependency:
                 unsupported += 1
@@ -479,12 +536,14 @@ def _coverage(
         evidence.append(
             DoctorEvidence(
                 id=str(identity),
-                adapter=adapter if isinstance(adapter, str) else None,
+                adapter="gatus" if supported else adapter if isinstance(adapter, str) else None,
                 signal_refs=signal_refs,
                 status="unknown",
                 reason=reason,
             )
         )
+        if supported and isinstance(identity, str):
+            evidence_locators[str(identity)] = direct_locators[str(identity)]
     observed_signal_refs = {
         signal_ref
         for dependency in dependencies
@@ -501,7 +560,7 @@ def _coverage(
             and binding.get("signal_ref") == signal_ref
             and isinstance(binding.get("output_identity"), str)
         ]
-        if len(signal_bindings) == 1:
+        if len(signal_bindings) == 1 and signal_bindings[0]["output_identity"] in direct_locators:
             binding = signal_bindings[0]
             bound += 1
             evidence.append(
@@ -513,6 +572,9 @@ def _coverage(
                     reason="no_live_observation_evidence",
                 )
             )
+            evidence_locators[binding["output_identity"]] = direct_locators[
+                binding["output_identity"]
+            ]
         else:
             unbound += 1
             evidence.append(
@@ -556,7 +618,7 @@ def _coverage(
             and isinstance(item.get("id"), str)
         }
         metrics_signal_refs = {
-            item.get("id")
+            item["id"]
             for item in plan.get("signals", [])
             if isinstance(item, dict)
             and item.get("service_id") in node_exporter_services
@@ -590,6 +652,15 @@ def _coverage(
             and item.get("metric_profile_id") == "node-exporter"
             for item in plan.get("operations_views", [])
         )
+        metrics_contract_complete = not any(
+            not present
+            for _component, present in (
+                ("node-exporter", bool(node_exporter_services and metrics_endpoint_ids)),
+                ("prometheus-scrape", bool(metrics_signal_refs and has_prometheus_binding)),
+                ("gatus-reachability", has_required_metrics_dependency),
+                ("dashboard-membership", has_dashboard_membership),
+            )
+        )
         missing_contracts = [
             component
             for component, present in (
@@ -613,6 +684,37 @@ def _coverage(
                         reason="observation_contract_missing",
                     )
                 )
+            if metrics_contract_complete:
+                scrape_evidence_id = f"host/{target_id}/baseline/host-metrics/prometheus-scrape"
+                scrape_locator = (
+                    prometheus_locators.get(next(iter(metrics_signal_refs)))
+                    if len(metrics_signal_refs) == 1
+                    else None
+                )
+                required += 1
+                if scrape_locator is None:
+                    unbound += 1
+                    evidence.append(
+                        DoctorEvidence(
+                            id=scrape_evidence_id,
+                            adapter="gatus",
+                            signal_refs=sorted(metrics_signal_refs),
+                            status="unknown",
+                            reason="observation_contract_missing",
+                        )
+                    )
+                else:
+                    bound += 1
+                    evidence_locators[scrape_evidence_id] = scrape_locator
+                    evidence.append(
+                        DoctorEvidence(
+                            id=scrape_evidence_id,
+                            adapter="gatus",
+                            signal_refs=sorted(metrics_signal_refs),
+                            status="unknown",
+                            reason="no_live_observation_evidence",
+                        )
+                    )
     return (
         DoctorCoverage(
             required=required,
@@ -622,6 +724,7 @@ def _coverage(
             valid=unbound == 0 and unsupported == 0,
         ),
         evidence,
+        evidence_locators,
     )
 
 
@@ -667,6 +770,7 @@ def _emit_result(
     actions: list[Any],
     observation_plan: Path | None = None,
     adapter_bindings: Path | None = None,
+    gatus_fragment: Path | None = None,
     gatus_url: str | None = None,
     gatus_token_env: str | None = None,
 ) -> None:
@@ -675,6 +779,8 @@ def _emit_result(
         command.resolved["observation_plan"] = str(observation_plan)
     if adapter_bindings is not None:
         command.resolved["adapter_bindings"] = str(adapter_bindings)
+    if gatus_fragment is not None:
+        command.resolved["gatus_fragment"] = str(gatus_fragment)
     if gatus_url is not None:
         command.resolved["gatus_url"] = gatus_url
     command.resolved["gatus_configured"] = gatus_url is not None
@@ -901,6 +1007,12 @@ def _verifier_action(ctx: Context, host_id: str) -> Any:
     envvar=ADAPTER_BINDINGS_ENVVAR,
 )
 @click.option(
+    "--gatus-fragment",
+    type=click.Path(path_type=Path),
+    default=None,
+    envvar=GATUS_FRAGMENT_ENVVAR,
+)
+@click.option(
     "--validate", "declaration_only", is_flag=True, help="Validate declarations without I/O"
 )
 @click.option("--gatus-url", default=None, envvar=GATUS_URL_ENVVAR)
@@ -914,13 +1026,14 @@ def doctor(
     ctx: Context,
     observation_plan: Path | None,
     adapter_bindings: Path | None,
+    gatus_fragment: Path | None,
     declaration_only: bool,
     gatus_url: str | None,
     gatus_token_env: str,
     target_type: DoctorKind | None,
     target_ref: str | None,
 ) -> int:
-    """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
+    """Inspect observer evidence from plan, bindings, and rendered Gatus fragment."""
     if target_type is None:
         if target_ref is not None:
             raise click.UsageError("a target type is required")
@@ -930,18 +1043,23 @@ def doctor(
             raise _configuration_required(ctx, "observation_plan")
         if adapter_bindings is None:
             raise _configuration_required(ctx, "adapter_bindings")
-        plan = _load_mapping(observation_plan, "observation_plan") if observation_plan else None
-        bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
-        coverage, evidence = _coverage(plan, bindings, None, "") if plan is not None else (None, [])
+        plan = _load_mapping(observation_plan, "observation_plan")
+        bindings = _load_mapping(adapter_bindings, "adapter_bindings")
+        fragment: dict[str, Any] | None = (
+            _load_mapping(gatus_fragment, "gatus_fragment") if gatus_fragment else None
+        )
+        coverage, evidence, locators = _coverage(plan, bindings, fragment, None, "")
         if (
             not declaration_only
             and gatus_url is None
             and any(item.adapter == "gatus" for item in evidence)
         ):
             raise _configuration_required(ctx, "gatus_url")
+        if gatus_fragment is None:
+            raise _configuration_required(ctx, "gatus_fragment")
         if not declaration_only:
             evidence = _gatus_evidence(
-                evidence, bindings, gatus_url, os.environ.get(gatus_token_env)
+                evidence, locators, gatus_url, os.environ.get(gatus_token_env)
             )
         status, reason = _result_status(coverage, evidence, gatus_url)
 
@@ -955,8 +1073,8 @@ def doctor(
             evidence=_display_evidence(ctx, evidence),
             evidence_summary=_evidence_summary(evidence, gatus_url),
             coverage=coverage,
-            status=status if plan is not None else "unknown",
-            reason=reason if plan is not None else "no_observation_evidence",
+            status=status,
+            reason=reason,
         )
         _emit_result(
             ctx,
@@ -972,12 +1090,9 @@ def doctor(
             ],
             observation_plan,
             adapter_bindings,
+            gatus_fragment,
         )
-        return (
-            0
-            if status == "healthy" or declaration_only and coverage is not None and coverage.valid
-            else 1
-        )
+        return 0 if status == "healthy" or declaration_only and coverage.valid else 1
 
     if target_ref is None:
         raise click.UsageError("a target reference is required")
@@ -987,7 +1102,8 @@ def doctor(
         raise _configuration_required(ctx, "adapter_bindings")
 
     plan = _load_mapping(observation_plan, "observation_plan")
-    bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
+    bindings = _load_mapping(adapter_bindings, "adapter_bindings")
+    fragment = _load_mapping(gatus_fragment, "gatus_fragment") if gatus_fragment else None
     target, declared, target_id = _target(
         ctx,
         target_type,
@@ -996,9 +1112,10 @@ def doctor(
         observation_plan,
         adapter_bindings,
     )
-    coverage, evidence = _coverage(
+    coverage, evidence, locators = _coverage(
         plan,
         bindings,
+        fragment,
         target_type,
         target_id,
         active_host=target_type == "host" and ctx.registry.get(target_id).is_active,
@@ -1009,8 +1126,10 @@ def doctor(
         and any(item.adapter == "gatus" for item in evidence)
     ):
         raise _configuration_required(ctx, "gatus_url")
+    if gatus_fragment is None:
+        raise _configuration_required(ctx, "gatus_fragment")
     if not declaration_only:
-        evidence = _gatus_evidence(evidence, bindings, gatus_url, os.environ.get(gatus_token_env))
+        evidence = _gatus_evidence(evidence, locators, gatus_url, os.environ.get(gatus_token_env))
     status, reason = _result_status(coverage, evidence, gatus_url)
     result = DoctorResult(
         target=target,
@@ -1025,7 +1144,7 @@ def doctor(
         action(
             "verbose",
             [
-                *_verbose_doctor_prefix(ctx, observation_plan, adapter_bindings),
+                *_verbose_doctor_prefix(ctx, observation_plan, adapter_bindings, gatus_fragment),
                 *(["--gatus-url", gatus_url] if gatus_url else []),
                 *(["--gatus-token-env", gatus_token_env] if gatus_url else []),
                 target_type,
@@ -1068,6 +1187,7 @@ def doctor(
         actions,
         observation_plan,
         adapter_bindings,
+        gatus_fragment,
         gatus_url,
         gatus_token_env,
     )

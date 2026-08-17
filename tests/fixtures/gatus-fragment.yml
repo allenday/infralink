@@ -1,0 +1,10 @@
+schema_version: infra-observe.gatus-fragment.v1
+checks:
+  - id: declared-gatus-edge
+    display_name: Declared Gatus edge
+    group: Core dependencies
+    adapter: gatus
+    conditions:
+      - '[STATUS] == 200'
+    url: http://gatus.test/declared-gatus-edge
+unsupported: []
