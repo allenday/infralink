@@ -26,9 +26,12 @@ version is `0.5.6`.
 Use Python 3.10, 3.11, or 3.12. Do not use the macOS system Python 3.9.
 
 ```bash
-/opt/homebrew/bin/python3.12 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
+
+On macOS with Homebrew, `/opt/homebrew/bin/python3.12 --version` is a useful
+interpreter check before running the portable setup commands above.
 
 ## Checks
 

@@ -12,17 +12,17 @@ runs all three versions on Linux. Local contributors can use any supported
 version for development; use Python 3.12 when you want parity with the release
 step.
 
-On this workstation the supported interpreter is:
+Create a local environment with a supported interpreter:
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+```
+
+On macOS with Homebrew, this is a useful interpreter check:
 
 ```bash
 /opt/homebrew/bin/python3.12 --version
-```
-
-Create a local environment:
-
-```bash
-/opt/homebrew/bin/python3.12 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
 ```
 
 Install optional hosted Bitwarden Secrets Manager audit support only when
