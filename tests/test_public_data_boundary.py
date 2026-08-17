@@ -8,11 +8,15 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_PUBLIC_FILES = (
+    PROJECT_ROOT / "AGENTS.md",
+    PROJECT_ROOT / "CONTRIBUTING.md",
     PROJECT_ROOT / "README.md",
     PROJECT_ROOT / "PRD.md",
     PROJECT_ROOT / "BACKLOG.md",
 )
 EXPECTED_PUBLIC_FILES = ROOT_PUBLIC_FILES + (
+    PROJECT_ROOT / "docs" / "architecture.md",
+    PROJECT_ROOT / "docs" / "security-boundaries.md",
     PROJECT_ROOT / "examples" / "registry.yml",
     PROJECT_ROOT / "examples" / "edges.yml",
     PROJECT_ROOT / "examples" / "roles.yml",
@@ -79,6 +83,9 @@ DOTTED_TOKEN = re.compile(
     re.IGNORECASE,
 )
 VERSION_IDENTIFIER = re.compile(r"^v?\d+(?:\.\d+){1,3}$", re.IGNORECASE)
+ISO_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}z$", re.IGNORECASE)
+ISO_TIMESTAMP_PORT_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}$", re.IGNORECASE)
+ISO_TIMESTAMP_TAIL = re.compile(r"^\d{2}t\d{2}:\d{2}:\d{2}z$", re.IGNORECASE)
 TERMINAL_PROSE_PUNCTUATION = ".,;:!?)]}>'\""
 DOCUMENTATION_IPV4_RANGES = (
     ipaddress.ip_network("192.0.2.0/24"),
@@ -87,8 +94,10 @@ DOCUMENTATION_IPV4_RANGES = (
 )
 SAFE_DOTTED_TOKENS = {
     "app-database.md",
+    "contracts.py",
     "backlog.md",
     "edges.yml",
+    "edges.py",
     "edgeset.load",
     "infralink-0.2.0-py3-none-any.whl",
     "infralink-0.2.0.tar.gz",
@@ -99,7 +108,18 @@ SAFE_DOTTED_TOKENS = {
     "infralink.publisher-request.v3",
     "infralink.release-candidate.v1",
     "agent-cli.response.v1",
+    "agents.md",
+    "architecture.md",
+    "contributing.md",
+    "main.py",
     "infralink.observation",
+    "python3.12",
+    "readme.md",
+    "registry.py",
+    "release-operator-workflow.md",
+    "resolver.py",
+    "security-boundaries.md",
+    "template.py",
     "nginx.access",
     "ci.builds",
     "manifest.json",
@@ -135,9 +155,13 @@ def tracked_public_files() -> tuple[Path, ...]:
                 "ls-files",
                 "-z",
                 "--",
+                "AGENTS.md",
+                "CONTRIBUTING.md",
                 "README.md",
                 "PRD.md",
                 "BACKLOG.md",
+                "docs/architecture.md",
+                "docs/security-boundaries.md",
                 "examples",
                 "docs/compatibility",
             ],
@@ -268,6 +292,14 @@ def _authority_violation(value: str, *, allow_placeholder: bool = False) -> str 
     if allow_placeholder and candidate.lower() in SAFE_HOST_PLACEHOLDERS:
         return None
     normalized_candidate = _normalize_prose_token(candidate)
+    if normalized_candidate.upper().startswith("AS_OF="):
+        normalized_candidate = normalized_candidate.split("=", maxsplit=1)[1].strip("'\"")
+    if (
+        ISO_TIMESTAMP.fullmatch(normalized_candidate)
+        or ISO_TIMESTAMP_PORT_PREFIX.fullmatch(normalized_candidate)
+        or ISO_TIMESTAMP_TAIL.fullmatch(normalized_candidate)
+    ):
+        return None
     filename, separator, line_number = normalized_candidate.rpartition(":")
     if separator and line_number.isdigit() and filename.lower() in SAFE_LINE_REFERENCE_FILES:
         return None
@@ -827,6 +859,7 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     line_refs: README.md:12, manifest.json:12, and registry.yml:12 are public file references.
     path: docs/reference.md is an unambiguous public file path.
     punctuation: docs/reference.md...);!? Release v0.2.0...,"\']
+    observation: AS_OF=2026-08-17T00:00:00Z
     """
     assert boundary_violations(text) == []
 
@@ -976,7 +1009,7 @@ def test_public_file_inventory_tracks_all_shipped_examples_and_compatibility_doc
             text=True,
         ).stdout.splitlines()
     }
-    expected = set(ROOT_PUBLIC_FILES) | {
+    expected = set(EXPECTED_PUBLIC_FILES) | {
         path
         for path in tracked
         if path.is_relative_to(PROJECT_ROOT / "examples")
