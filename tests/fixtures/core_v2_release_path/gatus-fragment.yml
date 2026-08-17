@@ -1,0 +1,10 @@
+schema_version: infra-observe.gatus-fragment.v1
+checks:
+  - id: citadel-self-deploy
+    display_name: Citadel self deploy
+    group: Core dependencies
+    adapter: gatus
+    conditions:
+      - '[STATUS] == 200'
+    url: http://gatus.test/citadel-self-deploy
+unsupported: []

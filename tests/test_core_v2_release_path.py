@@ -219,7 +219,8 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
         "infralink.cli.doctor._fetch_gatus_statuses",
         lambda url, token: [
             {
-                "name": "citadel-self-deploy",
+                "group": "Core dependencies",
+                "name": "Citadel self deploy",
                 "results": [{"success": True, "timestamp": "2026-08-11T00:00:00Z"}],
             }
         ],
@@ -242,6 +243,8 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
             str(FIXTURES / "observation-plan.json"),
             "--adapter-bindings",
             str(FIXTURES / "adapter-bindings.yml"),
+            "--gatus-fragment",
+            str(FIXTURES / "gatus-fragment.yml"),
             "--gatus-url",
             "http://gatus.test",
             "host",
