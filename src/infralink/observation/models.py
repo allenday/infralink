@@ -103,6 +103,13 @@ class EndpointExposure(str, Enum):
     PUBLIC = "public"
 
 
+class RuntimeNetworkScope(str, Enum):
+    """The service network namespace derived from its registry Compose declaration."""
+
+    BRIDGE = "bridge"
+    HOST = "host"
+
+
 class SignalRequirement(str, Enum):
     REQUIRED = "required"
     OPTIONAL = "optional"
@@ -323,6 +330,15 @@ class ServiceInstance(StrictModel):
     endpoint_ids: list[CanonicalId] = Field(default_factory=list)
     endpoint_overrides: list[EndpointOverride] = Field(default_factory=list)
     secret_binding_ids: list[CanonicalId] = Field(default_factory=list)
+    network_scope: RuntimeNetworkScope | None = None
+
+
+class HostBridgeIngress(StrictModel):
+    """One registry-declared bridge-to-host firewall allowance."""
+
+    service_instance_id: CanonicalId
+    protocol: Literal["tcp", "udp"]
+    port: Port
 
 
 class Host(StrictModel):
@@ -330,6 +346,7 @@ class Host(StrictModel):
     display_name: Annotated[str, Field(min_length=1)] | None = None
     baseline_capabilities: list[HostBaselineCapability] = Field(default_factory=list)
     self_deploy_v2_reconcile_enabled: bool = False
+    host_bridge_ingress: list[HostBridgeIngress] = Field(default_factory=list)
 
     @field_validator("baseline_capabilities")
     @classmethod
@@ -338,6 +355,16 @@ class Host(StrictModel):
     ) -> list[HostBaselineCapability]:
         if len(value) != len(set(value)):
             raise ValueError("duplicate host baseline capability")
+        return value
+
+    @field_validator("host_bridge_ingress")
+    @classmethod
+    def reject_duplicate_host_bridge_ingress(
+        cls, value: list[HostBridgeIngress]
+    ) -> list[HostBridgeIngress]:
+        identities = {(item.service_instance_id, item.protocol, item.port) for item in value}
+        if len(value) != len(identities):
+            raise ValueError("duplicate host bridge ingress")
         return value
 
 
