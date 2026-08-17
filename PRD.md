@@ -1,32 +1,82 @@
 # Infralink Product Requirements
 
+Current package version: `0.5.6`.
+
 ## Purpose
 
-Infralink makes infrastructure dependencies explicit and reviewable. It loads
-declarative host and edge data, validates it, answers bounded topology queries,
-resolves endpoints, checks health, and generates deterministic artifacts.
+Infralink makes infrastructure dependencies explicit, reviewable, and safe to
+consume by humans, agents, CI systems, and operators. It loads declarative host,
+edge, observation, and release data; validates contracts; answers bounded
+queries; resolves endpoints without resolving secrets; checks health; and
+generates deterministic artifacts.
 
-The primary users are infrastructure engineers, automated agents, CI systems,
-and on-call operators. The public package is provider-neutral at its domain
-boundary; optional adapters may integrate with external providers.
+The public package is provider-neutral at its domain boundary. Optional adapters
+may integrate with external providers only through constrained, documented,
+read-only or explicitly authorized operations.
 
-## v0.2 Requirements
+## Current Requirements
 
-- Python 3.10 through 3.12 on supported POSIX/Linux systems.
-- UUID-based host identity and typed, validated edges.
-- Stable `infralink.cli/v1` JSON envelopes for every CLI outcome.
-- Shallow parsed command metadata, typed results, stable errors, bounded
-  collections, opaque continuation cursors, and actionable next steps.
-- Stable exit codes for domain results, contract failures, platform support,
-  artifact I/O, and unexpected failures.
-- Safe connection templates containing `secret_ref` placeholders, never
-  resolved credentials.
-- Offline declared-secret inventory and optional read-only hosted BWS audit.
-- Deterministic diagram and documentation artifacts with transactional writes.
-- Reproducible wheel/sdist metadata, repository secret scanning, public-data
-  boundary checks, and a protected manual Woodpecker release.
+- Support Python 3.10 through 3.12.
+- Validate on Linux/POSIX for artifact-generating commands that rely on
+  transactional filesystem semantics.
+- Keep UUID-based host identity and typed, validated edges as the topology
+  foundation.
+- Emit exactly one structured CLI envelope per invocation.
+- Preserve stable `infralink.cli/v1` and `agent-cli.response.v1` result/error
+  contracts, bounded collections, opaque continuation cursors, and actionable
+  next steps.
+- Preserve stable exit codes for domain results, contract failures, platform
+  support, artifact I/O, and unexpected failures.
+- Return safe connection templates containing declared `secret_ref`
+  placeholders, never resolved credentials.
+- Provide offline declared-secret inventory and optional read-only hosted BWS
+  metadata audit.
+- Provide offline observation documents, diagnostics, service/profile operations
+  views, readiness suites, and packaged observation schemas.
+- Provide local host bootstrap/apply planning, status, logs, and verifier
+  surfaces with bounded sanitized output and explicit operator authority for
+  mutations.
+- Provide release candidate, publisher request, and attestation validation
+  surfaces without turning local commands into a publisher.
+- Generate deterministic diagram, documentation, CLI schema, observation schema,
+  and release schema artifacts.
+- Protect public examples and docs from private topology or secret leakage.
+- Keep Woodpecker as the only release executor.
 
-The stable exit-code contract is:
+## CLI Surface
+
+The command tree includes:
+
+```text
+infralink
+|-- help [command ...]
+|-- version
+|-- info
+|-- hosts
+|-- host create|list|show|bootstrap|verifier|apply|status|logs
+|-- services
+|-- service list|show
+|-- edges-list
+|-- edge list|show
+|-- app list|show
+|-- validate
+|-- check
+|-- resolve <edge-id>
+|-- analyze --output <directory>
+|-- diagram --output <directory>
+|-- docs --output <directory>
+|-- secrets inspect|audit
+|-- capabilities
+|-- project observation|secrets|view|readiness
+|-- explain <code>
+|-- release inspect|validate-candidate|render-publisher-request|inspect-attestation
+`-- registry host get|patch
+```
+
+Topology commands require declared sources through flags or environment
+variables. Packaged examples are explicit demo and test inputs only.
+
+## Exit Codes
 
 | Code | Meaning |
 | --- | --- |
@@ -43,85 +93,61 @@ Exit `74` uses `artifact_io_failed` for storage failures and
 `artifact_recovery_required` when recovery state is retained. `internal_error`
 is reserved for exit `70`.
 
-## CLI Surface
-
-```text
-infralink
-|-- help [command ...]
-|-- version
-|-- info
-|-- hosts
-|-- host show <host-id>
-|-- services
-|-- service show <service-id>
-|-- edges-list
-|-- edge show <edge-id>
-|-- app list
-|-- app show <app-id>
-|-- validate
-|-- check
-|-- resolve <edge-id>
-|-- analyze --output <directory>
-|-- diagram --output <directory>
-|-- docs --output <directory>
-`-- secrets
-    |-- inspect
-    `-- audit --provider bws
-```
-
-All output is one JSON document. Long collections require limits and cursors;
-generated content is written to explicit output directories and represented by
-bounded artifact metadata in stdout.
-
 ## Secret Boundary
 
 Topology stores references such as `example/database-password`, not values.
-`resolve` can return:
+`resolve` may return:
 
 ```text
 postgresql://app:${secret:example/database-password}@192.0.2.10:5432/app
 ```
 
-`secrets inspect` reports only declared references and source locations.
-`secrets audit --provider bws` may inspect provider metadata for those declared
-references, but cannot accept an arbitrary secret ID and never retrieves a
-value. Production requires `BWS_ACCESS_TOKEN` and `BWS_ORGANIZATION_ID` and uses
-hosted Bitwarden endpoints only. Custom endpoints are deferred beyond `v0.2.0`.
+`secrets inspect` reports declared references and source locations only.
+`secrets audit --provider bws` may inspect hosted Bitwarden metadata for those
+declared references, but cannot accept arbitrary secret IDs and never retrieves
+values. Production audit requires `BWS_ACCESS_TOKEN` and `BWS_ORGANIZATION_ID`.
+Custom BWS endpoints remain out of scope until explicitly designed.
 
 ## Release Boundary
 
-Woodpecker is the only CI and release executor. Its manual release step runs
-for `main` on Python 3.12 only after all three Python-version quality gates
-succeed. It requires the requested version and package version to equal
-`0.2.0`, and requires the pipeline commit to equal the current `main` commit.
-It publishes exactly:
+Woodpecker is the only CI release executor. Its manual release step runs for
+`main` on Python 3.12 only after all three Python-version quality gates succeed.
+It requires the requested version to equal the package version and requires the
+pipeline commit to equal the current `main` commit. It publishes exactly:
 
 ```text
-infralink-0.2.0-py3-none-any.whl
-infralink-0.2.0.tar.gz
+infralink-<version>-py3-none-any.whl
+infralink-<version>.tar.gz
 SHA256SUMS
 SHA256SUMS.sigstore.json
 ```
 
-GitHub is only the public source and release destination. The step fails if the
-tag or release already exists, builds the packages, checks them with Twine,
-writes canonical checksums, and signs the checksum file with Cosign. Private
-compatibility checks are optional diagnostics and do not control publication.
+GitHub is the public source and release destination. The step fails if the tag
+or release already exists, builds the packages, checks them with Twine, writes
+canonical checksums, and signs the checksum file with Cosign. Local release
+scripts are validators and asset assemblers; they are not an alternate release
+path.
 
 ## Non-Goals
 
-- Dynamic service discovery
-- Deployment or host lifecycle management
-- Secret storage, writes, or arbitrary lookup
-- Public disclosure of private topology
-- Automatic release or production rollout
+- Dynamic service discovery.
+- Secret storage, writes, resolved credential output, or arbitrary secret lookup.
+- Public disclosure of private topology.
+- Automatic release, non-main publication, or production rollout.
+- Running live host or provider mutations without explicit operator authority.
 
 ## Success Criteria
 
 - Every public CLI response validates against its checked-in schema.
 - No secret value crosses a serialization boundary.
+- Generated schemas are deterministic and clean after regeneration.
 - Release assets correspond to the exact protected `main` source commit.
 - Public docs and examples contain only deliberate example topology.
 - Compatibility changes have an explicit migration path.
 
-*Document version: 0.2*
+## Historical Context
+
+The `v0.2` foundation remains documented for migration and release-history
+purposes. Keep that history in [docs/compatibility/v0.2.md](docs/compatibility/v0.2.md)
+and [docs/releases/](docs/releases/) rather than using it as the current
+top-level product frame.

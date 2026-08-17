@@ -2,6 +2,10 @@
 
 Issue: [#37](https://github.com/cyberstorm-dev/infralink/issues/37)
 
+This document describes local release contract inspection and the protected
+Woodpecker publication boundary as of Infralink `0.5.6`. It is not a runbook for
+publishing from a development checkout.
+
 Registry YAML is the source of intent. Operators continue to edit profiles,
 hosts, templates, image tags, and image SHAs directly. This CLI neither edits
 that YAML nor makes generated state the source of truth.
@@ -19,6 +23,13 @@ Every command emits `infralink.cli/v1`: `ok`, `command.raw`,
 `command.parsed`, either `result` or repair-oriented `error`, and no more than
 three HATEOAS `next_actions`. Output is bounded to 64 artifacts/consumers and
 does not include logs.
+
+The repository also contains `scripts/release.py`, the helper used by the
+Woodpecker release step to validate requested version, exact `main` commit,
+supported release platform, checksums, and asset names. `scripts/release_v0_2.py`
+and `scripts/build_release_manifest.py` remain historical/tested compatibility
+helpers for the fixed `0.2.0` asset shape; they are not the current publication
+entrypoint.
 
 ## Inputs And Handoffs
 
@@ -41,14 +52,14 @@ to the trusted publisher, not an invocation of one.
 
 `infralink.release-attestation.v1` is the publisher's immutable completion
 record. Its packaged structural JSON Schema is
-`infralink/schemas/release/v1/release-attestation.v1.schema.json`; a sanitized
-example is `examples/release/release-attestation.v1.json`. It repeats every
-candidate evidence binding, adds a bounded publisher CI receipt, and binds the
-created tag name to the release identity plus the immutable annotated tag
-object SHA-1. The typed `ReleaseAttestationV1` model additionally verifies the
-tag/release binding. Inspection reports the full evidence binding and bounded
-consumer list. It does not advertise an unimplemented host-shadow command;
-registry CI owns that later workflow.
+`infralink/schemas/release/v1/release-attestation.v1.schema.json`; sanitized
+examples cover v1 and later contract revisions under `examples/release/`. The
+v1 record repeats every candidate evidence binding, adds a bounded publisher CI
+receipt, and binds the created tag name to the release identity plus the
+immutable annotated tag object SHA-1. Later v2/v3 request and attestation shapes
+add stronger publisher request and release-manifest bindings. Inspection reports
+the full evidence binding and bounded consumer list. It does not advertise an
+unimplemented host-shadow command; registry CI owns that later workflow.
 
 The CLI retains reader compatibility for the flat `v1` shapes emitted by the
 initial #37 release CLI. Those older attestations contain no publisher
@@ -56,7 +67,7 @@ repository, tag object, candidate receipt, or artifact evidence; inspection
 represents each as absent rather than inventing provenance. New registry CI
 must emit the public nested contract above.
 
-## Current Stubs
+## Current Boundaries
 
 The CLI can validate/render/inspect locally today. It does not implement the
 publisher. The publisher still requires the protected, least-privilege
@@ -68,6 +79,13 @@ The producer contract deliberately does not select canonical publisher-request
 bytes or a request digest. Registry #251 must add that implementation-specific
 publisher evidence without weakening these release facts or creating a second
 signing path.
+
+For the public Python package release, Woodpecker is the sole release executor.
+Its manual `main`-only release step validates `RELEASE_VERSION`, exact commit
+identity, absent existing tag/release state, pinned `gh` and `cosign` downloads,
+package build output, Twine metadata, checksums, and Cosign bundle before
+creating the GitHub release. Do not create tags, releases, signatures, or package
+uploads from local contributor workflows.
 
 ## Examples
 
