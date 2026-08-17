@@ -115,6 +115,8 @@ def _result_status(
     coverage: DoctorCoverage | None, evidence: list[DoctorEvidence], gatus_url: str | None
 ) -> tuple[Literal["healthy", "unhealthy", "unavailable", "unknown"], str | None]:
     if coverage is not None and not coverage.valid:
+        if any(item.reason == "observation_contract_missing" for item in evidence):
+            return "unknown", "observation_contract_missing"
         return "unknown", "observer_coverage_incomplete"
     if gatus_url is None and any(item.adapter == "gatus" for item in evidence):
         return "unknown", "gatus_not_configured"
@@ -391,6 +393,8 @@ def _coverage(
     bindings: dict[str, Any] | None,
     target_type: DoctorKind | None,
     target_id: str,
+    *,
+    active_host: bool = False,
 ) -> tuple[DoctorCoverage, list[DoctorEvidence]]:
     logical_service = next(
         (
@@ -520,6 +524,95 @@ def _coverage(
                     reason="observer_binding_undeclared",
                 )
             )
+    if target_type == "host" and active_host:
+        host = next(
+            (
+                item
+                for item in plan.get("hosts", [])
+                if isinstance(item, dict) and item.get("id") == target_id
+            ),
+            None,
+        )
+        baseline_capabilities = (
+            host.get("baseline_capabilities", []) if isinstance(host, dict) else []
+        )
+        requires_host_metrics = isinstance(baseline_capabilities, list) and (
+            "host-metrics" in baseline_capabilities
+        )
+        node_exporter_services = {
+            item.get("id")
+            for item in plan.get("services", [])
+            if isinstance(item, dict)
+            and item.get("host_id") == target_id
+            and item.get("profile_id") == "node-exporter"
+            and isinstance(item.get("id"), str)
+        }
+        metrics_endpoint_ids = {
+            item.get("id")
+            for item in plan.get("endpoints", [])
+            if isinstance(item, dict)
+            and item.get("service_id") in node_exporter_services
+            and item.get("key") == "metrics"
+            and isinstance(item.get("id"), str)
+        }
+        metrics_signal_refs = {
+            item.get("id")
+            for item in plan.get("signals", [])
+            if isinstance(item, dict)
+            and item.get("service_id") in node_exporter_services
+            and item.get("source_endpoint_id") in metrics_endpoint_ids
+            and item.get("capability_evaluator") == "prometheus-scrape"
+            and isinstance(item.get("id"), str)
+        }
+        service_profiles = {
+            item.get("id"): item.get("profile_id")
+            for item in plan.get("services", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        has_required_metrics_dependency = any(
+            item.get("required") is True
+            and item.get("target_endpoint_id") in metrics_endpoint_ids
+            and service_profiles.get(item.get("source_service_id")) == "prometheus"
+            and item.get("execution_adapter") == "gatus"
+            for item in plan.get("dependencies", [])
+            if isinstance(item, dict)
+        )
+        has_prometheus_binding = any(
+            isinstance(item, dict)
+            and item.get("renderer_kind") == "prometheus"
+            and item.get("signal_ref") in metrics_signal_refs
+            for item in (bindings or {}).get("bindings", [])
+        )
+        has_dashboard_membership = any(
+            isinstance(item, dict)
+            and item.get("kind") == "host_metrics"
+            and target_id in item.get("host_ids", [])
+            and item.get("metric_profile_id") == "node-exporter"
+            for item in plan.get("operations_views", [])
+        )
+        missing_contracts = [
+            component
+            for component, present in (
+                ("node-exporter", bool(node_exporter_services and metrics_endpoint_ids)),
+                ("prometheus-scrape", bool(metrics_signal_refs and has_prometheus_binding)),
+                ("gatus-reachability", has_required_metrics_dependency),
+                ("dashboard-membership", has_dashboard_membership),
+            )
+            if not present
+        ]
+        if requires_host_metrics:
+            for component in missing_contracts:
+                required += 1
+                unbound += 1
+                evidence.append(
+                    DoctorEvidence(
+                        id=f"host/{target_id}/baseline/host-metrics/{component}",
+                        adapter=None,
+                        signal_refs=[],
+                        status="unknown",
+                        reason="observation_contract_missing",
+                    )
+                )
     return (
         DoctorCoverage(
             required=required,
@@ -903,7 +996,13 @@ def doctor(
         observation_plan,
         adapter_bindings,
     )
-    coverage, evidence = _coverage(plan, bindings, target_type, target_id)
+    coverage, evidence = _coverage(
+        plan,
+        bindings,
+        target_type,
+        target_id,
+        active_host=target_type == "host" and ctx.registry.get(target_id).is_active,
+    )
     if (
         not declaration_only
         and gatus_url is None

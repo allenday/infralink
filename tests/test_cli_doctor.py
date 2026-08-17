@@ -72,6 +72,77 @@ def _observation_inputs(tmp_path: Path) -> tuple[Path, Path]:
     return plan, bindings
 
 
+def _add_host_metrics_projection(plan: Path, bindings: Path) -> None:
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    node_exporter_service = f"{HOST_ID}/node-exporter"
+    prometheus_service = "fa2b9872-d94c-4b20-a73a-57a205560769/prometheus"
+    endpoint_id = f"{node_exporter_service}/metrics"
+    signal_ref = f"service/{node_exporter_service}/metrics/clock-present"
+    dependency_id = "prometheus-to-host-node-exporter"
+    document["hosts"] = [{"id": HOST_ID, "baseline_capabilities": ["host-metrics"]}]
+    document["service_profiles"].extend([{"id": "node-exporter"}, {"id": "prometheus"}])
+    document["services"].extend(
+        [
+            {"id": node_exporter_service, "host_id": HOST_ID, "profile_id": "node-exporter"},
+            {
+                "id": prometheus_service,
+                "host_id": "fa2b9872-d94c-4b20-a73a-57a205560769",
+                "profile_id": "prometheus",
+            },
+        ]
+    )
+    document["endpoints"] = [
+        {"id": endpoint_id, "service_id": node_exporter_service, "key": "metrics"}
+    ]
+    document["signals"] = [
+        {
+            "id": signal_ref,
+            "service_id": node_exporter_service,
+            "source_endpoint_id": endpoint_id,
+            "capability_evaluator": "prometheus-scrape",
+        }
+    ]
+    document["dependencies"].append(
+        {
+            "id": dependency_id,
+            "source_service_id": prometheus_service,
+            "target_service_id": node_exporter_service,
+            "target_endpoint_id": endpoint_id,
+            "required": True,
+            "execution_adapter": "gatus",
+            "health_signal_refs": [f"dependency/{dependency_id}/health/reachable"],
+        }
+    )
+    document["operations_views"] = [
+        {
+            "id": "host-metrics",
+            "kind": "host_metrics",
+            "host_ids": [HOST_ID],
+            "metric_profile_id": "node-exporter",
+        }
+    ]
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    binding_document = yaml.safe_load(bindings.read_text(encoding="utf-8"))
+    binding_document["bindings"].extend(
+        [
+            {
+                "id": "gatus-prometheus-to-host-node-exporter",
+                "renderer_kind": "gatus",
+                "output_identity": dependency_id,
+                "signal_ref": f"dependency/{dependency_id}/health/reachable",
+            },
+            {
+                "id": "prometheus-host-node-exporter",
+                "renderer_kind": "prometheus",
+                "output_identity": signal_ref,
+                "signal_ref": signal_ref,
+            },
+        ]
+    )
+    bindings.write_text(yaml.safe_dump(binding_document), encoding="utf-8")
+
+
 def _invoke(*args: str):
     return CliRunner().invoke(cli, ["--output", "json", *_sources(), "doctor", *args])
 
@@ -148,10 +219,110 @@ def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network
             "latest_observed_at": None,
         }
     ]
+
+
+def test_doctor_fails_closed_when_host_metrics_baseline_lacks_a_projected_contract(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    document["hosts"] = [{"id": HOST_ID, "baseline_capabilities": ["host-metrics"]}]
+    plan.write_text(json.dumps(document), encoding="utf-8")
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "host",
+        HOST_ID,
+        "--validate",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["coverage"] == {
+        "required": 5,
+        "bound": 1,
+        "unbound": 4,
+        "unsupported": 0,
+        "valid": False,
+    }
+    assert payload["result"]["reason"] == "observation_contract_missing"
+    assert {item["id"] for item in payload["result"]["evidence"]} == {
+        f"host/{HOST_ID}/baseline/host-metrics/node-exporter",
+        f"host/{HOST_ID}/baseline/host-metrics/prometheus-scrape",
+        f"host/{HOST_ID}/baseline/host-metrics/gatus-reachability",
+        f"host/{HOST_ID}/baseline/host-metrics/dashboard-membership",
+    }
     configure = next(item for item in payload["next_actions"] if item["rel"] == "configure-gatus")
     assert configure["description"] == "Set INFRALINK_GATUS_URL or pass --gatus-url"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/doctor.json").read_text())
     Draft202012Validator(schema).validate(payload)
+
+
+def test_doctor_accepts_a_complete_active_host_metrics_projection(tmp_path: Path) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    _add_host_metrics_projection(plan, bindings)
+
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "host",
+        HOST_ID,
+        "--validate",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["coverage"] == {
+        "required": 2,
+        "bound": 2,
+        "unbound": 0,
+        "unsupported": 0,
+        "valid": True,
+    }
+    assert payload["result"]["reason"] == "gatus_not_configured"
+
+
+def test_doctor_does_not_require_host_metrics_projection_for_non_active_host(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    document = json.loads(plan.read_text(encoding="utf-8"))
+    document["hosts"] = [{"id": HOST_ID, "baseline_capabilities": ["host-metrics"]}]
+    plan.write_text(json.dumps(document), encoding="utf-8")
+    registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    registry["hosts"][HOST_ID]["status"] = "provisioning"
+    registry_path = tmp_path / "registry.yml"
+    registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry_path),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "doctor",
+            "--observation-plan",
+            str(plan),
+            "--adapter-bindings",
+            str(bindings),
+            "host",
+            HOST_ID,
+            "--validate",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["result"]["coverage"]["valid"] is True
+    assert payload["result"]["reason"] == "gatus_not_configured"
 
 
 def test_normal_doctor_requires_a_configured_gatus_observer(
