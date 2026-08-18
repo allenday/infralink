@@ -81,10 +81,12 @@ component metric contract
   -> Doctor evidence
 ```
 
-Gatus validates availability and declared health-relevant signals. Prometheus
-collects raw metrics. Grafana visualizes those metrics through reusable
-dashboard templates. Doctor combines declared requirements and live evidence;
-it does not invent a second desired state or replace host telemetry.
+Gatus validates an endpoint's availability and response form. A metric
+contract may project endpoint availability checks to Gatus when useful, but
+Prometheus collects and validates metric content. Grafana visualizes those
+metrics through reusable dashboard templates. Doctor combines declared
+requirements and live evidence; it does not invent a second desired state or
+replace host telemetry.
 
 Edges may also have observer-produced metrics such as connection success,
 latency, or certificate expiry. These metrics belong to the edge observation
