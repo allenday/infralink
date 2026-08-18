@@ -117,6 +117,29 @@ infralink --output json help resolve
 infralink explain schema-version-unsupported
 ```
 
+### Operator Context
+
+For direct operator use, configure one registry checkout root in
+`$XDG_CONFIG_HOME/infralink/config.yml` (default:
+`~/.config/infralink/config.yml`):
+
+```yaml
+registry: /srv/infra-registry
+```
+
+The checkout must contain `hosts/`. With that one local selector, Doctor
+derives the standard edges and observation inputs from the checkout and keeps
+their resolved paths in its response:
+
+```bash
+infralink doctor host relayos-staging
+```
+
+Explicit `--registry`, `INFRALINK_REGISTRY`, and per-source flags override the
+local config. Gatus URL and token remain process configuration, so an MCP may
+set `INFRALINK_REGISTRY` and its Gatus environment without duplicating CLI
+logic. The local config never selects a registry revision or desired state.
+
 Offline observation examples:
 
 ```bash
@@ -175,6 +198,7 @@ templates.
 - Contribution flow and canonical checks: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Agent instructions: [AGENTS.md](AGENTS.md)
 - Architecture/navigation: [docs/architecture.md](docs/architecture.md)
+- Observable topology and metric contracts: [docs/observable-model.md](docs/observable-model.md)
 - Security boundaries: [docs/security-boundaries.md](docs/security-boundaries.md)
 - Release workflow: [docs/release-operator-workflow.md](docs/release-operator-workflow.md)
 - v0.2 migration history: [docs/compatibility/v0.2.md](docs/compatibility/v0.2.md)

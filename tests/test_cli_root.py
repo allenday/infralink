@@ -84,6 +84,175 @@ def test_environment_sources_are_used_and_flags_override_them(monkeypatch, tmp_p
     assert override_payload["result"]["items"] == []
 
 
+def test_doctor_derives_standard_sources_from_configured_registry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """One local registry selection is enough for the standard Doctor invocation."""
+    root = Path(__file__).resolve().parents[1]
+    host_id = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
+    checkout = tmp_path / "infra-registry"
+    hosts = checkout / "hosts"
+    host_root = hosts / host_id
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    host_id: {
+                        "canonical_name": "database.example.com",
+                        "status": "active",
+                        "tailscale_ip": "100.64.0.10",
+                        "controller_bootstrap": {
+                            "registry_read_identity_secret": {
+                                "project": "infra",
+                                "id": "registry-reader",
+                            },
+                            "registry_repo_url": "ssh://git@example.invalid/infra-registry.git",
+                            "registry_ref": "main",
+                        },
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (hosts / "applications.yml").write_text(
+        yaml.safe_dump(
+            {"applications": {"database": {"members": [{"host": host_id, "services": []}]}}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    operations = host_root / "operations"
+    operations.mkdir()
+    (operations / "deployment.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "self-deploy.desired-state.v1",
+                "machine": {"uuid": host_id},
+                "controller": {"image": {"repository": "example/controller", "tag": "v1"}},
+                "infra_management": {"revision": "a" * 40},
+                "compose": {"project_name": "services"},
+                "images": {"node-exporter": {"repository": "prom/node-exporter", "tag": "v1"}},
+                "services": {"protected": ["node-exporter"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (operations / "contract.yml").write_text(
+        yaml.safe_dump(
+            {
+                "machine": {"uuid": host_id, "canonical_name": "database.example.com"},
+                "transport": {
+                    "kind": "ssh",
+                    "host": "100.64.0.10",
+                    "port": 22,
+                    "user": "root",
+                    "host_key_fingerprint": "SHA256:" + "A" * 43,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    edges = checkout / "network/main-dev/edges/edges.yml"
+    edges.parent.mkdir(parents=True)
+    edges.write_text((root / "examples/edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    observation = checkout / "operations/observation"
+    observation.mkdir(parents=True)
+    (observation / "core-plan.json").write_text('{"dependencies": []}', encoding="utf-8")
+    (observation / "adapter-bindings.yml").write_text("bindings: []\n", encoding="utf-8")
+    config_home = tmp_path / "config"
+    (config_home / "infralink").mkdir(parents=True)
+    (config_home / "infralink/config.yml").write_text(
+        yaml.safe_dump({"registry": str(checkout)}, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
+    monkeypatch.delenv("INFRALINK_EDGES", raising=False)
+
+    result = CliRunner().invoke(cli, ["--output", "json", "doctor", "host", host_id, "--validate"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["command"]["resolved"]["registry"] == str(checkout)
+    assert payload["command"]["resolved"]["edges"] == str(edges)
+    assert payload["command"]["resolved"]["observation_plan"] == str(observation / "core-plan.json")
+    assert payload["command"]["resolved"]["adapter_bindings"] == str(
+        observation / "adapter-bindings.yml"
+    )
+    applications = CliRunner().invoke(cli, ["--output", "json", "app", "list"])
+    applications_payload = json.loads(applications.output)
+    assert applications.exit_code == 0
+    assert applications_payload["result"]["items"] == ["database"]
+
+    manifest_path = host_root / "manifest.yml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["hosts"][host_id]["ssh"] = {"host_key_fingerprint": "ssh-ed25519 SHA256:" + "A" * 43}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    (config_home / "infralink/config.yml").write_text(
+        yaml.safe_dump({"registry": str(hosts)}, sort_keys=False), encoding="utf-8"
+    )
+
+    from_hosts_catalog = CliRunner().invoke(
+        cli, ["--output", "json", "doctor", "host", host_id, "--validate"]
+    )
+    from_hosts_payload = json.loads(from_hosts_catalog.output)
+
+    assert from_hosts_catalog.exit_code == 0
+    assert from_hosts_payload["command"]["resolved"]["registry"] == str(hosts)
+    assert from_hosts_payload["command"]["resolved"]["edges"] == str(edges)
+    assert from_hosts_payload["command"]["resolved"]["observation_plan"] == str(
+        observation / "core-plan.json"
+    )
+    assert from_hosts_payload["command"]["resolved"]["adapter_bindings"] == str(
+        observation / "adapter-bindings.yml"
+    )
+
+
+def test_explicit_registry_sources_override_local_config(monkeypatch, tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    config_home = tmp_path / "config"
+    (config_home / "infralink").mkdir(parents=True)
+    (config_home / "infralink/config.yml").write_text(
+        yaml.safe_dump({"registry": str(tmp_path / "configured-checkout")}, sort_keys=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
+    alternate = tmp_path / "alternate.yml"
+    alternate.write_text("hosts: {}\n", encoding="utf-8")
+
+    from_environment = CliRunner().invoke(cli, ["--output", "json", "host", "list"])
+    with_flag = CliRunner().invoke(
+        cli, ["--output", "json", "--registry", str(alternate), "host", "list"]
+    )
+
+    environment_payload = json.loads(from_environment.output)
+    flag_payload = json.loads(with_flag.output)
+    assert from_environment.exit_code == with_flag.exit_code == 0
+    assert environment_payload["command"]["resolved"]["registry"] == str(
+        root / "examples/registry.yml"
+    )
+    assert flag_payload["command"]["resolved"]["registry"] == str(alternate)
+
+
+def test_malformed_local_config_does_not_block_source_independent_commands(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_home = tmp_path / "config"
+    (config_home / "infralink").mkdir(parents=True)
+    (config_home / "infralink/config.yml").write_text("- not-a-mapping\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
+
+    for command in ([], ["version"], ["help"]):
+        result = CliRunner().invoke(cli, command)
+        assert result.exit_code == 0
+
+
 def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     missing_edges = tmp_path / "missing-edges.yml"

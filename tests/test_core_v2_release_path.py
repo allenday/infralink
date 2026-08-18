@@ -177,6 +177,53 @@ def _healthy_probe() -> HostReadinessProbe:
     )
 
 
+def _add_ready_deployment_contract(release: CoreReleasePath) -> None:
+    """Complete the selected fixture for doctor desired-state readiness checks."""
+    manifest_path = release.registry_path / release.host_id / "manifest.yml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    host = manifest["hosts"][release.host_id]
+    host["controller_bootstrap"] = {
+        "registry_read_identity_secret": {
+            "project": "example-project",
+            "id": "registry-read-key",
+        },
+        "registry_repo_url": "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
+        "registry_ref": "refs/heads/main",
+    }
+    host["ssh"] = {
+        "host_key_fingerprint": "ssh-ed25519 SHA256:" + "A" * 43,
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    deployment_path = release.registry_path / release.host_id / "operations" / "deployment.yml"
+    deployment_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "self-deploy.desired-state.v1",
+                "machine": {"uuid": release.host_id},
+                "controller": {
+                    "image": {
+                        "repository": "ghcr.io/example/controller",
+                        "tag": release.runtime_revision,
+                    }
+                },
+                "infra_management": {"revision": release.runtime_revision},
+                "compose": {"project_name": "infralink"},
+                "images": {
+                    "controller": {
+                        "repository": "ghcr.io/example/controller",
+                        "tag": release.runtime_revision,
+                    }
+                },
+                "services": {"protected": ["infralink-controller"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _git(release.registry_path.parent, "add", ".")
+    _git(release.registry_path.parent, "commit", "--quiet", "-m", "complete doctor desired state")
+
+
 def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -232,6 +279,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
         cli,
         ["--registry", str(release.registry_path), "host", "apply", release.host_id, "--dry-run"],
     )
+    _add_ready_deployment_contract(release)
     doctor = CliRunner().invoke(
         cli,
         [

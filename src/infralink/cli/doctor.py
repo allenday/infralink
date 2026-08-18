@@ -25,7 +25,14 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.host_readiness import evaluate_host_readiness
-from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, pass_context
+from infralink.cli.main import (
+    Context,
+    _context_for,
+    _emit,
+    _root_source_argv,
+    pass_context,
+    registry_companion,
+)
 from infralink.cli.output import ok_envelope
 from infralink.host_registry_state import HostManifestGitState, inspect_host_manifest
 from infralink.host_transport import SshReadinessTransport
@@ -597,9 +604,7 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
     if host is None:
         return None
     fingerprint_check: HostReadinessCheck | None = None
-    manifest_path = (
-        ctx.registry_path / str(host.uuid) / "manifest.yml" if ctx.registry_path else None
-    )
+    manifest_path = ctx.hosts_path / str(host.uuid) / "manifest.yml" if ctx.hosts_path else None
     try:
         manifest = (
             yaml.safe_load(manifest_path.read_text(encoding="utf-8")) if manifest_path else {}
@@ -615,9 +620,9 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
         try:
             from infralink.cli.operations import pinned_target_ssh_identity, resolve_apply_request
 
-            if ctx.registry_path is None:
+            if ctx.hosts_path is None:
                 raise ValueError
-            request = resolve_apply_request(ctx.registry_path, host)
+            request = resolve_apply_request(ctx.hosts_path, host)
             with pinned_target_ssh_identity(request) as known_hosts:
                 readiness = evaluate_host_readiness(
                     host,
@@ -660,9 +665,9 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
 
 
 def _declared_firewall_rules(ctx: Context, host_uuid: str) -> tuple[str, ...]:
-    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
         return ()
-    deployment_path = ctx.registry_path / host_uuid / "operations" / "deployment.yml"
+    deployment_path = ctx.hosts_path / host_uuid / "operations" / "deployment.yml"
     try:
         deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
@@ -750,9 +755,9 @@ def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
 
 
 def _host_manifest_git_state(ctx: Context, host_id: str) -> HostManifestGitState | None:
-    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
         return None
-    return inspect_host_manifest(ctx.registry_path, host_id)
+    return inspect_host_manifest(ctx.hosts_path, host_id)
 
 
 def _apply_host_manifest_git_state(
@@ -775,6 +780,106 @@ def _apply_host_manifest_git_state(
     status = "provisioning" if lifecycle == "provisioning" and service_count == 0 else "unhealthy"
     return result.model_copy(
         update={"declared": declared, "status": status, "reason": state.reason}
+    )
+
+
+def _nested_value(value: Any, *path: str) -> Any:
+    for part in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _host_deployment_contract(ctx: Context, host: Any) -> dict[str, Any] | None:
+    """Inspect the one registry-owned deployment contract for an active host."""
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir() or host.status.value != "active":
+        return None
+    deployment_path = ctx.hosts_path / host.uuid / "operations" / "deployment.yml"
+    try:
+        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        deployment = None
+    schema_version = deployment.get("schema_version") if isinstance(deployment, dict) else None
+    if schema_version == "self-deploy.desired-state.v1":
+        bootstrap = host.controller_bootstrap
+        required = {
+            "machine.uuid": _nested_value(deployment, "machine", "uuid"),
+            "controller.image.repository": _nested_value(
+                deployment, "controller", "image", "repository"
+            ),
+            "controller.image.tag": _nested_value(deployment, "controller", "image", "tag"),
+            "infra_management.revision": _nested_value(deployment, "infra_management", "revision"),
+            "compose.project_name": _nested_value(deployment, "compose", "project_name"),
+            "images": deployment.get("images") if isinstance(deployment, dict) else None,
+            "services.protected": _nested_value(deployment, "services", "protected"),
+            "controller_bootstrap.registry_read_identity_secret.project": _nested_value(
+                bootstrap, "registry_read_identity_secret", "project"
+            ),
+            "controller_bootstrap.registry_read_identity_secret.id": _nested_value(
+                bootstrap, "registry_read_identity_secret", "id"
+            ),
+            "controller_bootstrap.registry_repo_url": _nested_value(bootstrap, "registry_repo_url"),
+            "controller_bootstrap.registry_ref": _nested_value(bootstrap, "registry_ref"),
+        }
+        missing = [path for path, value in required.items() if not value]
+        if not missing:
+            try:
+                from infralink.cli.operations import (
+                    _normalize_manifest_fingerprint,
+                    resolve_apply_request,
+                )
+
+                manifest_path = ctx.hosts_path / host.uuid / "manifest.yml"
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+                manifest_host = (
+                    manifest.get("hosts", {}).get(host.uuid, {})
+                    if isinstance(manifest, dict) and isinstance(manifest.get("hosts"), dict)
+                    else {}
+                )
+                fingerprint = _normalize_manifest_fingerprint(
+                    manifest_host.get("ssh", {}).get("host_key_fingerprint")
+                    if isinstance(manifest_host, dict)
+                    and isinstance(manifest_host.get("ssh"), dict)
+                    else None
+                )
+                if fingerprint is None:
+                    missing.append("ssh.host_key_fingerprint")
+                else:
+                    resolve_apply_request(ctx.hosts_path, host)
+            except CliFailure:
+                missing.append("controller_bootstrap.apply_contract")
+            except (OSError, TypeError, yaml.YAMLError):
+                missing.append("ssh.host_key_fingerprint")
+        if not missing:
+            return {"status": "ready", "schema_version": schema_version}
+        return {
+            "status": "incomplete",
+            "code": "desired_state_contract_incomplete",
+            "schema_version": schema_version,
+            "missing": missing,
+        }
+    return {
+        "status": "missing",
+        "code": "desired_state_contract_missing",
+        **({"schema_version": schema_version} if isinstance(schema_version, str) else {}),
+    }
+
+
+def _apply_host_deployment_contract(
+    result: DoctorResult, contract: dict[str, Any] | None
+) -> DoctorResult:
+    if contract is None:
+        return result
+    declared = {**result.declared, "deployment_contract": contract}
+    if contract["status"] == "ready":
+        return result.model_copy(update={"declared": declared})
+    return result.model_copy(
+        update={
+            "declared": declared,
+            "status": "unhealthy",
+            "reason": contract["code"],
+        }
     )
 
 
@@ -828,6 +933,12 @@ def doctor(
     target_ref: str | None,
 ) -> int:
     """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
+    observation_plan = observation_plan or registry_companion(
+        ctx.registry_path, "operations/observation/core-plan.json"
+    )
+    adapter_bindings = adapter_bindings or registry_companion(
+        ctx.registry_path, "operations/observation/adapter-bindings.yml"
+    )
     if target_type is None:
         if target_ref is not None:
             raise click.UsageError("a target type is required")
@@ -948,6 +1059,17 @@ def doctor(
         _host_readiness(ctx, target_ref, declaration_only) if target_type == "host" else None
     )
     result = _apply_host_readiness(result, readiness)
+    host = ctx.registry.get(target_ref) if target_type == "host" else None
+    deployment_contract = _host_deployment_contract(ctx, host) if host is not None else None
+    result = _apply_host_deployment_contract(result, deployment_contract)
+    if deployment_contract is not None and deployment_contract["status"] != "ready":
+        actions.append(
+            action(
+                "inspect-deployment-contract",
+                [*_root_source_argv(ctx), "host", "show", target_id],
+                "Inspect the host declaration before authoring a desired-state contract",
+            )
+        )
     if readiness is not None and not readiness.ready:
         actions.append(_bootstrap_plan_action(ctx, target_id))
         if any(item.id == "inspect_self_deploy_reconcile" for item in readiness.actions):
@@ -972,4 +1094,11 @@ def doctor(
         gatus_url,
         gatus_token_env,
     )
-    return 0 if result.status == "healthy" or declaration_only and coverage.valid else 1
+    return (
+        0
+        if result.status == "healthy"
+        or declaration_only
+        and coverage.valid
+        and result.status != "unhealthy"
+        else 1
+    )

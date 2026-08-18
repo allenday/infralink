@@ -29,9 +29,12 @@ does not make private provider data public.
 ## Data Flow
 
 Topology commands load explicit registry and edge sources from `--registry`,
-`--edges`, `INFRALINK_REGISTRY`, and `INFRALINK_EDGES`. Examples under
-`examples/` are demo and test inputs only; they are not implicit operational
-fallbacks.
+`--edges`, `INFRALINK_REGISTRY`, and `INFRALINK_EDGES`. Direct operator use may
+select one registry checkout root with `registry:` in
+`$XDG_CONFIG_HOME/infralink/config.yml`; this selector derives standard
+checkout-relative Doctor inputs but never selects a registry revision or
+desired state. Examples under `examples/` are demo and test inputs only; they
+are not implicit operational fallbacks.
 
 Each CLI invocation emits one structured envelope. Topology commands use
 `infralink.cli/v1`; offline observation commands use `agent-cli.response.v1`.
@@ -98,6 +101,8 @@ protected Woodpecker release step.
 
 ## More Context
 
+- Observable topology, resources, metrics, and readiness rollups:
+  [Observable model](observable-model.md)
 - Setup and PR flow: [CONTRIBUTING.md](../CONTRIBUTING.md)
 - Security boundaries: [docs/security-boundaries.md](security-boundaries.md)
 - v0.2 migration history: [docs/compatibility/v0.2.md](compatibility/v0.2.md)
