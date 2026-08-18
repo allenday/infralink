@@ -20,13 +20,18 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "required": ["schema_version", "ok", "command"],
     "additionalProperties": True,
 }
+
+
 def _arguments(value: Any) -> tuple[list[str], str | None]:
     if not isinstance(value, dict):
         raise ValueError("MCP tool arguments must be an object")
     argv = value.get("argv")
     if not isinstance(argv, list) or not argv or any(not isinstance(item, str) for item in argv):
         raise ValueError("argv must be a non-empty array of strings")
-    if any(token == "--output" or token.startswith("--output=") or token.startswith("-o") for token in argv):
+    if any(
+        token == "--output" or token.startswith("--output=") or token.startswith("-o")
+        for token in argv
+    ):
         raise ValueError("argv must not set output format; MCP always returns structured JSON")
     if "mcp" in argv:
         raise ValueError("MCP cannot invoke its own server command")
@@ -79,9 +84,7 @@ def _tool() -> Tool:
     )
 
 
-async def _list_tools(
-    _context: ServerRequestContext[Any], _params: Any
-) -> ListToolsResult:
+async def _list_tools(_context: ServerRequestContext[Any], _params: Any) -> ListToolsResult:
     return ListToolsResult(tools=[_tool()])
 
 
