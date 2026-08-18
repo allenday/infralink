@@ -836,18 +836,11 @@ def _emit(payload: dict[str, Any]) -> None:
 
 def _serialize(payload: dict[str, Any]) -> str:
     """Serialize envelopes in the root invocation's selected output format."""
-    context = click.get_current_context(silent=True)
-    if context is not None:
-        root = context.find_root()
-        if isinstance(root.obj, Context):
-            output = root.obj.output
-        else:
-            output = _output_from_argv(_INVOCATION_ARGS.get() or [])
-    else:
-        incoming = _INVOCATION_ARGS.get()
-        # JsonGroup is reusable outside the public CLI. Preserve its historical
-        # JSON fallback when no Infralink root invocation established a format.
-        output = "json" if incoming is None else _output_from_argv(incoming)
+    incoming = _INVOCATION_ARGS.get()
+    # Error handlers run after Click has unwound the inner command context. During
+    # MCP serving, the remaining ambient context belongs to `mcp serve` and defaults
+    # to YAML, while the active tool invocation explicitly selected JSON.
+    output = "json" if incoming is None else _output_from_argv(incoming)
     if output == "json":
         return json.dumps(payload, separators=(",", ":"))
     return yaml.safe_dump(payload, sort_keys=False).rstrip("\n")
