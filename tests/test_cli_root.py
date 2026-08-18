@@ -141,6 +141,22 @@ def test_doctor_derives_standard_sources_from_configured_registry(
         ),
         encoding="utf-8",
     )
+    (operations / "contract.yml").write_text(
+        yaml.safe_dump(
+            {
+                "machine": {"uuid": host_id, "canonical_name": "database.example.com"},
+                "transport": {
+                    "kind": "ssh",
+                    "host": "100.64.0.10",
+                    "port": 22,
+                    "user": "root",
+                    "host_key_fingerprint": "SHA256:" + "A" * 43,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     edges = checkout / "network/main-dev/edges/edges.yml"
     edges.parent.mkdir(parents=True)
     edges.write_text((root / "examples/edges.yml").read_text(encoding="utf-8"), encoding="utf-8")

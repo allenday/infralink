@@ -825,11 +825,32 @@ def _host_deployment_contract(ctx: Context, host: Any) -> dict[str, Any] | None:
         missing = [path for path, value in required.items() if not value]
         if not missing:
             try:
-                from infralink.cli.operations import resolve_apply_request
+                from infralink.cli.operations import (
+                    _normalize_manifest_fingerprint,
+                    resolve_apply_request,
+                )
 
-                resolve_apply_request(ctx.hosts_path, host)
+                manifest_path = ctx.hosts_path / host.uuid / "manifest.yml"
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+                manifest_host = (
+                    manifest.get("hosts", {}).get(host.uuid, {})
+                    if isinstance(manifest, dict) and isinstance(manifest.get("hosts"), dict)
+                    else {}
+                )
+                fingerprint = _normalize_manifest_fingerprint(
+                    manifest_host.get("ssh", {}).get("host_key_fingerprint")
+                    if isinstance(manifest_host, dict)
+                    and isinstance(manifest_host.get("ssh"), dict)
+                    else None
+                )
+                if fingerprint is None:
+                    missing.append("ssh.host_key_fingerprint")
+                else:
+                    resolve_apply_request(ctx.hosts_path, host)
             except CliFailure:
                 missing.append("controller_bootstrap.apply_contract")
+            except (OSError, TypeError, yaml.YAMLError):
+                missing.append("ssh.host_key_fingerprint")
         if not missing:
             return {"status": "ready", "schema_version": schema_version}
         return {
