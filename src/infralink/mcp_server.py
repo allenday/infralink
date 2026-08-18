@@ -15,6 +15,16 @@ from infralink import __version__
 from infralink.cli.main import cli
 
 _TOOL_NAME = "infralink_command"
+_NATIVE_TOOL_NAMES = frozenset(
+    {
+        "infralink_help",
+        "infralink_doctor",
+        "infralink_host_get",
+        "infralink_host_list",
+        "infralink_host_status",
+        "infralink_host_logs",
+    }
+)
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["schema_version", "ok", "command"],
@@ -84,20 +94,150 @@ def _tool() -> Tool:
     )
 
 
+def _native_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="infralink_help",
+            title="Infralink help",
+            description="Discover CLI commands from the canonical command registry.",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "array", "items": {"type": "string"}}},
+                "additionalProperties": False,
+            },
+            output_schema=_OUTPUT_SCHEMA,
+        ),
+        Tool(
+            name="infralink_doctor",
+            title="Infralink doctor",
+            description="Inspect declared and live evidence for a host, service, edge, or profile.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "target_type": {
+                        "type": "string",
+                        "enum": ["host", "service", "edge", "profile"],
+                    },
+                    "target_ref": {"type": "string"},
+                    "validate": {"type": "boolean"},
+                    "verbose": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            output_schema=_OUTPUT_SCHEMA,
+        ),
+        Tool(
+            name="infralink_host_get",
+            title="Get host declaration",
+            description="Read one registry host declaration.",
+            input_schema={
+                "type": "object",
+                "properties": {"ref": {"type": "string"}},
+                "required": ["ref"],
+                "additionalProperties": False,
+            },
+            output_schema=_OUTPUT_SCHEMA,
+        ),
+        Tool(
+            name="infralink_host_list",
+            title="List hosts",
+            description="List registry hosts.",
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            output_schema=_OUTPUT_SCHEMA,
+        ),
+        Tool(
+            name="infralink_host_status",
+            title="Host status",
+            description="Inspect the target-scoped reconcile status.",
+            input_schema={
+                "type": "object",
+                "properties": {"ref": {"type": "string"}},
+                "required": ["ref"],
+                "additionalProperties": False,
+            },
+            output_schema=_OUTPUT_SCHEMA,
+        ),
+        Tool(
+            name="infralink_host_logs",
+            title="Host logs",
+            description="Read bounded target-scoped host logs.",
+            input_schema={
+                "type": "object",
+                "properties": {"ref": {"type": "string"}, "last_run": {"type": "boolean"}},
+                "required": ["ref"],
+                "additionalProperties": False,
+            },
+            output_schema=_OUTPUT_SCHEMA,
+        ),
+    ]
+
+
+def _native_argv(name: str, arguments: Any) -> list[str]:
+    if not isinstance(arguments, dict):
+        raise ValueError("MCP tool arguments must be an object")
+
+    def required_ref() -> str:
+        ref = arguments.get("ref")
+        if not isinstance(ref, str) or not ref:
+            raise ValueError("ref must be a non-empty string")
+        return ref
+
+    if name == "infralink_help":
+        path = arguments.get("path", [])
+        if not isinstance(path, list) or any(
+            not isinstance(item, str) or not item for item in path
+        ):
+            raise ValueError("path must be an array of non-empty strings")
+        return ["help", *path]
+    if name == "infralink_doctor":
+        target_type = arguments.get("target_type")
+        target_ref = arguments.get("target_ref")
+        if (target_type is None) != (target_ref is None):
+            raise ValueError("target_type and target_ref must be supplied together")
+        if target_type is not None and target_type not in {"host", "service", "edge", "profile"}:
+            raise ValueError("target_type must be host, service, edge, or profile")
+        if target_ref is not None and (not isinstance(target_ref, str) or not target_ref):
+            raise ValueError("target_ref must be a non-empty string")
+        argv = ["doctor"]
+        if arguments.get("verbose") is True:
+            argv.insert(0, "--verbose")
+        if target_type is not None:
+            assert isinstance(target_ref, str)
+            argv.extend([target_type, target_ref])
+        if arguments.get("validate") is True:
+            argv.append("--validate")
+        return argv
+    if name == "infralink_host_get":
+        return ["registry", "host", "get", required_ref()]
+    if name == "infralink_host_list":
+        return ["host", "list"]
+    if name == "infralink_host_status":
+        return ["host", "status", required_ref()]
+    if name == "infralink_host_logs":
+        argv = ["host", "logs", required_ref()]
+        if arguments.get("last_run") is True:
+            argv.append("--last-run")
+        return argv
+    raise ValueError(f"Unknown tool: {name}")
+
+
 async def _list_tools(_context: ServerRequestContext[Any], _params: Any) -> ListToolsResult:
-    return ListToolsResult(tools=[_tool()])
+    return ListToolsResult(tools=[_tool(), *_native_tools()])
 
 
 async def _call_tool(
     _context: ServerRequestContext[Any], params: CallToolRequestParams
 ) -> CallToolResult:
-    if params.name != _TOOL_NAME:
+    if params.name != _TOOL_NAME and params.name not in _NATIVE_TOOL_NAMES:
         return CallToolResult(
             content=[TextContent(text=f"Unknown tool: {params.name}")],
             is_error=True,
         )
     try:
-        argv, stdin = _arguments(params.arguments)
+        if params.name == _TOOL_NAME:
+            argv, stdin = _arguments(params.arguments)
+        else:
+            argv, stdin = _native_argv(params.name, params.arguments), None
         payload = invoke_cli(argv, stdin)
     except (RuntimeError, ValueError) as error:
         return CallToolResult(content=[TextContent(text=str(error))], is_error=True)

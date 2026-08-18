@@ -52,12 +52,29 @@ def test_mcp_protocol_discovers_and_calls_infralink_command() -> None:
     async def exercise_protocol() -> None:
         async with Client(create_server()) as client:
             tools = await client.list_tools()
-            assert [tool.name for tool in tools.tools] == ["infralink_command"]
+            assert [tool.name for tool in tools.tools] == [
+                "infralink_command",
+                "infralink_help",
+                "infralink_doctor",
+                "infralink_host_get",
+                "infralink_host_list",
+                "infralink_host_status",
+                "infralink_host_logs",
+            ]
 
             result = await client.call_tool("infralink_command", {"argv": ["version"]})
             assert result.is_error is False
             assert result.structured_content["schema_version"] == "infralink.cli/v1"
             assert result.structured_content["command"]["parsed"]["path"] == ["version"]
+
+            help_result = await client.call_tool("infralink_help", {"path": ["host"]})
+            assert help_result.is_error is False
+            assert help_result.structured_content["command"]["parsed"]["path"] == ["host"]
+            assert help_result.structured_content["result"]["path"] == ["host"]
+
+            bad_doctor = await client.call_tool("infralink_doctor", {"target_type": "host"})
+            assert bad_doctor.is_error is True
+            assert "target_type and target_ref" in bad_doctor.content[0].text
 
     asyncio.run(exercise_protocol())
 
