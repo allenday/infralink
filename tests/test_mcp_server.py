@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -79,6 +81,10 @@ def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "infralink", "mcp", "serve"],
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+            },
         )
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as client:
@@ -86,6 +92,9 @@ def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
                 assert initialized.server_info.name == "infralink"
 
                 tools = await client.list_tools()
-                assert [tool.name for tool in tools.tools] == ["infralink_command"]
+                names = {tool.name for tool in tools.tools}
+                assert "infralink_command" in names
+                assert {"infralink_help", "infralink_doctor", "infralink_host_apply"} <= names
+                assert "infralink_mcp_serve" not in names
 
     asyncio.run(exercise_stdio())
