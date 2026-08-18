@@ -391,6 +391,9 @@ def _coverage(
     bindings: dict[str, Any] | None,
     target_type: DoctorKind | None,
     target_id: str,
+    *,
+    active_host: bool = False,
+    host_metrics_declared: bool = False,
 ) -> tuple[DoctorCoverage, list[DoctorEvidence]]:
     logical_service = next(
         (
@@ -520,6 +523,105 @@ def _coverage(
                     reason="observer_binding_undeclared",
                 )
             )
+    if target_type == "host" and active_host:
+        planned_host = next(
+            (
+                item
+                for item in plan.get("hosts", [])
+                if isinstance(item, dict) and item.get("id") == target_id
+            ),
+            None,
+        )
+        if host_metrics_declared:
+            capability_id = f"host/{target_id}/capability/host-metrics"
+            metric_views = [
+                item
+                for item in plan.get("operations_views", [])
+                if isinstance(item, dict)
+                and item.get("kind") == "host_metrics"
+                and target_id in item.get("host_ids", [])
+                and isinstance(item.get("metric_profile_id"), str)
+            ]
+            service_ids: set[str] = set()
+            for view in metric_views:
+                for service in plan.get("services", []):
+                    if not isinstance(service, dict):
+                        continue
+                    service_id = service.get("id")
+                    if (
+                        isinstance(service_id, str)
+                        and service.get("host_id") == target_id
+                        and service.get("profile_id") == view.get("metric_profile_id")
+                        and service_id in view.get("service_ids", [])
+                    ):
+                        service_ids.add(service_id)
+            host_metric_signal_refs: list[str] = []
+            for signal in plan.get("signals", []):
+                if not isinstance(signal, dict):
+                    continue
+                signal_id = signal.get("id")
+                if (
+                    isinstance(signal_id, str)
+                    and signal.get("service_id") in service_ids
+                    and signal.get("capability_evaluator") == "prometheus-scrape"
+                ):
+                    host_metric_signal_refs.append(signal_id)
+            host_metric_signal_refs.sort()
+            if (
+                planned_host is None
+                or len(metric_views) != 1
+                or len(service_ids) != 1
+                or len(host_metric_signal_refs) != 1
+            ):
+                required += 1
+                unbound += 1
+                evidence.append(
+                    DoctorEvidence(
+                        id=capability_id,
+                        signal_refs=[],
+                        status="unknown",
+                        reason="observation_contract_missing",
+                    )
+                )
+            else:
+                signal_ref = host_metric_signal_refs[0]
+                prometheus_bindings = [
+                    binding
+                    for binding in (bindings or {}).get("bindings", [])
+                    if isinstance(binding, dict)
+                    and binding.get("renderer_kind") == "prometheus"
+                    and binding.get("signal_ref") == signal_ref
+                ]
+                gatus_bindings = [
+                    binding
+                    for binding in (bindings or {}).get("bindings", [])
+                    if isinstance(binding, dict)
+                    and binding.get("renderer_kind") == "gatus"
+                    and binding.get("signal_ref") == signal_ref
+                    and isinstance(binding.get("output_identity"), str)
+                ]
+                required += 1
+                if len(prometheus_bindings) == 1 and len(gatus_bindings) == 1:
+                    bound += 1
+                    evidence.append(
+                        DoctorEvidence(
+                            id=gatus_bindings[0]["output_identity"],
+                            adapter="gatus",
+                            signal_refs=[signal_ref],
+                            status="unknown",
+                            reason="no_live_observation_evidence",
+                        )
+                    )
+                else:
+                    unbound += 1
+                    evidence.append(
+                        DoctorEvidence(
+                            id=capability_id,
+                            signal_refs=[signal_ref],
+                            status="unknown",
+                            reason="observer_binding_undeclared",
+                        )
+                    )
     return (
         DoctorCoverage(
             required=required,
@@ -903,7 +1005,19 @@ def doctor(
         observation_plan,
         adapter_bindings,
     )
-    coverage, evidence = _coverage(plan, bindings, target_type, target_id)
+    host = ctx.registry.get(target_ref) if target_type == "host" else None
+    host_data = host.to_dict() if host is not None else {}
+    baseline_capabilities = host_data.get("baseline_capabilities", [])
+    coverage, evidence = _coverage(
+        plan,
+        bindings,
+        target_type,
+        target_id,
+        active_host=host.is_active if host is not None else False,
+        host_metrics_declared=(
+            isinstance(baseline_capabilities, list) and "host-metrics" in baseline_capabilities
+        ),
+    )
     if (
         not declaration_only
         and gatus_url is None

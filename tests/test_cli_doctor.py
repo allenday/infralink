@@ -72,8 +72,81 @@ def _observation_inputs(tmp_path: Path) -> tuple[Path, Path]:
     return plan, bindings
 
 
+def _host_metrics_observation_inputs(
+    tmp_path: Path,
+    *,
+    include_contract: bool = True,
+    include_gatus_binding: bool = True,
+    include_prometheus_binding: bool = True,
+    include_plan_host: bool = True,
+) -> tuple[Path, Path]:
+    plan, bindings = _observation_inputs(tmp_path)
+    plan_data = json.loads(plan.read_text(encoding="utf-8"))
+    plan_data["hosts"] = [{"id": HOST_ID}] if include_plan_host else []
+    if include_contract:
+        exporter_service_id = f"{HOST_ID}/host-exporter"
+        signal_ref = f"service/{exporter_service_id}/metrics/scrape"
+        plan_data["service_profiles"].append({"id": "host-exporter"})
+        plan_data["services"].append(
+            {"id": exporter_service_id, "host_id": HOST_ID, "profile_id": "host-exporter"}
+        )
+        plan_data["signals"] = [
+            {
+                "id": signal_ref,
+                "kind": "service",
+                "service_id": exporter_service_id,
+                "capability_evaluator": "prometheus-scrape",
+            }
+        ]
+        plan_data["operations_views"] = [
+            {
+                "id": "host-metrics",
+                "kind": "host_metrics",
+                "metric_profile_id": "host-exporter",
+                "host_ids": [HOST_ID],
+                "service_ids": [exporter_service_id],
+            }
+        ]
+        binding_data = yaml.safe_load(bindings.read_text(encoding="utf-8"))
+        if include_prometheus_binding:
+            binding_data["bindings"].append(
+                {
+                    "id": "prometheus-host-exporter",
+                    "renderer_kind": "prometheus",
+                    "output_identity": f"prometheus-{HOST_ID}-host-exporter",
+                    "signal_ref": signal_ref,
+                }
+            )
+        if include_gatus_binding:
+            binding_data["bindings"].append(
+                {
+                    "id": "gatus-host-exporter",
+                    "renderer_kind": "gatus",
+                    "output_identity": f"gatus-{HOST_ID}-host-exporter",
+                    "signal_ref": signal_ref,
+                }
+            )
+        bindings.write_text(yaml.safe_dump(binding_data, sort_keys=False), encoding="utf-8")
+    plan.write_text(json.dumps(plan_data), encoding="utf-8")
+    return plan, bindings
+
+
 def _invoke(*args: str):
     return CliRunner().invoke(cli, ["--output", "json", *_sources(), "doctor", *args])
+
+
+def _host_metrics_sources(tmp_path: Path) -> list[str]:
+    registry = tmp_path / "registry.yml"
+    registry_data = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    registry_data["hosts"][HOST_ID]["baseline_capabilities"] = ["host-metrics"]
+    registry.write_text(yaml.safe_dump(registry_data, sort_keys=False), encoding="utf-8")
+    return ["--registry", str(registry), "--edges", str(EXAMPLES / "edges.yml")]
+
+
+def _invoke_host_metrics(tmp_path: Path, *args: str):
+    return CliRunner().invoke(
+        cli, ["--output", "json", *_host_metrics_sources(tmp_path), "doctor", *args]
+    )
 
 
 def test_global_doctor_requires_declared_observation_inputs() -> None:
@@ -152,6 +225,139 @@ def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network
     assert configure["description"] == "Set INFRALINK_GATUS_URL or pass --gatus-url"
     schema = json.loads((ROOT / "src/infralink/schemas/cli/v1/doctor.json").read_text())
     Draft202012Validator(schema).validate(payload)
+
+
+def test_doctor_validate_active_host_metrics_fails_when_projection_is_missing(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _host_metrics_observation_inputs(
+        tmp_path, include_contract=False, include_plan_host=False
+    )
+
+    result = _invoke_host_metrics(
+        tmp_path,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "host",
+        "database.example.com",
+        "--validate",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["coverage"] == {
+        "required": 2,
+        "bound": 1,
+        "unbound": 1,
+        "unsupported": 0,
+        "valid": False,
+    }
+    assert payload["result"]["evidence"] == [
+        {
+            "id": f"host/{HOST_ID}/capability/host-metrics",
+            "adapter": None,
+            "signal_refs": [],
+            "status": "unknown",
+            "reason": "observation_contract_missing",
+        }
+    ]
+    assert payload["result"]["reason"] == "observer_coverage_incomplete"
+
+
+def test_doctor_validate_active_host_metrics_requires_declared_gatus_binding(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _host_metrics_observation_inputs(tmp_path, include_gatus_binding=False)
+
+    result = _invoke_host_metrics(
+        tmp_path,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "host",
+        "database.example.com",
+        "--validate",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["coverage"]["valid"] is False
+    assert payload["result"]["evidence"] == [
+        {
+            "id": f"host/{HOST_ID}/capability/host-metrics",
+            "adapter": None,
+            "signal_refs": [f"service/{HOST_ID}/host-exporter/metrics/scrape"],
+            "status": "unknown",
+            "reason": "observer_binding_undeclared",
+        }
+    ]
+
+
+def test_doctor_validate_active_host_metrics_requires_declared_prometheus_binding(
+    tmp_path: Path,
+) -> None:
+    plan, bindings = _host_metrics_observation_inputs(tmp_path, include_prometheus_binding=False)
+
+    result = _invoke_host_metrics(
+        tmp_path,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "host",
+        "database.example.com",
+        "--validate",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["coverage"]["valid"] is False
+    assert payload["result"]["evidence"] == [
+        {
+            "id": f"host/{HOST_ID}/capability/host-metrics",
+            "adapter": None,
+            "signal_refs": [f"service/{HOST_ID}/host-exporter/metrics/scrape"],
+            "status": "unknown",
+            "reason": "observer_binding_undeclared",
+        }
+    ]
+
+
+def test_doctor_host_metrics_requires_live_gatus_output_after_valid_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _host_metrics_observation_inputs(tmp_path)
+    monkeypatch.setattr("infralink.cli.doctor._fetch_gatus_statuses", lambda *args: [])
+    monkeypatch.setattr("infralink.cli.doctor._host_readiness", lambda *args: None)
+    monkeypatch.setattr("infralink.cli.doctor._host_manifest_git_state", lambda *args: None)
+
+    result = _invoke_host_metrics(
+        tmp_path,
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(bindings),
+        "--gatus-url",
+        "https://gatus.example.test",
+        "host",
+        "database.example.com",
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["coverage"]["valid"] is True
+    assert payload["result"]["status"] == "unknown"
+    assert payload["result"]["reason"] == "no_live_observation_evidence"
+    assert {
+        "id": f"gatus-{HOST_ID}-host-exporter",
+        "adapter": "gatus",
+        "signal_refs": [f"service/{HOST_ID}/host-exporter/metrics/scrape"],
+        "status": "unknown",
+        "reason": "gatus_output_identity_missing",
+    } in payload["result"]["evidence"]
 
 
 def test_normal_doctor_requires_a_configured_gatus_observer(
