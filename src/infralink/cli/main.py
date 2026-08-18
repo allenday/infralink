@@ -584,14 +584,11 @@ def _context_for(
     parsed_path, parsed_args, root_values = _parse_invocation(redacted_argv)
     click_ctx = click.get_current_context(silent=True)
     runtime_ctx = click_ctx.find_root().obj if click_ctx is not None else None
-    effective_registry = (
-        runtime_ctx.registry_path
-        if isinstance(runtime_ctx, Context)
-        else root_values.get("registry")
-    )
-    effective_edges = (
-        runtime_ctx.edges_path if isinstance(runtime_ctx, Context) else root_values.get("edges")
-    )
+    effective_registry = root_values.get("registry")
+    effective_edges = root_values.get("edges")
+    if isinstance(runtime_ctx, Context):
+        effective_registry = runtime_ctx.registry_path or effective_registry
+        effective_edges = runtime_ctx.edges_path or effective_edges
     resolved = {
         "version": __version__,
         "cwd": os.getcwd(),
@@ -1800,7 +1797,8 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
     if manifest_path is not None:
         assert ctx.registry_path is not None
-        git_worktree = ctx.registry_path
+        assert ctx.hosts_path is not None
+        git_worktree = registry_checkout_root(ctx.registry_path) or ctx.hosts_path.parent
         result["write_state"] = "local_uncommitted"
         result["git_worktree"] = str(git_worktree)
         actions.append(
