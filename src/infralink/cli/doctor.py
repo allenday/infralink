@@ -824,6 +824,13 @@ def _host_deployment_contract(ctx: Context, host: Any) -> dict[str, Any] | None:
         }
         missing = [path for path, value in required.items() if not value]
         if not missing:
+            try:
+                from infralink.cli.operations import resolve_apply_request
+
+                resolve_apply_request(ctx.hosts_path, host)
+            except CliFailure:
+                missing.append("controller_bootstrap.apply_contract")
+        if not missing:
             return {"status": "ready", "schema_version": schema_version}
         return {
             "status": "incomplete",

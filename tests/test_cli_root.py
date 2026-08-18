@@ -160,7 +160,7 @@ def test_doctor_derives_standard_sources_from_configured_registry(
     result = CliRunner().invoke(cli, ["--output", "json", "doctor", "host", host_id, "--validate"])
     payload = json.loads(result.output)
 
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert payload["command"]["resolved"]["registry"] == str(checkout)
     assert payload["command"]["resolved"]["edges"] == str(edges)
     assert payload["command"]["resolved"]["observation_plan"] == str(observation / "core-plan.json")
@@ -171,6 +171,29 @@ def test_doctor_derives_standard_sources_from_configured_registry(
     applications_payload = json.loads(applications.output)
     assert applications.exit_code == 0
     assert applications_payload["result"]["items"] == ["database"]
+
+    manifest_path = host_root / "manifest.yml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["hosts"][host_id]["ssh"] = {"host_key_fingerprint": "ssh-ed25519 SHA256:" + "A" * 43}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    (config_home / "infralink/config.yml").write_text(
+        yaml.safe_dump({"registry": str(hosts)}, sort_keys=False), encoding="utf-8"
+    )
+
+    from_hosts_catalog = CliRunner().invoke(
+        cli, ["--output", "json", "doctor", "host", host_id, "--validate"]
+    )
+    from_hosts_payload = json.loads(from_hosts_catalog.output)
+
+    assert from_hosts_catalog.exit_code == 0
+    assert from_hosts_payload["command"]["resolved"]["registry"] == str(hosts)
+    assert from_hosts_payload["command"]["resolved"]["edges"] == str(edges)
+    assert from_hosts_payload["command"]["resolved"]["observation_plan"] == str(
+        observation / "core-plan.json"
+    )
+    assert from_hosts_payload["command"]["resolved"]["adapter_bindings"] == str(
+        observation / "adapter-bindings.yml"
+    )
 
 
 def test_explicit_registry_sources_override_local_config(monkeypatch, tmp_path: Path) -> None:

@@ -113,12 +113,19 @@ def _configured_registry() -> Path | None:
 
 def registry_checkout_root(path: Path | None) -> Path | None:
     """Return the configured checkout root without discarding catalog material."""
-    return path if path is not None and path.is_dir() and (path / "hosts").is_dir() else None
+    if path is None or not path.is_dir():
+        return None
+    if (path / "hosts").is_dir():
+        return path
+    if path.name == "hosts" and path.parent.is_dir() and (path.parent / "hosts").is_dir():
+        return path.parent
+    return None
 
 
 def registry_companion(path: Path | None, relative: str) -> Path | None:
     root = registry_checkout_root(path)
-    return root / relative if root is not None else None
+    candidate = root / relative if root is not None else None
+    return candidate if candidate is not None and candidate.exists() else None
 
 
 def _isolated_git_environment() -> dict[str, str]:
