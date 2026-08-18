@@ -89,6 +89,24 @@ limits and opaque cursors.
 Topology commands use `infralink.cli/v1`. Offline observation commands use
 `agent-cli.response.v1`.
 
+## MCP
+
+The same installed executable can serve typed operator tools to an MCP client:
+
+```toml
+[mcp_servers.infralink]
+command = "/usr/local/bin/infralink"
+args = ["mcp", "serve"]
+
+[mcp_servers.infralink.env]
+INFRALINK_REGISTRY = "/var/lib/infralink/registry"
+```
+
+The server exposes `infralink_command`. Pass an argv array such as
+`["doctor", "host", "cyberstorm-watchtower"]`; its structured result is the
+same `infralink.cli/v1` envelope returned by the CLI. It accepts no shell
+syntax, while existing explicit `--write` and `--apply` gates remain in force.
+
 Useful discovery commands:
 
 ```bash

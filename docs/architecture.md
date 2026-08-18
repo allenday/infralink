@@ -38,6 +38,32 @@ Each CLI invocation emits one structured envelope. Topology commands use
 Both include parsed command metadata, bounded results or redacted errors, and
 limited next actions.
 
+## MCP Transport
+
+`infralink mcp serve` is the native stdio Model Context Protocol transport. It
+does not serialize CLI output as MCP: MCP owns its JSON-RPC handshake and tool
+discovery. Its `infralink_command` tool accepts a tokenized Infralink argv array
+and optional stdin, invokes the same typed CLI contract without shell
+interpretation, and returns the resulting CLI envelope as MCP structured
+content. The text content is the compact JSON serialization of that same
+envelope for MCP clients that do not consume structured content.
+
+The MCP transport exposes the existing operator surface, including explicit
+registry authoring writes. It does not add generic shell execution, a second
+desired-state selector, or an alternate deployment path. Existing `--write` and
+`--apply` gates remain in the CLI implementation.
+
+For Codex, configure the native executable and the registry checkout root:
+
+```toml
+[mcp_servers.infralink]
+command = "/usr/local/bin/infralink"
+args = ["mcp", "serve"]
+
+[mcp_servers.infralink.env]
+INFRALINK_REGISTRY = "/var/lib/infralink/registry"
+```
+
 Generated artifacts are written to explicit output directories and represented
 on stdout by bounded artifact metadata. Transactional artifact commands are
 currently POSIX/Linux-oriented because they depend on filesystem semantics that

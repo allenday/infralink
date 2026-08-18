@@ -233,6 +233,7 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     },
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
+    "mcp": {"description": "Serve typed Infralink tools over MCP stdio.", "usage": "infralink mcp serve"},
     "host": {
         "description": "Inspect, scaffold, bootstrap, or apply hosts.",
         "usage": "infralink host [create|list|show|bootstrap|apply]",
@@ -1007,6 +1008,8 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.doctor import doctor
 
         return doctor
+    if name == "mcp":
+        return mcp
     if name == "diagram":
         from infralink.cli.diagram import diagram
 
@@ -1287,6 +1290,19 @@ def cli(
         ],
     )
     _emit(payload)
+
+
+@click.group(name="mcp")
+def mcp() -> None:
+    """Serve typed Infralink tools over Model Context Protocol stdio."""
+
+
+@mcp.command(name="serve")
+def mcp_serve() -> None:
+    """Start the stdio MCP server."""
+    from infralink.mcp_server import serve
+
+    serve()
 
 
 def _topology_fingerprint(
