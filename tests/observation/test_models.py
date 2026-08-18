@@ -44,6 +44,7 @@ from infralink.observation.models import (
     WaiverScope,
     WaiverScopeKind,
 )
+from infralink.observation.models_v2 import ComponentEdge, EdgeScope
 
 
 @pytest.mark.parametrize(
@@ -85,6 +86,37 @@ def test_dependency_contract_defaults_to_gatus() -> None:
     )
 
     assert dependency.execution_adapter == "gatus"
+
+
+def test_component_edge_derives_intra_service_scope() -> None:
+    edge = ComponentEdge(
+        id="nginx-to-elasticsearch",
+        source_endpoint_id="11111111-1111-4111-8111-111111111111/archive/nginx/http",
+        target_endpoint_id="11111111-1111-4111-8111-111111111111/archive/elasticsearch/transport",
+    )
+
+    assert edge.scope is EdgeScope.INTRA_SERVICE
+    assert edge.source_owner == "11111111-1111-4111-8111-111111111111/archive/nginx"
+    assert edge.target_owner == "11111111-1111-4111-8111-111111111111/archive/elasticsearch"
+
+
+def test_component_edge_derives_inter_service_scope() -> None:
+    edge = ComponentEdge(
+        id="api-to-database",
+        source_endpoint_id="11111111-1111-4111-8111-111111111111/api/http/http",
+        target_endpoint_id="22222222-2222-4222-8222-222222222222/database/postgresql/tcp",
+    )
+
+    assert edge.scope is EdgeScope.INTER_SERVICE
+
+
+def test_component_edge_rejects_noncanonical_endpoint_reference() -> None:
+    with pytest.raises(ValidationError, match="host/service/component/endpoint"):
+        ComponentEdge(
+            id="bad",
+            source_endpoint_id="archive/http",
+            target_endpoint_id="22222222-2222-4222-8222-222222222222/database/postgresql/tcp",
+        )
 
 
 def test_dependency_contract_preserves_explicit_adapter_or_legacy_null() -> None:
