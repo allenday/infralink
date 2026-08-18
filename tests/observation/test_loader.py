@@ -140,6 +140,39 @@ service_instances:
     )
 
 
+def test_loader_locates_unknown_external_contract_at_profile_slot(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: search
+    components:
+      - id: api
+        resource_slots:
+          - {id: database, kind: external-service, contract_ref: missing-database}
+service_instances:
+  - id: search-01
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: search
+    components:
+      - slot_id: api
+        resource_bindings:
+          - {resource_id: database, reference: missing-database}
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [
+        "external-service-resource-unknown-contract"
+    ]
+    assert report.diagnostics[0].location == SourceLocation(
+        "v2.yml", "/service_profiles/0/components/0/resource_slots/0/contract_ref", 0
+    )
+
+
 def test_loader_locates_unbound_v2_metric_source_endpoint(tmp_path: Path) -> None:
     _write(
         tmp_path / "v2.yml",
@@ -295,6 +328,27 @@ component_edges:
 
     assert report.valid
     assert len(report.documents) == 3
+
+
+def test_loader_rejects_duplicate_external_service_contract_across_v2_documents(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "a.yml",
+        "schema_version: infralink.observation/v2\nexternal_service_contracts:\n  - {id: database, kind: mariadb}\n",
+    )
+    _write(
+        tmp_path / "b.yml",
+        "schema_version: infralink.observation/v2\nexternal_service_contracts:\n  - {id: database, kind: postgres}\n",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert len(report.documents) == 2
+    assert [item.code for item in report.diagnostics] == [
+        "duplicate-object-id",
+        "duplicate-object-id",
+    ]
 
 
 @pytest.mark.parametrize(

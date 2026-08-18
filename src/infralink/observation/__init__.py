@@ -61,7 +61,15 @@ from infralink.observation.models import (
     WaiverScope,
     WaiverScopeKind,
 )
-from infralink.observation.models_v2 import MetricBinding, MetricContract
+from infralink.observation.models_v2 import (
+    ExternalServiceContract,
+    MetricBinding,
+    MetricContract,
+    ResourceBinding,
+    ResourceKind,
+    ResourceSlot,
+    SecretReference,
+)
 from infralink.observation.planner import (
     Plan,
     PlanReport,
@@ -92,6 +100,7 @@ __all__ = [
     "EndpointExposure",
     "EndpointOverride",
     "EndpointProtocol",
+    "ExternalServiceContract",
     "FailurePolicy",
     "HealthCapability",
     "HealthEvaluator",
@@ -118,8 +127,12 @@ __all__ = [
     "QualifiedRef",
     "ReadinessSuite",
     "RendererBindingIdentity",
+    "ResourceBinding",
+    "ResourceKind",
+    "ResourceSlot",
     "SecretBinding",
     "SecretDeliveryForm",
+    "SecretReference",
     "SecretSlot",
     "ServiceInstance",
     "ServiceProfile",

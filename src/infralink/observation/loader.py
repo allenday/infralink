@@ -21,6 +21,7 @@ from infralink.observation.v2 import (
     ObservationV2Document,
     V2InstanceTopologyValidationError,
     V2MetricValidationError,
+    V2ResourceValidationError,
     V2TopologyValidationError,
     validate_v2_documents,
 )
@@ -40,6 +41,7 @@ _IDENTITY_COLLECTIONS = frozenset(
         "component_edges",
         "datasource_bindings",
         "dependency_contracts",
+        "external_service_contracts",
         "observation_backends",
         "operations_views",
         "provider_aliases",
@@ -47,6 +49,7 @@ _IDENTITY_COLLECTIONS = frozenset(
         "renderer_binding_identities",
         "renderer_bindings",
         "secret_bindings",
+        "secret_references",
         "service_instances",
         "service_profiles",
         "waivers",
@@ -398,6 +401,28 @@ def _validate_v2_source_set(
             ),
             next_actions=next_actions,
         )
+    except V2ResourceValidationError as error:
+        location = _v2_resource_error_location(v2_documents, error)
+        next_actions = {
+            "component-resource-binding-unknown-slot": (
+                "Bind a resource declared by the selected component profile.",
+            ),
+            "component-resource-required-unbound": ("Bind the required component resource.",),
+            "external-service-resource-unknown-contract": (
+                "Declare the external-service contract or select an existing contract.",
+            ),
+            "external-service-resource-binding-mismatch": (
+                "Bind the external-service resource to its declared contract reference.",
+            ),
+        }.get(error.code, ("Use a provider-alias/secret-reference, never an inline value.",))
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 component resource binding is invalid.",
+            location=location,
+            identity=f"service_instances/{error.host_id}/{error.instance_id}/{error.component_id}",
+            next_actions=next_actions,
+        )
     except ValueError:
         diagnostic = Diagnostic(
             code="v2-component-topology-invalid",
@@ -527,6 +552,95 @@ def _v2_metric_error_location(
     return _v2_service_instance_location(
         documents, error.host_id, error.instance_id, error.component_id
     )
+
+
+def _v2_resource_error_location(
+    documents: list[ObservationDocument], error: V2ResourceValidationError
+) -> SourceLocation:
+    for document in documents:
+        instances = document.data.get("service_instances", ())
+        if not isinstance(instances, tuple):
+            continue
+        for instance_index, instance in enumerate(instances):
+            if (
+                not isinstance(instance, Mapping)
+                or instance.get("host_id") != error.host_id
+                or instance.get("id") != error.instance_id
+            ):
+                continue
+            if error.code == "external-service-resource-unknown-contract":
+                profile_id = instance.get("profile_id")
+                if isinstance(profile_id, str):
+                    location = _v2_profile_resource_slot_location(
+                        documents, profile_id, error.component_id, error.resource_id
+                    )
+                    if location is not None:
+                        return location
+            components = instance.get("components", ())
+            if not isinstance(components, tuple):
+                break
+            for component_index, component in enumerate(components):
+                if (
+                    not isinstance(component, Mapping)
+                    or component.get("slot_id") != error.component_id
+                ):
+                    continue
+                pointer = f"/service_instances/{instance_index}/components/{component_index}/resource_bindings"
+                if error.location_kind == "resource-bindings":
+                    return SourceLocation(document.source_path, pointer, document.document_index)
+                bindings = component.get("resource_bindings", ())
+                if isinstance(bindings, tuple):
+                    for binding_index, binding in enumerate(bindings):
+                        if (
+                            isinstance(binding, Mapping)
+                            and binding.get("resource_id") == error.resource_id
+                        ):
+                            field = (
+                                "resource_id"
+                                if error.location_kind == "resource-id"
+                                else "reference"
+                            )
+                            return SourceLocation(
+                                document.source_path,
+                                f"{pointer}/{binding_index}/{field}",
+                                document.document_index,
+                            )
+    return _v2_service_instance_location(
+        documents, error.host_id, error.instance_id, error.component_id
+    )
+
+
+def _v2_profile_resource_slot_location(
+    documents: list[ObservationDocument], profile_id: str, component_id: str, resource_id: str
+) -> SourceLocation | None:
+    for document in documents:
+        profiles = document.data.get("service_profiles", ())
+        if not isinstance(profiles, tuple):
+            continue
+        for profile_index, profile in enumerate(profiles):
+            if not isinstance(profile, Mapping) or profile.get("id") != profile_id:
+                continue
+            components = profile.get("components", ())
+            if not isinstance(components, tuple):
+                return None
+            for component_index, component in enumerate(components):
+                if not isinstance(component, Mapping) or component.get("id") != component_id:
+                    continue
+                resources = component.get("resource_slots", ())
+                if not isinstance(resources, tuple):
+                    return None
+                for resource_index, resource in enumerate(resources):
+                    if isinstance(resource, Mapping) and resource.get("id") == resource_id:
+                        return SourceLocation(
+                            document.source_path,
+                            (
+                                "/service_profiles/"
+                                f"{profile_index}/components/{component_index}/"
+                                f"resource_slots/{resource_index}/contract_ref"
+                            ),
+                            document.document_index,
+                        )
+    return None
 
 
 def _count_attempted_documents(raw: bytes) -> int:

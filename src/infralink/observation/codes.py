@@ -2,6 +2,11 @@
 
 LOADER_DIAGNOSTIC_CODES = frozenset(
     {
+        "component-resource-binding-unknown-slot",
+        "component-resource-required-unbound",
+        "external-service-resource-unknown-contract",
+        "external-service-resource-binding-mismatch",
+        "secret-resource-binding-invalid-reference",
         "canonical-value-unsupported",
         "document-root-not-mapping",
         "duplicate-object-id",
