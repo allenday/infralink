@@ -100,6 +100,153 @@ component_edges:
     assert report.diagnostics[0].next_actions
 
 
+def test_loader_rejects_v2_metric_binding_label_outside_contract(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: web
+    components:
+      - id: nginx
+        endpoints:
+          - {id: metrics, protocol: http, port: 9113}
+        metrics:
+          - id: requests
+            endpoint_id: metrics
+            path: /metrics
+            metric_name: nginx_http_requests_total
+            unit: requests
+service_instances:
+  - id: edge
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: web
+    components:
+      - slot_id: nginx
+        metric_bindings:
+          - metric_id: requests
+            labels: {secret: value}
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [
+        "component-metric-binding-label-not-allowed"
+    ]
+    assert report.diagnostics[0].location == SourceLocation(
+        "v2.yml", "/service_instances/0/components/0/metric_bindings/0/labels", 0
+    )
+
+
+def test_loader_locates_unbound_v2_metric_source_endpoint(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: web
+    components:
+      - id: nginx
+        endpoints:
+          - {id: metrics, protocol: http, port: 9113}
+        metrics:
+          - id: requests
+            endpoint_id: metrics
+            path: /metrics
+            metric_name: nginx_http_requests_total
+            unit: requests
+service_instances:
+  - id: edge
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: web
+    components:
+      - slot_id: nginx
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [
+        "component-metric-source-endpoint-unbound"
+    ]
+    assert report.diagnostics[0].location == SourceLocation(
+        "v2.yml", "/service_instances/0/components/0/endpoint_bindings", 0
+    )
+    assert report.diagnostics[0].next_actions == (
+        "Bind an address for the component metric source endpoint.",
+    )
+
+
+def test_loader_locates_unknown_v2_endpoint_binding(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: web
+    components:
+      - id: nginx
+        endpoints: []
+service_instances:
+  - id: edge
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: web
+    components:
+      - slot_id: nginx
+        endpoint_bindings:
+          - {endpoint_id: missing, address: 100.64.0.10}
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [
+        "component-endpoint-binding-unknown-endpoint"
+    ]
+    assert report.diagnostics[0].location == SourceLocation(
+        "v2.yml", "/service_instances/0/components/0/endpoint_bindings/0/endpoint_id", 0
+    )
+
+
+def test_loader_locates_unknown_v2_metric_contract_binding(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: web
+    components:
+      - id: nginx
+        endpoints: []
+service_instances:
+  - id: edge
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: web
+    components:
+      - slot_id: nginx
+        metric_bindings:
+          - {metric_id: missing, labels: {}}
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [
+        "component-metric-binding-unknown-contract"
+    ]
+    assert report.diagnostics[0].location == SourceLocation(
+        "v2.yml", "/service_instances/0/components/0/metric_bindings/0/metric_id", 0
+    )
+    assert report.diagnostics[0].next_actions == (
+        "Bind a metric declared by the selected component profile.",
+    )
+
+
 def test_loader_resolves_v2_component_topology_across_split_documents(tmp_path: Path) -> None:
     _write(
         tmp_path / "profiles.yml",

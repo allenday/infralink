@@ -153,7 +153,8 @@ infralink project readiness ci-release --source examples/observation --as-of "$A
 
 Observation documents declare `schema_version: infralink.observation/v1` and may
 be validated against packaged schemas under
-`src/infralink/schemas/observation/v1`.
+`src/infralink/schemas/observation/v1` and
+`src/infralink/schemas/observation/v2`.
 
 ## Exit Codes
 

@@ -8,8 +8,13 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from infralink.observation.models import Endpoint, StrictModel
-from infralink.observation.models_v2 import ComponentEdge, ServiceInstanceV2, ServiceProfileV2
+from infralink.observation.models import Endpoint, EndpointProtocol, StrictModel
+from infralink.observation.models_v2 import (
+    ComponentEdge,
+    MetricContract,
+    ServiceInstanceV2,
+    ServiceProfileV2,
+)
 
 
 class ObservationV2Document(StrictModel):
@@ -65,6 +70,68 @@ class V2InstanceTopologyValidationError(ValueError):
         super().__init__(message)
 
 
+class V2MetricValidationError(ValueError):
+    """One stable, source-addressable v2 metric binding failure."""
+
+    def __init__(
+        self,
+        code: str,
+        host_id: str,
+        instance_id: str,
+        component_id: str,
+        metric_id: str,
+        location_kind: Literal["component", "endpoint-binding", "metric-binding", "metric-id"],
+        message: str,
+    ) -> None:
+        self.code = code
+        self.host_id = host_id
+        self.instance_id = instance_id
+        self.component_id = component_id
+        self.metric_id = metric_id
+        self.location_kind = location_kind
+        super().__init__(message)
+
+
+class PrometheusMetricProjection(StrictModel):
+    endpoint_id: str
+    protocol: EndpointProtocol
+    address: str | None = None
+    port: int
+    path: str
+    labels: dict[str, str]
+
+
+class GatusMetricProjection(StrictModel):
+    endpoint_id: str
+    protocol: EndpointProtocol
+    address: str | None = None
+    port: int
+    path: str
+
+
+class GrafanaMetricProjection(StrictModel):
+    metric_name: str
+    unit: str
+    labels: dict[str, str]
+
+
+class DoctorMetricProjection(StrictModel):
+    required: bool
+    query: str | None = None
+    operator: str | None = None
+    threshold: float | None = None
+
+
+class PlannedMetricContract(StrictModel):
+    """One normalized metric identity with adapter-specific projections."""
+
+    id: str
+    prometheus: PrometheusMetricProjection
+    gatus: GatusMetricProjection
+    grafana: GrafanaMetricProjection
+    doctor: DoctorMetricProjection
+
+
 def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
     """Resolve v2 topology across the complete source set."""
 
@@ -95,6 +162,55 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
                         "unknown component slot",
                         slot_id=component.slot_id,
                     )
+                metric_contracts = {metric.id: metric for metric in slot.metrics}
+                endpoint_ids = {endpoint.id for endpoint in slot.endpoints}
+                endpoint_bindings = {
+                    binding.endpoint_id: binding for binding in component.endpoint_bindings
+                }
+                for endpoint_id in endpoint_bindings:
+                    if endpoint_id not in endpoint_ids:
+                        raise V2MetricValidationError(
+                            "component-endpoint-binding-unknown-endpoint",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            endpoint_id,
+                            "endpoint-binding",
+                            "component endpoint binding references an unknown endpoint",
+                        )
+                for binding in component.metric_bindings:
+                    metric_contract = metric_contracts.get(binding.metric_id)
+                    if metric_contract is None:
+                        raise V2MetricValidationError(
+                            "component-metric-binding-unknown-contract",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            binding.metric_id,
+                            "metric-id",
+                            "component metric binding references an unknown metric contract",
+                        )
+                    if set(binding.labels) - set(metric_contract.allowed_labels):
+                        raise V2MetricValidationError(
+                            "component-metric-binding-label-not-allowed",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            binding.metric_id,
+                            "metric-binding",
+                            "metric label is not allowed by component contract",
+                        )
+                for metric in slot.metrics:
+                    if metric.endpoint_id not in endpoint_bindings:
+                        raise V2MetricValidationError(
+                            "component-metric-source-endpoint-unbound",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            metric.id,
+                            "component",
+                            "component metric source endpoint has no instance address binding",
+                        )
                 for endpoint in slot.endpoints:
                     endpoint_refs[
                         f"{instance.host_id}/{instance.id}/{component.slot_id}/{endpoint.id}"
@@ -141,3 +257,87 @@ def parse_v2_document(data: dict[str, Any]) -> ObservationV2Document:
     parsed = ObservationV2Document.model_validate_json(json.dumps(data))
     validate_v2_documents((parsed,))
     return parsed
+
+
+def plan_v2_metric_contracts(
+    documents: Iterable[ObservationV2Document],
+) -> tuple[PlannedMetricContract, ...]:
+    """Project component metric contracts once for all observation adapters."""
+
+    document_list = tuple(documents)
+    validate_v2_documents(document_list)
+    profiles = {
+        profile.id: profile for document in document_list for profile in document.service_profiles
+    }
+    projections: list[PlannedMetricContract] = []
+    for document in document_list:
+        for instance in document.service_instances:
+            profile = profiles[instance.profile_id]
+            slots = {slot.id: slot for slot in profile.components}
+            for component in instance.components:
+                slot = slots[component.slot_id]
+                bindings = {binding.metric_id: binding for binding in component.metric_bindings}
+                endpoints = {endpoint.id: endpoint for endpoint in slot.endpoints}
+                endpoint_bindings = {
+                    binding.endpoint_id: binding for binding in component.endpoint_bindings
+                }
+                for metric in slot.metrics:
+                    binding = bindings.get(metric.id)
+                    labels = {} if binding is None else dict(binding.labels)
+                    endpoint_id = (
+                        f"{instance.host_id}/{instance.id}/{component.slot_id}/{metric.endpoint_id}"
+                    )
+                    projections.append(
+                        _project_metric_contract(
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            metric,
+                            endpoint=endpoints[metric.endpoint_id],
+                            endpoint_address=endpoint_bindings[metric.endpoint_id].address,
+                            endpoint_id=endpoint_id,
+                            labels=labels,
+                        )
+                    )
+    return tuple(sorted(projections, key=lambda projection: projection.id))
+
+
+def _project_metric_contract(
+    host_id: str,
+    service_id: str,
+    component_id: str,
+    metric: MetricContract,
+    endpoint: Endpoint,
+    endpoint_address: str,
+    endpoint_id: str,
+    labels: dict[str, str],
+) -> PlannedMetricContract:
+    return PlannedMetricContract(
+        id=f"{host_id}/{service_id}/{component_id}/{metric.id}",
+        prometheus=PrometheusMetricProjection(
+            endpoint_id=endpoint_id,
+            protocol=endpoint.protocol,
+            address=endpoint_address,
+            port=endpoint.port,
+            path=metric.path,
+            labels=labels,
+        ),
+        gatus=GatusMetricProjection(
+            endpoint_id=endpoint_id,
+            protocol=endpoint.protocol,
+            address=endpoint_address,
+            port=endpoint.port,
+            path=metric.path,
+        ),
+        grafana=GrafanaMetricProjection(
+            metric_name=metric.metric_name,
+            unit=metric.unit,
+            labels=labels,
+        ),
+        doctor=DoctorMetricProjection(
+            required=metric.readiness_required,
+            query=metric.health_query,
+            operator=None if metric.condition is None else metric.condition.operator.value,
+            threshold=None if metric.condition is None else metric.condition.threshold,
+        ),
+    )

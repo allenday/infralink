@@ -101,8 +101,12 @@ PLANNER_DIAGNOSTIC_CODES = _DYNAMIC_DUPLICATE_CODES | frozenset(
 
 V2_DIAGNOSTIC_CODES = frozenset(
     {
+        "component-endpoint-binding-unknown-endpoint",
         "component-edge-incompatible-protocol",
         "component-edge-unknown-endpoint",
+        "component-metric-binding-label-not-allowed",
+        "component-metric-binding-unknown-contract",
+        "component-metric-source-endpoint-unbound",
         "duplicate-component-edge-id",
         "duplicate-component-edge-semantics",
         "service-instance-unknown-component-slot",
