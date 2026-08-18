@@ -17,16 +17,18 @@ from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 
 SCHEMA_VERSION = "infralink.observation/v1"
+SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, "infralink.observation/v2"})
 DEFAULT_DIAGNOSTIC_LIMIT = 100
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_YAML_EVENTS = 100_000
 MAX_YAML_DOCUMENTS = 100
 MAX_YAML_NESTING_DEPTH = 100
 
-# Identity-bearing top-level collections represented by the v1 source models.
+# Identity-bearing top-level collections represented by the versioned source models.
 _IDENTITY_COLLECTIONS = frozenset(
     {
         "applications",
+        "component_edges",
         "datasource_bindings",
         "dependency_contracts",
         "observation_backends",
@@ -52,6 +54,7 @@ class ObservationDocument:
     raw_sha256: str
     semantic_sha256: str
     document_index: int = 0
+    schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         """Return an independent mutable copy for downstream validation."""
@@ -225,13 +228,16 @@ def _load_file(
                 Diagnostic(
                     code="schema-version-missing",
                     severity="error",
-                    message=f"The document must declare schema_version {SCHEMA_VERSION!r}.",
+                    message=(
+                        "The document must declare a supported schema_version: "
+                        f"{', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}."
+                    ),
                     location=SourceLocation(source_path, "/schema_version", document_index),
                     next_actions=(f"Add schema_version: {SCHEMA_VERSION}.",),
                 )
             )
             continue
-        if version != SCHEMA_VERSION:
+        if version not in SUPPORTED_SCHEMA_VERSIONS:
             findings.append(
                 Diagnostic(
                     code="schema-version-unsupported",
@@ -239,7 +245,7 @@ def _load_file(
                     message=f"Unsupported observation schema version: {version!r}.",
                     location=SourceLocation(source_path, "/schema_version", document_index),
                     identity=str(version),
-                    next_actions=(f"Use schema_version: {SCHEMA_VERSION}.",),
+                    next_actions=(f"Use one of: {', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}.",),
                 )
             )
             continue
@@ -279,6 +285,7 @@ def _load_file(
                 raw_sha256=raw_sha256,
                 semantic_sha256=semantic_sha256,
                 document_index=document_index,
+                schema_version=version,
             )
         )
     return loaded, findings, len(parsed_documents)
@@ -296,7 +303,7 @@ def _count_attempted_documents(raw: bytes) -> int:
 
 
 def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[Diagnostic]:
-    locations: dict[tuple[str, str], list[SourceLocation]] = defaultdict(list)
+    locations: dict[tuple[str, str, str], list[SourceLocation]] = defaultdict(list)
     for document in documents:
         for collection in sorted(_IDENTITY_COLLECTIONS):
             objects = document.data.get(collection)
@@ -310,7 +317,7 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
                         if not isinstance(host_id, str):
                             continue
                         object_id = f"{host_id}/{object_id}"
-                    locations[(collection, object_id)].append(
+                    locations[(document.schema_version, collection, object_id)].append(
                         SourceLocation(
                             document.source_path,
                             f"/{collection}/{index}/id",
@@ -319,7 +326,7 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
                     )
 
     findings: list[Diagnostic] = []
-    for (collection, object_id), occurrences in locations.items():
+    for (_, collection, object_id), occurrences in locations.items():
         if len(occurrences) < 2:
             continue
         identity = f"{collection}/{object_id}"

@@ -53,6 +53,19 @@ def test_raw_and_semantic_digests_have_distinct_stability(tmp_path: Path) -> Non
     assert first_document.semantic_sha256 == second_document.semantic_sha256
 
 
+def test_loader_accepts_v1_and_v2_documents_without_coercion(tmp_path: Path) -> None:
+    _write(tmp_path / "v1.yml", "schema_version: infralink.observation/v1\n")
+    _write(tmp_path / "v2.yml", "schema_version: infralink.observation/v2\n")
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.valid
+    assert [document.schema_version for document in report.documents] == [
+        "infralink.observation/v1",
+        "infralink.observation/v2",
+    ]
+
+
 def test_parsed_document_content_is_deeply_immutable_and_can_be_thawed(tmp_path: Path) -> None:
     _write(
         tmp_path / "contract.yml",
@@ -168,7 +181,7 @@ def test_values_outside_canonical_domain_are_rejected_before_hashing(
     [
         ("applications: []\n", "schema-version-missing", "/schema_version"),
         (
-            "schema_version: infralink.observation/v2\n",
+            "schema_version: infralink.observation/v3\n",
             "schema-version-unsupported",
             "/schema_version",
         ),
@@ -218,6 +231,42 @@ def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) ->
         ("a.yml", "/applications/0/id", "applications/mail"),
         ("nested/b.yaml", "/applications/0/id", "applications/mail"),
     ]
+
+
+def test_duplicate_component_edges_across_v2_documents_report_both_locations(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "a.yml",
+        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+    )
+    _write(
+        tmp_path / "b.yml",
+        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    duplicates = [d for d in report.diagnostics if d.code == "duplicate-object-id"]
+    assert [(d.location.path, d.location.pointer, d.identity) for d in duplicates] == [
+        ("a.yml", "/component_edges/0/id", "component_edges/api-to-db"),
+        ("b.yml", "/component_edges/0/id", "component_edges/api-to-db"),
+    ]
+
+
+def test_v1_and_v2_collection_ids_do_not_share_identity_namespace(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v1.yml",
+        "schema_version: infralink.observation/v1\nservice_profiles:\n  - id: nginx\n",
+    )
+    _write(
+        tmp_path / "v2.yml",
+        "schema_version: infralink.observation/v2\nservice_profiles:\n  - id: nginx\n",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert not [item for item in report.diagnostics if item.code == "duplicate-object-id"]
 
 
 def test_service_instance_ids_are_scoped_to_their_host(tmp_path: Path) -> None:
