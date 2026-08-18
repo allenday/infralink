@@ -778,6 +778,78 @@ def _apply_host_manifest_git_state(
     )
 
 
+def _nested_value(value: Any, *path: str) -> Any:
+    for part in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _host_deployment_contract(ctx: Context, host: Any) -> dict[str, Any] | None:
+    """Inspect the one registry-owned deployment contract for an active host."""
+    if ctx.registry_path is None or not ctx.registry_path.is_dir() or host.status.value != "active":
+        return None
+    deployment_path = ctx.registry_path / host.uuid / "operations" / "deployment.yml"
+    try:
+        deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        deployment = None
+    schema_version = deployment.get("schema_version") if isinstance(deployment, dict) else None
+    if schema_version == "self-deploy.desired-state.v1":
+        bootstrap = host.controller_bootstrap
+        required = {
+            "machine.uuid": _nested_value(deployment, "machine", "uuid"),
+            "controller.image.repository": _nested_value(
+                deployment, "controller", "image", "repository"
+            ),
+            "controller.image.tag": _nested_value(deployment, "controller", "image", "tag"),
+            "infra_management.revision": _nested_value(deployment, "infra_management", "revision"),
+            "compose.project_name": _nested_value(deployment, "compose", "project_name"),
+            "images": deployment.get("images") if isinstance(deployment, dict) else None,
+            "services.protected": _nested_value(deployment, "services", "protected"),
+            "controller_bootstrap.registry_read_identity_secret.project": _nested_value(
+                bootstrap, "registry_read_identity_secret", "project"
+            ),
+            "controller_bootstrap.registry_read_identity_secret.id": _nested_value(
+                bootstrap, "registry_read_identity_secret", "id"
+            ),
+            "controller_bootstrap.registry_repo_url": _nested_value(bootstrap, "registry_repo_url"),
+            "controller_bootstrap.registry_ref": _nested_value(bootstrap, "registry_ref"),
+        }
+        missing = [path for path, value in required.items() if not value]
+        if not missing:
+            return {"status": "ready", "schema_version": schema_version}
+        return {
+            "status": "incomplete",
+            "code": "desired_state_contract_incomplete",
+            "schema_version": schema_version,
+            "missing": missing,
+        }
+    return {
+        "status": "missing",
+        "code": "desired_state_contract_missing",
+        **({"schema_version": schema_version} if isinstance(schema_version, str) else {}),
+    }
+
+
+def _apply_host_deployment_contract(
+    result: DoctorResult, contract: dict[str, Any] | None
+) -> DoctorResult:
+    if contract is None:
+        return result
+    declared = {**result.declared, "deployment_contract": contract}
+    if contract["status"] == "ready":
+        return result.model_copy(update={"declared": declared})
+    return result.model_copy(
+        update={
+            "declared": declared,
+            "status": "unhealthy",
+            "reason": contract["code"],
+        }
+    )
+
+
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
     return action(
         "bootstrap-plan",
@@ -948,6 +1020,17 @@ def doctor(
         _host_readiness(ctx, target_ref, declaration_only) if target_type == "host" else None
     )
     result = _apply_host_readiness(result, readiness)
+    host = ctx.registry.get(target_ref) if target_type == "host" else None
+    deployment_contract = _host_deployment_contract(ctx, host) if host is not None else None
+    result = _apply_host_deployment_contract(result, deployment_contract)
+    if deployment_contract is not None and deployment_contract["status"] != "ready":
+        actions.append(
+            action(
+                "inspect-deployment-contract",
+                [*_root_source_argv(ctx), "host", "show", target_id],
+                "Inspect the host declaration before authoring a desired-state contract",
+            )
+        )
     if readiness is not None and not readiness.ready:
         actions.append(_bootstrap_plan_action(ctx, target_id))
         if any(item.id == "inspect_self_deploy_reconcile" for item in readiness.actions):
@@ -972,4 +1055,11 @@ def doctor(
         gatus_url,
         gatus_token_env,
     )
-    return 0 if result.status == "healthy" or declaration_only and coverage.valid else 1
+    return (
+        0
+        if result.status == "healthy"
+        or declaration_only
+        and coverage.valid
+        and result.status != "unhealthy"
+        else 1
+    )

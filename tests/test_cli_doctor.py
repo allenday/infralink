@@ -154,6 +154,147 @@ def test_doctor_validate_host_summarizes_normal_unknown_evidence_without_network
     Draft202012Validator(schema).validate(payload)
 
 
+def test_doctor_validate_fails_closed_for_active_preservation_only_host(
+    tmp_path: Path,
+) -> None:
+    """An existing host cannot be mistaken for a V2 desired-state target."""
+    registry_root = tmp_path / "hosts"
+    host_root = registry_root / HOST_ID
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    HOST_ID: {
+                        "canonical_name": "database.example.com",
+                        "status": "active",
+                        "tailscale_ip": "100.64.0.10",
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    operations = host_root / "operations"
+    operations.mkdir()
+    (operations / "deployment.yml").write_text(
+        "schema_version: self-deploy.preservation-state.v1\n",
+        encoding="utf-8",
+    )
+    plan = tmp_path / "plan.json"
+    plan.write_text('{"dependencies": []}', encoding="utf-8")
+    bindings = tmp_path / "bindings.yml"
+    bindings.write_text("bindings: []\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry_root),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "doctor",
+            "--observation-plan",
+            str(plan),
+            "--adapter-bindings",
+            str(bindings),
+            "host",
+            HOST_ID,
+            "--validate",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unhealthy"
+    assert payload["result"]["reason"] == "desired_state_contract_missing"
+    assert payload["result"]["declared"]["deployment_contract"] == {
+        "status": "missing",
+        "code": "desired_state_contract_missing",
+        "schema_version": "self-deploy.preservation-state.v1",
+    }
+
+
+def test_doctor_validate_fails_closed_for_incomplete_desired_state_contract(
+    tmp_path: Path,
+) -> None:
+    """A schema label alone is not a usable active-host deployment contract."""
+    registry_root = tmp_path / "hosts"
+    host_root = registry_root / HOST_ID
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    HOST_ID: {
+                        "canonical_name": "database.example.com",
+                        "status": "active",
+                        "tailscale_ip": "100.64.0.10",
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    operations = host_root / "operations"
+    operations.mkdir()
+    (operations / "deployment.yml").write_text(
+        "schema_version: self-deploy.desired-state.v1\n",
+        encoding="utf-8",
+    )
+    plan = tmp_path / "plan.json"
+    plan.write_text('{"dependencies": []}', encoding="utf-8")
+    bindings = tmp_path / "bindings.yml"
+    bindings.write_text("bindings: []\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry_root),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "doctor",
+            "--observation-plan",
+            str(plan),
+            "--adapter-bindings",
+            str(bindings),
+            "host",
+            HOST_ID,
+            "--validate",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unhealthy"
+    assert payload["result"]["reason"] == "desired_state_contract_incomplete"
+    assert payload["result"]["declared"]["deployment_contract"] == {
+        "status": "incomplete",
+        "code": "desired_state_contract_incomplete",
+        "schema_version": "self-deploy.desired-state.v1",
+        "missing": [
+            "machine.uuid",
+            "controller.image.repository",
+            "controller.image.tag",
+            "infra_management.revision",
+            "compose.project_name",
+            "images",
+            "services.protected",
+            "controller_bootstrap.registry_read_identity_secret.project",
+            "controller_bootstrap.registry_read_identity_secret.id",
+            "controller_bootstrap.registry_repo_url",
+            "controller_bootstrap.registry_ref",
+        ],
+    }
+
+
 def test_normal_doctor_requires_a_configured_gatus_observer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
