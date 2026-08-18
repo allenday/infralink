@@ -195,7 +195,7 @@ class Context:
                 raise input_load_failed("registry", path)
             try:
                 if self.registry_path.is_dir():
-                    self._registry = Registry.load_dir(self.registry_path)
+                    self._registry = Registry.load_dir(self.hosts_path or self.registry_path)
                 else:
                     self._registry = Registry.load(self.registry_path)
             except CliFailure:
@@ -1279,7 +1279,7 @@ def version_command() -> None:
     type=click.Path(exists=False, path_type=Path),
     default=None,
     envvar=REGISTRY_ENVVAR,
-    help="Path to registry YAML file",
+    help="Path to the registry checkout root or legacy registry YAML file",
 )
 @click.option(
     "-e",
@@ -1308,7 +1308,11 @@ def cli(
     Manage infrastructure nodes and edges for health checks,
     diagram generation, and documentation.
     """
-    selected_registry = registry if registry is not None else _configured_registry()
+    click_ctx = click.get_current_context()
+    source_independent = {None, "help", "version", "capabilities", "explain"}
+    selected_registry = registry
+    if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
+        selected_registry = _configured_registry()
     ctx.registry_path = selected_registry
     ctx.hosts_path = None
     ctx.edges_path = edges or registry_companion(
@@ -1757,7 +1761,7 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
         if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
             raise _host_create_failure(
                 "Host create --write requires a directory registry",
-                "Provide --registry pointing to a local hosts directory",
+                "Provide --registry pointing to a registry checkout root",
                 {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
             )
         registry = ctx.registry
@@ -2519,7 +2523,7 @@ def _controller_bootstrap_state(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Controller bootstrap requires a registry directory checkout",
             exit_code=ExitCode.INPUT_ERROR,
-            fix="Provide the registry hosts directory with --registry and rerun host bootstrap",
+            fix="Provide the registry checkout root with --registry and rerun host bootstrap",
         )
     manifest_path = registry_path / target.uuid / "manifest.yml"
     deployment_path = registry_path / target.uuid / "operations" / "deployment.yml"

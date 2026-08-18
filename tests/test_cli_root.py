@@ -117,6 +117,13 @@ def test_doctor_derives_standard_sources_from_configured_registry(
         ),
         encoding="utf-8",
     )
+    (hosts / "applications.yml").write_text(
+        yaml.safe_dump(
+            {"applications": {"database": {"members": [{"host": host_id, "services": []}]}}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     operations = host_root / "operations"
     operations.mkdir()
     (operations / "deployment.yml").write_text(
@@ -160,6 +167,51 @@ def test_doctor_derives_standard_sources_from_configured_registry(
     assert payload["command"]["resolved"]["adapter_bindings"] == str(
         observation / "adapter-bindings.yml"
     )
+    applications = CliRunner().invoke(cli, ["--output", "json", "app", "list"])
+    applications_payload = json.loads(applications.output)
+    assert applications.exit_code == 0
+    assert applications_payload["result"]["items"] == ["database"]
+
+
+def test_explicit_registry_sources_override_local_config(monkeypatch, tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    config_home = tmp_path / "config"
+    (config_home / "infralink").mkdir(parents=True)
+    (config_home / "infralink/config.yml").write_text(
+        yaml.safe_dump({"registry": str(tmp_path / "configured-checkout")}, sort_keys=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
+    alternate = tmp_path / "alternate.yml"
+    alternate.write_text("hosts: {}\n", encoding="utf-8")
+
+    from_environment = CliRunner().invoke(cli, ["--output", "json", "host", "list"])
+    with_flag = CliRunner().invoke(
+        cli, ["--output", "json", "--registry", str(alternate), "host", "list"]
+    )
+
+    environment_payload = json.loads(from_environment.output)
+    flag_payload = json.loads(with_flag.output)
+    assert from_environment.exit_code == with_flag.exit_code == 0
+    assert environment_payload["command"]["resolved"]["registry"] == str(
+        root / "examples/registry.yml"
+    )
+    assert flag_payload["command"]["resolved"]["registry"] == str(alternate)
+
+
+def test_malformed_local_config_does_not_block_source_independent_commands(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_home = tmp_path / "config"
+    (config_home / "infralink").mkdir(parents=True)
+    (config_home / "infralink/config.yml").write_text("- not-a-mapping\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
+
+    for command in ([], ["version"], ["help"]):
+        result = CliRunner().invoke(cli, command)
+        assert result.exit_code == 0
 
 
 def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None:

@@ -636,7 +636,7 @@ def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation(
 
     assert raised.value.code is ErrorCode.CONFIGURATION_REQUIRED
     assert raised.value.fix == (
-        "Provide the registry hosts directory with --registry and rerun host bootstrap"
+        "Provide the registry checkout root with --registry and rerun host bootstrap"
     )
 
 
