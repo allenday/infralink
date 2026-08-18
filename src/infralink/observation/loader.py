@@ -19,6 +19,7 @@ from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.v2 import (
     ObservationV2Document,
+    V2InstanceTopologyValidationError,
     V2TopologyValidationError,
     validate_v2_documents,
 )
@@ -359,6 +360,20 @@ def _validate_v2_source_set(
             identity=f"component_edges/{error.edge_id}",
             next_actions=("Repair the referenced component endpoint before loading.",),
         )
+    except V2InstanceTopologyValidationError as error:
+        location = _v2_service_instance_location(
+            v2_documents, error.host_id, error.instance_id, error.slot_id
+        )
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 service instance topology is invalid.",
+            location=location,
+            identity=f"service_instances/{error.host_id}/{error.instance_id}",
+            next_actions=(
+                "Repair the referenced service profile or component slot before loading.",
+            ),
+        )
     except ValueError:
         diagnostic = Diagnostic(
             code="v2-component-topology-invalid",
@@ -390,6 +405,44 @@ def _v2_component_edge_location(
                     f"/component_edges/{index}",
                     document.document_index,
                 )
+    return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
+
+
+def _v2_service_instance_location(
+    documents: list[ObservationDocument],
+    host_id: str,
+    instance_id: str,
+    slot_id: str | None,
+) -> SourceLocation:
+    for document in documents:
+        instances = document.data.get("service_instances", ())
+        if not isinstance(instances, tuple):
+            continue
+        for instance_index, instance in enumerate(instances):
+            if not isinstance(instance, Mapping):
+                continue
+            if instance.get("host_id") != host_id or instance.get("id") != instance_id:
+                continue
+            if slot_id is None:
+                return SourceLocation(
+                    document.source_path,
+                    f"/service_instances/{instance_index}/profile_id",
+                    document.document_index,
+                )
+            components = instance.get("components", ())
+            if isinstance(components, tuple):
+                for component_index, component in enumerate(components):
+                    if isinstance(component, Mapping) and component.get("slot_id") == slot_id:
+                        return SourceLocation(
+                            document.source_path,
+                            f"/service_instances/{instance_index}/components/{component_index}/slot_id",
+                            document.document_index,
+                        )
+            return SourceLocation(
+                document.source_path,
+                f"/service_instances/{instance_index}",
+                document.document_index,
+            )
     return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
 
 

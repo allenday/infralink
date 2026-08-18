@@ -105,6 +105,8 @@ V2_DIAGNOSTIC_CODES = frozenset(
         "component-edge-unknown-endpoint",
         "duplicate-component-edge-id",
         "duplicate-component-edge-semantics",
+        "service-instance-unknown-component-slot",
+        "service-instance-unknown-profile",
         "v2-component-topology-invalid",
     }
 )

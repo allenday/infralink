@@ -150,6 +150,57 @@ component_edges:
     assert len(report.documents) == 3
 
 
+@pytest.mark.parametrize(
+    ("profile_id", "component_slot", "code", "pointer"),
+    [
+        (
+            "missing-profile",
+            "nginx",
+            "service-instance-unknown-profile",
+            "/service_instances/0/profile_id",
+        ),
+        (
+            "proxy",
+            "missing-slot",
+            "service-instance-unknown-component-slot",
+            "/service_instances/0/components/0/slot_id",
+        ),
+    ],
+)
+def test_loader_locates_cross_document_v2_instance_resolution_errors(
+    tmp_path: Path, profile_id: str, component_slot: str, code: str, pointer: str
+) -> None:
+    _write(
+        tmp_path / "a-profiles.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints: []
+""",
+    )
+    _write(
+        tmp_path / "z-instances.yml",
+        f"""\
+schema_version: infralink.observation/v2
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: {profile_id}
+    components:
+      - slot_id: {component_slot}
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [code]
+    assert report.diagnostics[0].location == SourceLocation("z-instances.yml", pointer, 0)
+
+
 def test_parsed_document_content_is_deeply_immutable_and_can_be_thawed(tmp_path: Path) -> None:
     _write(
         tmp_path / "contract.yml",

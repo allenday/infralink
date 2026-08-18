@@ -46,6 +46,25 @@ class V2TopologyValidationError(ValueError):
         super().__init__(message)
 
 
+class V2InstanceTopologyValidationError(ValueError):
+    """One stable, source-addressable v2 instance resolution failure."""
+
+    def __init__(
+        self,
+        code: str,
+        host_id: str,
+        instance_id: str,
+        message: str,
+        *,
+        slot_id: str | None = None,
+    ) -> None:
+        self.code = code
+        self.host_id = host_id
+        self.instance_id = instance_id
+        self.slot_id = slot_id
+        super().__init__(message)
+
+
 def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
     """Resolve v2 topology across the complete source set."""
 
@@ -59,12 +78,23 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
         for instance in document.service_instances:
             profile = profiles.get(instance.profile_id)
             if profile is None:
-                raise ValueError("unknown service profile")
+                raise V2InstanceTopologyValidationError(
+                    "service-instance-unknown-profile",
+                    instance.host_id,
+                    instance.id,
+                    "unknown service profile",
+                )
             slots = {slot.id: slot for slot in profile.components}
             for component in instance.components:
                 slot = slots.get(component.slot_id)
                 if slot is None:
-                    raise ValueError("unknown component slot")
+                    raise V2InstanceTopologyValidationError(
+                        "service-instance-unknown-component-slot",
+                        instance.host_id,
+                        instance.id,
+                        "unknown component slot",
+                        slot_id=component.slot_id,
+                    )
                 for endpoint in slot.endpoints:
                     endpoint_refs[
                         f"{instance.host_id}/{instance.id}/{component.slot_id}/{endpoint.id}"
