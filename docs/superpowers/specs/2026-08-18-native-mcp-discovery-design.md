@@ -16,38 +16,28 @@ HATEOAS responses. That remains authoritative.
 
 ## Decision
 
-Expose a small read-only native MCP surface alongside the generic tool:
+Expose one native MCP tool for every non-recursive CLI command path. Tool names
+are mechanically derived as `infralink_<path_joined_by_underscores>`.
 
-- `infralink_help(path?)`
-- `infralink_doctor(target_type?, target_ref?, validate?, verbose?)`
-- `infralink_host_get(ref)`
-- `infralink_host_list()`
-- `infralink_host_status(ref)`
-- `infralink_host_logs(ref, last_run?)`
-
-Each native method builds canonical CLI tokens and calls `invoke_cli()`. It
+Each native method builds canonical CLI tokens from the command registry and calls `invoke_cli()`. It
 does not read registry files, call a provider, reproduce CLI validation, or
 construct a response envelope. The typed method response is therefore the same
 CLI HATEOAS payload the equivalent command returns, serialized as MCP
 structured content.
 
-`infralink_command` remains available for every command, including explicit
-write/apply operations. Native mutation methods are deferred: they need an
-intent-specific contract rather than a superficial wrapper.
+`infralink_command` remains available for arbitrary argv compatibility. Native
+tools include explicit write/apply operations and preserve their CLI safeguards.
+Only `mcp serve` is excluded because it recursively invokes the MCP transport.
 
 ## Command Mapping
 
 | MCP tool | Canonical CLI argv |
 | --- | --- |
 | `infralink_help()` | `help` |
-| `infralink_help(["host", "status"])` | `help host status` |
-| `infralink_doctor("host", ref, validate=true)` | `doctor host REF --validate` |
-| `infralink_host_get(ref)` | `registry host get REF` |
-| `infralink_host_list()` | `host list` |
-| `infralink_host_status(ref)` | `host status REF` |
-| `infralink_host_logs(ref, last_run=true)` | `host logs REF --last-run` |
+| `infralink_host_status(host_ref=ref)` | `host status REF` |
+| `infralink_registry_host_patch(host_ref=ref, set=value, write=true)` | `registry host patch REF --set VALUE --write` |
 
-The native method rejects invalid field types before dispatch. Domain validation
+Generated input schemas reject invalid field types before dispatch. Domain validation
 and all successful/error result envelopes come from the CLI.
 
 ## Discovery and Size
