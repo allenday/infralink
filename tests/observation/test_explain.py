@@ -23,7 +23,7 @@ def test_explain_catalog_covers_every_declared_emitted_code() -> None:
 
 def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
     from infralink.observation import DIAGNOSTIC_CODES, api, loader, planner
-    from infralink.observation.codes import DUPLICATE_IDENTITY_KINDS
+    from infralink.observation.codes import DUPLICATE_IDENTITY_KINDS, V2_DIAGNOSTIC_CODES
 
     emitted: set[str] = set()
     for module in (api, loader, planner):
@@ -48,6 +48,7 @@ def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
                     emitted.add(code_arg.value)
 
     emitted.update(f"duplicate-{kind}-id" for kind in DUPLICATE_IDENTITY_KINDS)
+    emitted.update(V2_DIAGNOSTIC_CODES)
     assert emitted == set(DIAGNOSTIC_CODES)
 
 

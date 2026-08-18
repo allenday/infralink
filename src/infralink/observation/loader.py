@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -12,9 +13,16 @@ from types import MappingProxyType
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
+from infralink.observation.v2 import (
+    ObservationV2Document,
+    V2InstanceTopologyValidationError,
+    V2TopologyValidationError,
+    validate_v2_documents,
+)
 
 SCHEMA_VERSION = "infralink.observation/v1"
 SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, "infralink.observation/v2"})
@@ -99,6 +107,8 @@ def load_observation_documents(
         attempted_document_count += attempted
 
     findings.extend(_duplicate_id_diagnostics(documents))
+    documents, topology_findings = _validate_v2_source_set(documents)
+    findings.extend(topology_findings)
     return LoadReport(
         documents=tuple(documents),
         diagnostics=DiagnosticSet.from_diagnostics(findings, limit=diagnostic_limit),
@@ -277,6 +287,13 @@ def _load_file(
                 )
             )
             continue
+        if version == "infralink.observation/v2":
+            validation_finding = _validate_v2_document_structure(
+                parsed, source_path, document_index
+            )
+            if validation_finding is not None:
+                findings.append(validation_finding)
+                continue
         semantic_sha256 = hashlib.sha256(canonical_parsed_content(parsed)).hexdigest()
         loaded.append(
             ObservationDocument(
@@ -289,6 +306,144 @@ def _load_file(
             )
         )
     return loaded, findings, len(parsed_documents)
+
+
+def _validate_v2_document_structure(
+    data: dict[str, Any], source_path: str, document_index: int
+) -> Diagnostic | None:
+    try:
+        ObservationV2Document.model_validate_json(json.dumps(data))
+    except ValidationError as error:
+        message = str(error)
+        code = _v2_structure_validation_code(message)
+        return Diagnostic(
+            code=code,
+            severity="error",
+            message="The v2 component topology is invalid.",
+            location=SourceLocation(source_path, "/", document_index),
+            next_actions=(
+                "Repair the v2 component, endpoint, and edge references before loading.",
+            ),
+        )
+    return None
+
+
+def _v2_structure_validation_code(message: str) -> str:
+    for fragment, code in (("duplicate component edge id", "duplicate-component-edge-id"),):
+        if fragment in message:
+            return code
+    return "v2-component-topology-invalid"
+
+
+def _validate_v2_source_set(
+    documents: list[ObservationDocument],
+) -> tuple[list[ObservationDocument], list[Diagnostic]]:
+    v2_documents = [
+        document for document in documents if document.schema_version == "infralink.observation/v2"
+    ]
+    if not v2_documents:
+        return documents, []
+
+    parsed = [
+        ObservationV2Document.model_validate_json(json.dumps(document.to_dict()))
+        for document in v2_documents
+    ]
+    try:
+        validate_v2_documents(parsed)
+    except V2TopologyValidationError as error:
+        location = _v2_component_edge_location(v2_documents, error.edge_id)
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 component topology is invalid.",
+            location=location,
+            identity=f"component_edges/{error.edge_id}",
+            next_actions=("Repair the referenced component endpoint before loading.",),
+        )
+    except V2InstanceTopologyValidationError as error:
+        location = _v2_service_instance_location(
+            v2_documents, error.host_id, error.instance_id, error.slot_id
+        )
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 service instance topology is invalid.",
+            location=location,
+            identity=f"service_instances/{error.host_id}/{error.instance_id}",
+            next_actions=(
+                "Repair the referenced service profile or component slot before loading.",
+            ),
+        )
+    except ValueError:
+        diagnostic = Diagnostic(
+            code="v2-component-topology-invalid",
+            severity="error",
+            message="The v2 component topology is invalid.",
+            location=SourceLocation(
+                v2_documents[0].source_path, "/", v2_documents[0].document_index
+            ),
+            next_actions=("Repair the v2 component, profile, and slot references before loading.",),
+        )
+    else:
+        return documents, []
+    return [
+        document for document in documents if document.schema_version != "infralink.observation/v2"
+    ], [diagnostic]
+
+
+def _v2_component_edge_location(
+    documents: list[ObservationDocument], edge_id: str
+) -> SourceLocation:
+    for document in documents:
+        edges = document.data.get("component_edges", ())
+        if not isinstance(edges, tuple):
+            continue
+        for index, edge in enumerate(edges):
+            if isinstance(edge, Mapping) and edge.get("id") == edge_id:
+                return SourceLocation(
+                    document.source_path,
+                    f"/component_edges/{index}",
+                    document.document_index,
+                )
+    return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
+
+
+def _v2_service_instance_location(
+    documents: list[ObservationDocument],
+    host_id: str,
+    instance_id: str,
+    slot_id: str | None,
+) -> SourceLocation:
+    for document in documents:
+        instances = document.data.get("service_instances", ())
+        if not isinstance(instances, tuple):
+            continue
+        for instance_index, instance in enumerate(instances):
+            if not isinstance(instance, Mapping):
+                continue
+            if instance.get("host_id") != host_id or instance.get("id") != instance_id:
+                continue
+            if slot_id is None:
+                return SourceLocation(
+                    document.source_path,
+                    f"/service_instances/{instance_index}/profile_id",
+                    document.document_index,
+                )
+            components = instance.get("components", ())
+            if isinstance(components, tuple):
+                for component_index, component in enumerate(components):
+                    if isinstance(component, Mapping) and component.get("slot_id") == slot_id:
+                        return SourceLocation(
+                            document.source_path,
+                            f"/service_instances/{instance_index}/components/{component_index}/slot_id",
+                            document.document_index,
+                        )
+            return SourceLocation(
+                document.source_path,
+                f"/service_instances/{instance_index}",
+                document.document_index,
+            )
+    return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
 
 
 def _count_attempted_documents(raw: bytes) -> int:

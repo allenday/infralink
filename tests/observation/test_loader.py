@@ -66,6 +66,141 @@ def test_loader_accepts_v1_and_v2_documents_without_coercion(tmp_path: Path) -> 
     ]
 
 
+def test_loader_rejects_invalid_v2_component_topology(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8080
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components:
+      - slot_id: nginx
+component_edges:
+  - id: unknown-target
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/http
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/missing
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["component-edge-unknown-endpoint"]
+    assert report.diagnostics[0].location == SourceLocation("v2.yml", "/component_edges/0", 0)
+    assert report.diagnostics[0].next_actions
+
+
+def test_loader_resolves_v2_component_topology_across_split_documents(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "profiles.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8080
+      - id: application
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8000
+""",
+    )
+    _write(
+        tmp_path / "instances.yml",
+        """\
+schema_version: infralink.observation/v2
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components:
+      - slot_id: nginx
+      - slot_id: application
+""",
+    )
+    _write(
+        tmp_path / "edges.yml",
+        """\
+schema_version: infralink.observation/v2
+component_edges:
+  - id: nginx-to-application
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/http
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/api/application/http
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.valid
+    assert len(report.documents) == 3
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "component_slot", "code", "pointer"),
+    [
+        (
+            "missing-profile",
+            "nginx",
+            "service-instance-unknown-profile",
+            "/service_instances/0/profile_id",
+        ),
+        (
+            "proxy",
+            "missing-slot",
+            "service-instance-unknown-component-slot",
+            "/service_instances/0/components/0/slot_id",
+        ),
+    ],
+)
+def test_loader_locates_cross_document_v2_instance_resolution_errors(
+    tmp_path: Path, profile_id: str, component_slot: str, code: str, pointer: str
+) -> None:
+    _write(
+        tmp_path / "a-profiles.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints: []
+""",
+    )
+    _write(
+        tmp_path / "z-instances.yml",
+        f"""\
+schema_version: infralink.observation/v2
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: {profile_id}
+    components:
+      - slot_id: {component_slot}
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == [code]
+    assert report.diagnostics[0].location == SourceLocation("z-instances.yml", pointer, 0)
+
+
 def test_parsed_document_content_is_deeply_immutable_and_can_be_thawed(tmp_path: Path) -> None:
     _write(
         tmp_path / "contract.yml",
@@ -236,13 +371,43 @@ def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) ->
 def test_duplicate_component_edges_across_v2_documents_report_both_locations(
     tmp_path: Path,
 ) -> None:
+    document = """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8080
+      - id: application
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8000
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components:
+      - slot_id: nginx
+      - slot_id: application
+component_edges:
+  - id: api-to-db
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/http
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/api/application/http
+"""
     _write(
         tmp_path / "a.yml",
-        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+        document,
     )
     _write(
         tmp_path / "b.yml",
-        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+        document.replace("id: proxy\n", "id: proxy-b\n")
+        .replace("profile_id: proxy\n", "profile_id: proxy-b\n")
+        .replace("id: api\n", "id: api-b\n")
+        .replace("/api/", "/api-b/"),
     )
 
     report = load_observation_documents(tmp_path)
@@ -261,7 +426,14 @@ def test_v1_and_v2_collection_ids_do_not_share_identity_namespace(tmp_path: Path
     )
     _write(
         tmp_path / "v2.yml",
-        "schema_version: infralink.observation/v2\nservice_profiles:\n  - id: nginx\n",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: nginx
+    components:
+      - id: nginx
+        endpoints: []
+""",
     )
 
     report = load_observation_documents(tmp_path)
