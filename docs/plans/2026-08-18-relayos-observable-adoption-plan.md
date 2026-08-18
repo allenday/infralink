@@ -4,7 +4,7 @@
 
 **Goal:** Add a generic, versioned observable topology contract that represents host, service, component, endpoint, edge, and resource ownership; prove RelayOS staging can adopt it without changing rendered Compose or recreating a container.
 
-**Architecture:** Keep \`infralink.observation/v1\` immutable and readable. Add \`infralink.observation/v2\`, in which a service profile owns named component slots and resource-slot requirements, a service instance binds those slots on a host, and component instances own endpoint/capability/metric contracts. The planner normalizes this into stable host/service/component/endpoint/edge identities. Doctor's generic static adoption-readiness gate consumes the resulting plan and reports evidence boundaries without making network or runtime changes. Infra-registry then adds RelayOS declarations as data-only observation contracts and compares generated projections with the current monitoring configuration before enabling a new observer.
+**Architecture:** Keep \`infralink.observation/v1\` immutable and readable. Add \`infralink.observation/v2\`, in which a service profile owns named component slots and resource-slot requirements, a service instance binds those slots on a host, and component instances own endpoint/capability/metric contracts. The planner normalizes each schema version into stable host/service/component/endpoint/edge identities without reinterpreting v1 documents as v2. Doctor's generic static adoption-readiness gate consumes version-qualified compiled plans and reports evidence boundaries without making network or runtime changes. Infra-registry then adds RelayOS declarations as data-only observation contracts and compares generated projections with the current monitoring configuration before enabling a new observer.
 
 **Tech Stack:** Python 3.10+, Pydantic v2, Click, JSON Schema Draft 2020-12, pytest, YAML, existing Infralink observation planner and Doctor CLI.
 
@@ -20,15 +20,20 @@
 
 1. \`infralink.observation/v1\` keeps its current schema and semantics: a v1 \`ServiceProfile\` remains a component-level profile. No v1 document is silently reinterpreted as a service-with-components.
 2. A v2 service is the aggregate; components are its concrete runtime units. A component has one stable instance identity even when two components reuse the same component profile.
-3. Components, not services, own endpoints, health capabilities, metric capabilities, log capabilities, and resource bindings. A service owns aggregate readiness only.
-4. Resources are typed \`config\`, \`secret\`, or \`storage\` contracts. A resource reference exposes only identity, delivery form, and declared path/ownership metadata; no secret value enters plans, schemas, diagnostics, or generated artifacts.
-5. An edge always targets a component endpoint. A required-edge failure affects its source service readiness; it does not make the target unhealthy by implication.
-6. Node exporter and cAdvisor remain host-baseline capabilities. They are not invented as RelayOS application components.
-7. Registry observation adoption is data-only until static plan parity, observer configuration, and live evidence are independently reviewed. Existing legacy checks remain the operational fallback until that review succeeds.
-8. Incremental adoption may aggregate separately compiled v1 and v2 plans at
+3. A source-planning invocation accepts exactly one source schema version.
+   Cross-version adoption is permitted only after each source set has compiled
+   into an explicit plan with a qualified schema identity, such as
+   \`infralink.plan.v1\` or \`infralink.plan.v2\`.
+4. Incremental adoption may aggregate separately compiled v1 and v2 plans at
    generic read-only boundaries such as Doctor. Aggregation must preserve each
-   schema's semantics and qualified identities, and must not silently convert
-   v1 component-profile meaning into v2 service/component meaning.
+   schema's semantics and qualified identities, join plans only at documented
+   aggregate boundaries such as host readiness evidence, and must not silently
+   convert v1 component-profile meaning into v2 service/component meaning.
+5. Components, not services, own endpoints, health capabilities, metric capabilities, log capabilities, and resource bindings. A service owns aggregate readiness only.
+6. Resources are typed \`config\`, \`secret\`, or \`storage\` contracts. A resource reference exposes only identity, delivery form, and declared path/ownership metadata; no secret value enters plans, schemas, diagnostics, or generated artifacts.
+7. An edge always targets a component endpoint. A required-edge failure affects its source service readiness; it does not make the target unhealthy by implication.
+8. Node exporter and cAdvisor remain host-baseline capabilities. They are not invented as RelayOS application components.
+9. Registry observation adoption is data-only until static plan parity, observer configuration, and live evidence are independently reviewed. Existing legacy checks remain the operational fallback until that review succeeds.
 
 ---
 
@@ -147,7 +152,7 @@ In \`planner.py\`:
 - Keep host baseline capabilities as \`PlannedHost\` properties; do not emit exporter components.
 - Preserve source references for profile, service instance, component instance, resource binding, and edge declarations so diagnostics identify the correct YAML field.
 
-Do not add implicit migration or a v1-to-v2 converter. The compiler must select its path from the document schema version.
+Do not add implicit migration or a v1-to-v2 converter. The compiler must select its path from the document schema version and emit a plan whose schema version and identity namespace remain explicit for downstream aggregation.
 
 **Step 4: Run the focused test to verify it passes**
 
@@ -248,7 +253,9 @@ Expected: FAIL until the generic #173 readiness implementation can consume a v2 
 
 Coordinate the exact files with the owner of #173, then:
 
-- feed separately compiled v1 and v2 plans through the existing \`doctor host --validate\` boundary, preserving each plan's schema semantics and qualified identities;
+- feed independently compiled v1 and v2 plans through the existing \`doctor host --validate\` boundary when a host or fleet is adopted incrementally;
+- preserve each input plan's schema semantics and qualified identities in Doctor findings, including v1 component-level service profiles and v2 service/component aggregates;
+- aggregate readiness across plan versions only through explicit Doctor evidence boundaries, and forbid implicit semantic conversion of v1 plan objects into v2 plan objects;
 - evaluate v2 topology at component/resource/endpoint/edge granularity;
 - report static contract validity separately from live evidence status;
 - preserve bounded, secret-free findings and the existing CLI envelope;
