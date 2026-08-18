@@ -190,6 +190,9 @@ def _add_ready_deployment_contract(release: CoreReleasePath) -> None:
         "registry_repo_url": "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
         "registry_ref": "refs/heads/main",
     }
+    host["ssh"] = {
+        "host_key_fingerprint": "ssh-ed25519 SHA256:" + "A" * 43,
+    }
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     deployment_path = release.registry_path / release.host_id / "operations" / "deployment.yml"
     deployment_path.write_text(
