@@ -1,6 +1,6 @@
 # Infralink Product Requirements
 
-Current package version: `0.5.6`.
+Current package version: `0.6.0`.
 
 ## Purpose
 

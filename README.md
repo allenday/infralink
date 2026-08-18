@@ -5,7 +5,7 @@ topology with UUID-based hosts, typed edges, bounded queries, health checks,
 safe connection templates, offline observation contracts, diagrams, generated
 documentation, and release evidence inspection.
 
-Current package version: `0.5.8`.
+Current package version: `0.6.0`.
 
 ## Install
 

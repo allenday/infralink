@@ -486,11 +486,11 @@ Example:
     "secret_refs_truncated": false
   },
   "endpoint": {
-    "host": "db.internal",
+    "host": "db.internal.example.com",
     "port": 5432,
     "protocol": "postgresql"
   },
-  "connection_template": "postgresql://app:${secret:db_password}@db.internal:5432/app",
+  "connection_template": "postgresql://app:${secret:db_password}@db.internal.example.com:5432/app",
   "secret_refs": {
     "items": ["db_password"],
     "page": {

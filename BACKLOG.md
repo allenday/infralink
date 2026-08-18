@@ -1,6 +1,6 @@
 # Infralink Product Backlog
 
-Current package version: `0.5.6`.
+Current package version: `0.6.0`.
 
 ## Completed Foundation
 
@@ -48,4 +48,4 @@ The `v0.2` foundation and migration inventory remain useful history. See
 release versions from backlog text; release publication requires explicit human
 approval through the protected Woodpecker workflow.
 
-*Last updated: 2026-08-17*
+*Last updated: 2026-08-18*

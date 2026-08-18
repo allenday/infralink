@@ -11,7 +11,7 @@ Both operations require a generated JSON envelope:
 {
   "schema_version": "infralink.local-doctor-runtime/v1",
   "config": {
-    "canonical_name": "example-node",
+    "canonical_name": "node.example.com",
     "freshness_seconds": 120,
     "state_path": "/var/lib/infralink/local-doctor/latest.json",
     "metrics_path": "/var/lib/node-exporter/textfile_collector/infralink-doctor.prom",

@@ -14,9 +14,9 @@ Use sanitized examples in public docs and tests:
 - UUIDs generated for examples;
 - generic service names such as `api`, `postgresql`, and `metrics`.
 
-`tests/test_public_data_boundary.py` scans root docs, selected docs, examples,
-and compatibility docs. Add new public-facing docs to that test when they carry
-examples or operator guidance.
+`tests/test_public_data_boundary.py` scans root docs, all tracked Markdown under
+`docs/`, examples, and compatibility docs. Add new public-facing non-Markdown
+artifacts to that test when they carry examples or operator guidance.
 
 ## Secrets
 

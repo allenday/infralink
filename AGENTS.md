@@ -7,8 +7,9 @@ These instructions apply repo-wide. Human-facing product context lives in
 
 Infralink is a Python package and CLI for declarative infrastructure topology,
 offline observation contracts, safe connection templates, generated artifacts,
-host-operation planning, and release evidence inspection. Current package
-version is `0.5.6`.
+host-operation planning, and release evidence inspection.
+
+Current package version: `0.6.0`.
 
 ## Layout
 
@@ -75,7 +76,7 @@ See [docs/security-boundaries.md](docs/security-boundaries.md) for details.
 - Add or update tests for behavior, schema, CI policy, release policy, and docs
   validation when those surfaces change.
 - Keep historical docs useful, but make current docs explicit about the current
-  `0.5.6` state.
+  `0.6.0` state.
 
 ## PR Expectations
 

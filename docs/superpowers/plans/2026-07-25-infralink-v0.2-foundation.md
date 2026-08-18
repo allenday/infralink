@@ -140,7 +140,7 @@ def test_group_compatibility_uses_first_project() -> None:
     host = Host(
         "d1b9e5d5-36b0-459d-a556-96622811fbd5",
         {
-            "canonical_name": "test-host",
+            "canonical_name": "test-host.example.com",
             "status": "active",
             "projects": ["production", "shared"],
         },
@@ -197,7 +197,7 @@ Change the two `validate_all` tests in `tests/test_resolver.py` to:
                         "type": "database",
                         "from": {"hosts": [], "service": "app"},
                         "to": {
-                            "host": "nonexistent-uuid",
+                            "host": "00000000-0000-4000-8000-000000000000",
                             "service": "postgresql",
                             "port": 5432,
                         },
@@ -1117,7 +1117,7 @@ Create `tests/test_cli_queries.py` with sanitized fixtures and assertions:
 
 ```python
 def test_host_summary_truncates_relationship_preview(registry) -> None:
-    host = registry.get("test-host")
+    host = registry.get("test-host.example.com")
     summary = host_summary(host, service_preview_limit=1)
 
     assert summary.service_count == 2
@@ -1126,9 +1126,9 @@ def test_host_summary_truncates_relationship_preview(registry) -> None:
 
 
 def test_host_show_returns_complete_page(registry) -> None:
-    result = show_host(registry, "test-host", collection="services", limit=100)
+    result = show_host(registry, "test-host.example.com", collection="services", limit=100)
 
-    assert result.host.id == registry.get("test-host").uuid
+    assert result.host.id == registry.get("test-host.example.com").uuid
     assert result.services.page.total == 2
 
 
@@ -1527,17 +1527,17 @@ def test_endpoint_overrides_are_rejected_in_production(name: str) -> None:
             {
                 "BWS_ACCESS_TOKEN": "real-token-shape",
                 "BWS_ORGANIZATION_ID": "11111111-1111-1111-1111-111111111111",
-                name: "http://127.0.0.1:8080",
+                name: "http://192.0.2.10:8080",
             }
         )
 
 
-def test_loopback_config_requires_injected_fake_sdk() -> None:
+def test_custom_endpoint_config_requires_injected_fake_sdk() -> None:
     config = BwsConfig.for_test(
         access_token="INFRALINK_FAKE_BWS_TOKEN",
         organization_id="11111111-1111-1111-1111-111111111111",
-        api_url="http://127.0.0.1:8080",
-        identity_url="http://127.0.0.1:8081",
+        api_url="http://192.0.2.10:8080",
+        identity_url="http://192.0.2.11:8081",
     )
     with pytest.raises(BwsConfigurationError):
         BwsSecretResolver(config=config)
@@ -1936,7 +1936,7 @@ filename order. Unit tests assert both files are byte-deterministic.
 - [ ] **Step 3: Write failing public-boundary and workflow-policy tests**
 
 In `tests/test_public_data_boundary.py`, recursively inspect tracked public
-examples and documentation. Reject IPv4/IPv6 literals, `.i.cyberstorm.dev`,
+examples and documentation. Reject IPv4/IPv6 literals, private infrastructure suffixes,
 GCP project identifiers, UUID-shaped BWS project IDs, credential URL userinfo,
 and names listed in a test-only forbidden fixture. Permit only RFC 5737
 addresses and `example.com` names. Add one failing fixture for every rule.
@@ -2135,10 +2135,14 @@ infralink --registry registry/hosts --edges registry/network/main-dev/edges/edge
 
 Clone Gitea repository `relaxgg/infra-registry` at `main` into `registry/`
 using a read-only token. Initialize `third-party/infralink` only for legacy
-comparison tests. Set
-`CANDIDATE_SITE=$("$VIRTUAL_ENV/bin/python" -c
-"import site; print(site.getsitepackages()[0])")` and
-`INFRALINK_SRC="$CANDIDATE_SITE"` for loader-based consumers. Assert
+comparison tests. Set:
+
+```sh
+CANDIDATE_SITE=$("$VIRTUAL_ENV/bin/python" -c "import site; print(site.getsitepackages()[0])")
+INFRALINK_SRC="$CANDIDATE_SITE"
+```
+
+Use those values for loader-based consumers. Assert
 `Path(infralink.__file__)` is inside the candidate venv, not
 `third-party/infralink/src`. Install infra-management test dependencies and
 `pytest` into that same venv and invoke its exact Python executable.

@@ -50,11 +50,11 @@ role_overrides:
   wordpress:
     slot_bindings:
       db:
-        host: infralink2
+        host: database.example.com
         service: mariadb
         role: rw
       smtp:
-        host: mta
+        host: mail.example.com
         service: postfix
         protocol: smtp
 ```
@@ -99,4 +99,3 @@ Registry loading is unchanged. The validation step becomes stricter:
 ## Open Questions
 - Should we allow `host → host` edges for only certain edge types (e.g., `security`)?
 - Should slot bindings be allowed to reference wildcard services (`"*"`) for host-level dependencies?
-
