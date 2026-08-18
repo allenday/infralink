@@ -1039,7 +1039,10 @@ def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action
             )
             for child in _help_children(tuple(path), command)
         ]
-    return [action("help", [*_help_argv_prefix(), *path], "Show command usage")]
+    help_argv = _help_argv_prefix()
+    if _command_for_path(tuple(path)) is not None:
+        help_argv = [*help_argv, *path]
+    return [action("help", help_argv, "Show command usage")]
 
 
 def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:

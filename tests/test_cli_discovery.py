@@ -142,6 +142,20 @@ def test_malformed_invocations_are_json_usage_errors(
     assert payload["error"]["code"] == expected_code
 
 
+def test_unknown_command_usage_action_returns_to_root_help() -> None:
+    result = invoke("not-a-command")
+    payload = json.loads(result.output)
+
+    assert payload["next_actions"] == [
+        {
+            "rel": "help",
+            "command": "infralink --output json help",
+            "description": "Show command usage",
+            "safe": True,
+        }
+    ]
+
+
 def test_missing_registry_is_json_input_error() -> None:
     result = invoke("--registry", "missing.yml", "info")
     payload = json.loads(result.output)
