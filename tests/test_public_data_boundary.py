@@ -100,6 +100,7 @@ SAFE_DOTTED_TOKENS = {
     "backlog.md",
     "admission.yml",
     "candidate.json",
+    "config.yml",
     "edges.yml",
     "edges.py",
     "edgeset.load",
