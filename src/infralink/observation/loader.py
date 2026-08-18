@@ -17,6 +17,7 @@ from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 
 SCHEMA_VERSION = "infralink.observation/v1"
+SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, "infralink.observation/v2"})
 DEFAULT_DIAGNOSTIC_LIMIT = 100
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_YAML_EVENTS = 100_000
@@ -52,6 +53,7 @@ class ObservationDocument:
     raw_sha256: str
     semantic_sha256: str
     document_index: int = 0
+    schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         """Return an independent mutable copy for downstream validation."""
@@ -225,13 +227,16 @@ def _load_file(
                 Diagnostic(
                     code="schema-version-missing",
                     severity="error",
-                    message=f"The document must declare schema_version {SCHEMA_VERSION!r}.",
+                    message=(
+                        "The document must declare a supported schema_version: "
+                        f"{', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}."
+                    ),
                     location=SourceLocation(source_path, "/schema_version", document_index),
                     next_actions=(f"Add schema_version: {SCHEMA_VERSION}.",),
                 )
             )
             continue
-        if version != SCHEMA_VERSION:
+        if version not in SUPPORTED_SCHEMA_VERSIONS:
             findings.append(
                 Diagnostic(
                     code="schema-version-unsupported",
@@ -239,7 +244,10 @@ def _load_file(
                     message=f"Unsupported observation schema version: {version!r}.",
                     location=SourceLocation(source_path, "/schema_version", document_index),
                     identity=str(version),
-                    next_actions=(f"Use schema_version: {SCHEMA_VERSION}.",),
+                    next_actions=(
+                        "Use one of: "
+                        f"{', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}.",
+                    ),
                 )
             )
             continue
@@ -279,6 +287,7 @@ def _load_file(
                 raw_sha256=raw_sha256,
                 semantic_sha256=semantic_sha256,
                 document_index=document_index,
+                schema_version=version,
             )
         )
     return loaded, findings, len(parsed_documents)
