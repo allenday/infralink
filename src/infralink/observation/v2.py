@@ -20,7 +20,15 @@ class ObservationV2Document(StrictModel):
     component_edges: list[ComponentEdge] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def reject_duplicate_component_edge_ids(self) -> ObservationV2Document:
+    def reject_duplicate_topology_identities(self) -> ObservationV2Document:
+        profile_ids = [profile.id for profile in self.service_profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ValueError("duplicate service profile id")
+
+        instance_ids = [(instance.host_id, instance.id) for instance in self.service_instances]
+        if len(instance_ids) != len(set(instance_ids)):
+            raise ValueError("duplicate service instance id on host")
+
         edge_ids = [edge.id for edge in self.component_edges]
         if len(edge_ids) != len(set(edge_ids)):
             raise ValueError("duplicate component edge id")

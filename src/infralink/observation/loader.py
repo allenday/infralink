@@ -245,10 +245,7 @@ def _load_file(
                     message=f"Unsupported observation schema version: {version!r}.",
                     location=SourceLocation(source_path, "/schema_version", document_index),
                     identity=str(version),
-                    next_actions=(
-                        "Use one of: "
-                        f"{', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}.",
-                    ),
+                    next_actions=(f"Use one of: {', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}.",),
                 )
             )
             continue
@@ -306,7 +303,7 @@ def _count_attempted_documents(raw: bytes) -> int:
 
 
 def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[Diagnostic]:
-    locations: dict[tuple[str, str], list[SourceLocation]] = defaultdict(list)
+    locations: dict[tuple[str, str, str], list[SourceLocation]] = defaultdict(list)
     for document in documents:
         for collection in sorted(_IDENTITY_COLLECTIONS):
             objects = document.data.get(collection)
@@ -320,7 +317,7 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
                         if not isinstance(host_id, str):
                             continue
                         object_id = f"{host_id}/{object_id}"
-                    locations[(collection, object_id)].append(
+                    locations[(document.schema_version, collection, object_id)].append(
                         SourceLocation(
                             document.source_path,
                             f"/{collection}/{index}/id",
@@ -329,7 +326,7 @@ def _duplicate_id_diagnostics(documents: Iterable[ObservationDocument]) -> list[
                     )
 
     findings: list[Diagnostic] = []
-    for (collection, object_id), occurrences in locations.items():
+    for (_, collection, object_id), occurrences in locations.items():
         if len(occurrences) < 2:
             continue
         identity = f"{collection}/{object_id}"

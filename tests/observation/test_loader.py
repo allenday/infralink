@@ -181,7 +181,7 @@ def test_values_outside_canonical_domain_are_rejected_before_hashing(
     [
         ("applications: []\n", "schema-version-missing", "/schema_version"),
         (
-                "schema_version: infralink.observation/v3\n",
+            "schema_version: infralink.observation/v3\n",
             "schema-version-unsupported",
             "/schema_version",
         ),
@@ -252,6 +252,21 @@ def test_duplicate_component_edges_across_v2_documents_report_both_locations(
         ("a.yml", "/component_edges/0/id", "component_edges/api-to-db"),
         ("b.yml", "/component_edges/0/id", "component_edges/api-to-db"),
     ]
+
+
+def test_v1_and_v2_collection_ids_do_not_share_identity_namespace(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v1.yml",
+        "schema_version: infralink.observation/v1\nservice_profiles:\n  - id: nginx\n",
+    )
+    _write(
+        tmp_path / "v2.yml",
+        "schema_version: infralink.observation/v2\nservice_profiles:\n  - id: nginx\n",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert not [item for item in report.diagnostics if item.code == "duplicate-object-id"]
 
 
 def test_service_instance_ids_are_scoped_to_their_host(tmp_path: Path) -> None:

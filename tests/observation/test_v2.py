@@ -69,3 +69,57 @@ def test_parse_v2_document_rejects_duplicate_component_edge_ids() -> None:
                 ],
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("collection", "items", "message"),
+    [
+        (
+            "service_profiles",
+            [
+                {
+                    "id": "proxy",
+                    "components": [
+                        {
+                            "id": "nginx",
+                            "endpoints": [{"id": "http", "protocol": "http", "port": 80}],
+                        }
+                    ],
+                },
+                {
+                    "id": "proxy",
+                    "components": [
+                        {
+                            "id": "nginx",
+                            "endpoints": [{"id": "http", "protocol": "http", "port": 80}],
+                        }
+                    ],
+                },
+            ],
+            "duplicate service profile id",
+        ),
+        (
+            "service_instances",
+            [
+                {
+                    "id": "api",
+                    "host_id": HOST_ID,
+                    "profile_id": "proxy",
+                    "components": [{"slot_id": "nginx"}],
+                },
+                {
+                    "id": "api",
+                    "host_id": HOST_ID,
+                    "profile_id": "proxy",
+                    "components": [{"slot_id": "nginx"}],
+                },
+            ],
+            "duplicate service instance id on host",
+        ),
+    ],
+)
+def test_parse_v2_document_rejects_duplicate_topology_identities(
+    collection: str, items: list[object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        parse_v2_document({"schema_version": "infralink.observation/v2", collection: items})

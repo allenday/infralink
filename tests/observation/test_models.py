@@ -96,8 +96,12 @@ def test_component_edge_derives_intra_service_scope() -> None:
     )
 
     assert edge.scope is EdgeScope.INTRA_SERVICE
-    assert edge.source_owner == "11111111-1111-4111-8111-111111111111/archive/nginx"
-    assert edge.target_owner == "11111111-1111-4111-8111-111111111111/archive/elasticsearch"
+    assert edge.source_owner == ("11111111-1111-4111-8111-111111111111", "archive", "nginx")
+    assert edge.target_owner == (
+        "11111111-1111-4111-8111-111111111111",
+        "archive",
+        "elasticsearch",
+    )
 
 
 def test_component_edge_derives_inter_service_scope() -> None:

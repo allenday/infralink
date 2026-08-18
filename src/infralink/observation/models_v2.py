@@ -100,19 +100,15 @@ class ComponentEdge(StrictModel):
         return self
 
     @property
-    def source_owner(self) -> str:
-        return "/".join(parse_component_endpoint_ref(self.source_endpoint_id)[:3])
+    def source_owner(self) -> tuple[str, str, str]:
+        return parse_component_endpoint_ref(self.source_endpoint_id)[:3]
 
     @property
-    def target_owner(self) -> str:
-        return "/".join(parse_component_endpoint_ref(self.target_endpoint_id)[:3])
+    def target_owner(self) -> tuple[str, str, str]:
+        return parse_component_endpoint_ref(self.target_endpoint_id)[:3]
 
     @property
     def scope(self) -> EdgeScope:
         source = parse_component_endpoint_ref(self.source_endpoint_id)
         target = parse_component_endpoint_ref(self.target_endpoint_id)
-        return (
-            EdgeScope.INTRA_SERVICE
-            if source[:2] == target[:2]
-            else EdgeScope.INTER_SERVICE
-        )
+        return EdgeScope.INTRA_SERVICE if source[:2] == target[:2] else EdgeScope.INTER_SERVICE

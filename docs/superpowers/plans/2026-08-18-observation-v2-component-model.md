@@ -199,7 +199,7 @@ Expected: failure because `parse_v2_document` is not importable.
 
 - [ ] **Step 3: Implement the strict document model and parser**
 
-Create `ObservationV2Document(StrictModel)` with literal schema version, `service_profiles`, `service_instances`, and `component_edges`, all defaulting to empty lists. `parse_v2_document(data)` calls `ObservationV2Document.model_validate(data)` and returns the typed model. Export `ObservationV2Document` and `parse_v2_document` from `infralink.observation`.
+Create `ObservationV2Document(StrictModel)` with literal schema version, `service_profiles`, `service_instances`, and `component_edges`, all defaulting to empty lists. `parse_v2_document(data)` validates at the JSON boundary with `ObservationV2Document.model_validate_json(json.dumps(data))`, matching the strict v1 planner boundary: YAML source strings must become typed enum values without weakening strict in-memory validation. Export `ObservationV2Document` and `parse_v2_document` from `infralink.observation`.
 
 Do not add the V2 model to `resolve_observation_documents`, `Plan`, or any renderer in this task. That protects V1 semantics and makes the later V2 planner/projection boundary explicit.
 
