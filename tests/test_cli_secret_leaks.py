@@ -438,7 +438,10 @@ selection:
         ),
     }
     discovered = _leaf_paths(cli)
-    assert discovered == {*(set(invocations) - {()}), ("help",)}
+    # `mcp serve` owns a long-running JSON-RPC transport and cannot be invoked
+    # as a one-shot CLI envelope. Its delegated command boundary is covered by
+    # tests/test_mcp_server.py.
+    assert discovered == {*(set(invocations) - {()}), ("help",), ("mcp", "serve")}
 
     runner = CliRunner()
     for path, (argv, expected_exit, expected_ok) in invocations.items():

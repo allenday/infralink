@@ -470,6 +470,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         },
         "app": {"app-list", "app-show"},
         "info": {"info"},
+        "mcp": set(),  # MCP owns its JSON-RPC protocol rather than a CLI result schema.
         "host": {
             "hosts",
             "host-show",
