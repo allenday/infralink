@@ -51,7 +51,7 @@ def _managed_runtime_registry_root() -> Path:
 
 
 def _registry_root(ctx: Context, *, for_write: bool = False) -> Path:
-    root = ctx.registry_path
+    root = ctx.hosts_path
     if root is None or not root.is_dir():
         raise _failure(
             "Registry authoring requires a directory registry",

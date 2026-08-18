@@ -25,7 +25,14 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.host_readiness import evaluate_host_readiness
-from infralink.cli.main import Context, _context_for, _emit, _root_source_argv, pass_context
+from infralink.cli.main import (
+    Context,
+    _context_for,
+    _emit,
+    _root_source_argv,
+    pass_context,
+    registry_companion,
+)
 from infralink.cli.output import ok_envelope
 from infralink.host_registry_state import HostManifestGitState, inspect_host_manifest
 from infralink.host_transport import SshReadinessTransport
@@ -597,9 +604,7 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
     if host is None:
         return None
     fingerprint_check: HostReadinessCheck | None = None
-    manifest_path = (
-        ctx.registry_path / str(host.uuid) / "manifest.yml" if ctx.registry_path else None
-    )
+    manifest_path = ctx.hosts_path / str(host.uuid) / "manifest.yml" if ctx.hosts_path else None
     try:
         manifest = (
             yaml.safe_load(manifest_path.read_text(encoding="utf-8")) if manifest_path else {}
@@ -615,9 +620,9 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
         try:
             from infralink.cli.operations import pinned_target_ssh_identity, resolve_apply_request
 
-            if ctx.registry_path is None:
+            if ctx.hosts_path is None:
                 raise ValueError
-            request = resolve_apply_request(ctx.registry_path, host)
+            request = resolve_apply_request(ctx.hosts_path, host)
             with pinned_target_ssh_identity(request) as known_hosts:
                 readiness = evaluate_host_readiness(
                     host,
@@ -660,9 +665,9 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
 
 
 def _declared_firewall_rules(ctx: Context, host_uuid: str) -> tuple[str, ...]:
-    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
         return ()
-    deployment_path = ctx.registry_path / host_uuid / "operations" / "deployment.yml"
+    deployment_path = ctx.hosts_path / host_uuid / "operations" / "deployment.yml"
     try:
         deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
@@ -750,9 +755,9 @@ def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
 
 
 def _host_manifest_git_state(ctx: Context, host_id: str) -> HostManifestGitState | None:
-    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
         return None
-    return inspect_host_manifest(ctx.registry_path, host_id)
+    return inspect_host_manifest(ctx.hosts_path, host_id)
 
 
 def _apply_host_manifest_git_state(
@@ -788,9 +793,9 @@ def _nested_value(value: Any, *path: str) -> Any:
 
 def _host_deployment_contract(ctx: Context, host: Any) -> dict[str, Any] | None:
     """Inspect the one registry-owned deployment contract for an active host."""
-    if ctx.registry_path is None or not ctx.registry_path.is_dir() or host.status.value != "active":
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir() or host.status.value != "active":
         return None
-    deployment_path = ctx.registry_path / host.uuid / "operations" / "deployment.yml"
+    deployment_path = ctx.hosts_path / host.uuid / "operations" / "deployment.yml"
     try:
         deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
@@ -900,6 +905,12 @@ def doctor(
     target_ref: str | None,
 ) -> int:
     """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
+    observation_plan = observation_plan or registry_companion(
+        ctx.registry_path, "operations/observation/core-plan.json"
+    )
+    adapter_bindings = adapter_bindings or registry_companion(
+        ctx.registry_path, "operations/observation/adapter-bindings.yml"
+    )
     if target_type is None:
         if target_ref is not None:
             raise click.UsageError("a target type is required")

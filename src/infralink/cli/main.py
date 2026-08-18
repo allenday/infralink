@@ -75,6 +75,7 @@ from infralink.host_transport import SshReadinessTransport
 # never an implicit operational fallback.
 REGISTRY_ENVVAR = "INFRALINK_REGISTRY"
 EDGES_ENVVAR = "INFRALINK_EDGES"
+CONFIG_ENVVAR = "INFRALINK_CONFIG"
 _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
@@ -85,6 +86,39 @@ _CONTROL_ROOT = Path(os.environ.get("INFRALINK_CONTROL_ROOT", "/opt/infra"))
 _BOOTSTRAP_EXECUTOR_ROOT = Path("/app")
 _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
 _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
+
+
+def _operator_config_path() -> Path:
+    configured = os.environ.get(CONFIG_ENVVAR)
+    if configured:
+        return Path(configured).expanduser()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return config_home / "infralink" / "config.yml"
+
+
+def _configured_registry() -> Path | None:
+    """Read a local checkout selector; it is not desired-state input."""
+    path = _operator_config_path()
+    if not path.is_file():
+        return None
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        raise input_load_failed("operator config", str(path)) from None
+    if not isinstance(value, dict) or not isinstance(value.get("registry"), str):
+        raise input_load_failed("operator config", str(path))
+    selected = Path(value["registry"]).expanduser()
+    return selected if selected.is_absolute() else path.parent / selected
+
+
+def registry_checkout_root(path: Path | None) -> Path | None:
+    """Return the configured checkout root without discarding catalog material."""
+    return path if path is not None and path.is_dir() and (path / "hosts").is_dir() else None
+
+
+def registry_companion(path: Path | None, relative: str) -> Path | None:
+    root = registry_checkout_root(path)
+    return root / relative if root is not None else None
 
 
 def _isolated_git_environment() -> dict[str, str]:
@@ -127,12 +161,26 @@ class Context:
 
     def __init__(self) -> None:
         self.registry_path: Path | None = None
+        self._hosts_path: Path | None = None
         self.edges_path: Path | None = None
         self.verbose: bool = False
         self.output: str = "yaml"
         self.output_explicit: bool = False
         self._registry: Any = None
         self._edges: Any = None
+
+    @property
+    def hosts_path(self) -> Path | None:
+        if self._hosts_path is not None:
+            return self._hosts_path
+        if self.registry_path is None:
+            return None
+        nested_hosts = self.registry_path / "hosts"
+        return nested_hosts if nested_hosts.is_dir() else self.registry_path
+
+    @hosts_path.setter
+    def hosts_path(self, value: Path | None) -> None:
+        self._hosts_path = value
 
     @property
     def registry(self) -> Any:
@@ -534,11 +582,21 @@ def _context_for(
         active_argv = _INVOCATION_ARGS.get() or []
     redacted_argv = redact_argv(active_argv)
     parsed_path, parsed_args, root_values = _parse_invocation(redacted_argv)
+    click_ctx = click.get_current_context(silent=True)
+    runtime_ctx = click_ctx.find_root().obj if click_ctx is not None else None
+    effective_registry = (
+        runtime_ctx.registry_path
+        if isinstance(runtime_ctx, Context)
+        else root_values.get("registry")
+    )
+    effective_edges = (
+        runtime_ctx.edges_path if isinstance(runtime_ctx, Context) else root_values.get("edges")
+    )
     resolved = {
         "version": __version__,
         "cwd": os.getcwd(),
-        "registry": _source_value(root_values.get("registry")),
-        "edges": _source_value(root_values.get("edges")),
+        "registry": _source_value(effective_registry),
+        "edges": _source_value(effective_edges),
         "output": root_values.get("output", "yaml"),
         "verbose": bool(root_values.get("verbose", False)),
     }
@@ -1250,8 +1308,12 @@ def cli(
     Manage infrastructure nodes and edges for health checks,
     diagram generation, and documentation.
     """
-    ctx.registry_path = registry
-    ctx.edges_path = edges
+    selected_registry = registry if registry is not None else _configured_registry()
+    ctx.registry_path = selected_registry
+    ctx.hosts_path = None
+    ctx.edges_path = edges or registry_companion(
+        ctx.registry_path, "network/main-dev/edges/edges.yml"
+    )
     ctx.verbose = verbose
     ctx.output = output
     ctx.output_explicit = (
@@ -1692,7 +1754,7 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     mode = "dry_run"
 
     if write:
-        if ctx.registry_path is None or not ctx.registry_path.is_dir():
+        if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
             raise _host_create_failure(
                 "Host create --write requires a directory registry",
                 "Provide --registry pointing to a local hosts directory",
@@ -1705,7 +1767,7 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
                 "Choose a unique --name or update the existing host manifest",
                 {"name": name},
             )
-        manifest_path = ctx.registry_path / host_id / "manifest.yml"
+        manifest_path = ctx.hosts_path / host_id / "manifest.yml"
         if manifest_path.parent.exists():
             raise _host_create_failure(
                 "Generated host UUID already exists",
@@ -1734,7 +1796,7 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
     if manifest_path is not None:
         assert ctx.registry_path is not None
-        git_worktree = ctx.registry_path.parent
+        git_worktree = ctx.registry_path
         result["write_state"] = "local_uncommitted"
         result["git_worktree"] = str(git_worktree)
         actions.append(
@@ -1864,7 +1926,7 @@ def host_bootstrap(
         )
     projects = _bootstrap_declared_bws_projects(ctx, target)
     token = _read_bootstrap_bws_token() if bws_token_stdin else None
-    controller_state = _controller_bootstrap_state(ctx.registry_path, target)
+    controller_state = _controller_bootstrap_state(ctx.hosts_path, target)
     if token is not None:
         _validate_bootstrap_bws_access(
             ctx, projects, token, controller_secret=controller_state.registry_read_identity_secret
@@ -2067,14 +2129,16 @@ def _read_bootstrap_bws_token() -> str:
 
 
 def _bws_project_catalog(ctx: Context) -> dict[str, str]:
-    if ctx.registry_path is None:
+    hosts_path = getattr(ctx, "hosts_path", ctx.registry_path)
+    if hosts_path is None:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Bootstrap BWS validation requires a registry directory checkout",
             exit_code=ExitCode.INPUT_ERROR,
             fix="Use the checked-out registry hosts directory",
         )
-    catalog = ctx.registry_path.parent / "ansible" / "inventory" / "bws_projects.yml"
+    checkout = registry_checkout_root(ctx.registry_path) or hosts_path.parent
+    catalog = checkout / "ansible" / "inventory" / "bws_projects.yml"
     try:
         data = yaml.safe_load(catalog.read_text(encoding="utf-8"))
         raw_projects = data["projects"]
@@ -2178,7 +2242,7 @@ def _bootstrap_pinned_transport(
     """Bootstrap uses the same declared SSH identity contract as reconcile."""
     from infralink.cli.operations import _pinned_known_hosts, resolve_apply_request
 
-    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Bootstrap requires a directory registry checkout",
@@ -2186,7 +2250,7 @@ def _bootstrap_pinned_transport(
             fix="Use the selected registry hosts directory",
             details={"host": target.uuid},
         )
-    request = resolve_apply_request(ctx.registry_path, target)
+    request = resolve_apply_request(ctx.hosts_path, target)
     if request.address != address:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
@@ -2606,7 +2670,7 @@ def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str |
     """Run only the pinned controller refresh playbook over declared SSH."""
     from infralink.cli.operations import _pinned_known_hosts, resolve_apply_request
 
-    if ctx.registry_path is None or not ctx.registry_path.is_dir():
+    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Controller refresh requires a directory registry checkout",
@@ -2614,10 +2678,8 @@ def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str |
             fix="Provide the selected registry hosts directory",
             details={"host": target.uuid},
         )
-    request = resolve_apply_request(ctx.registry_path, target)
-    resolved_runtime_revision, extra_vars = _controller_refresh_extra_vars(
-        ctx.registry_path, target
-    )
+    request = resolve_apply_request(ctx.hosts_path, target)
+    resolved_runtime_revision, extra_vars = _controller_refresh_extra_vars(ctx.hosts_path, target)
     if runtime_revision is not None and runtime_revision != resolved_runtime_revision:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
@@ -2917,9 +2979,9 @@ def host_verifier(ctx: Context, host_ref: str) -> int:
     target = ctx.registry.get(host_ref)
     if target is None:
         raise entity_not_found("host", host_ref)
-    if ctx.registry_path is None:
+    if ctx.hosts_path is None:
         raise configuration_required("registry")
-    verifier = inspect_verifier(resolve_apply_request(ctx.registry_path, target))
+    verifier = inspect_verifier(resolve_apply_request(ctx.hosts_path, target))
     doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
     _emit(
         ok_envelope(
@@ -2961,13 +3023,13 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
     target = ctx.registry.get(host_ref)
     if target is None:
         raise entity_not_found("host", host_ref)
-    if ctx.registry_path is None:
+    if ctx.hosts_path is None:
         raise configuration_required("registry")
-    request = resolve_apply_request(ctx.registry_path, target)
+    request = resolve_apply_request(ctx.hosts_path, target)
     doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
     if dry_run:
         completed = subprocess.run(
-            ["git", "-C", str(ctx.registry_path.parent), "rev-parse", "HEAD"],
+            ["git", "-C", str(ctx.registry_path), "rev-parse", "HEAD"],
             text=True,
             capture_output=True,
             check=False,
@@ -3113,9 +3175,9 @@ def host_status(ctx: Context, host_ref: str) -> int:
     target = ctx.registry.get(host_ref)
     if target is None:
         raise entity_not_found("host", host_ref)
-    if ctx.registry_path is None:
+    if ctx.hosts_path is None:
         raise configuration_required("registry")
-    values = inspect_target_status(resolve_apply_request(ctx.registry_path, target))
+    values = inspect_target_status(resolve_apply_request(ctx.hosts_path, target))
     target_status = _target_reconcile_status(values)
     _emit(
         ok_envelope(
@@ -3154,7 +3216,7 @@ def host_logs(ctx: Context, host_ref: str, last_run: bool) -> int:
     target = ctx.registry.get(host_ref)
     if target is None:
         raise entity_not_found("host", host_ref)
-    if ctx.registry_path is None:
+    if ctx.hosts_path is None:
         raise configuration_required("registry")
     _emit(
         ok_envelope(
@@ -3163,7 +3225,7 @@ def host_logs(ctx: Context, host_ref: str, last_run: bool) -> int:
                 target=DoctorTarget(
                     type="host", id=target.uuid, canonical_name=target.canonical_name
                 ),
-                lines=inspect_target_logs(resolve_apply_request(ctx.registry_path, target)),
+                lines=inspect_target_logs(resolve_apply_request(ctx.hosts_path, target)),
             ),
             [
                 action(
@@ -3202,10 +3264,10 @@ def operation_status(ctx: Context, operation_id: str) -> int:
     target_host = ctx.registry.get(host_ref)
     if target_host is None:
         raise entity_not_found("host", host_ref)
-    if ctx.registry_path is None:
+    if ctx.hosts_path is None:
         raise configuration_required("registry")
     record = operation_provider().status(
-        operation_id, resolve_apply_request(ctx.registry_path, target_host)
+        operation_id, resolve_apply_request(ctx.hosts_path, target_host)
     )
     target = DoctorTarget.model_validate(record.target) if record.target is not None else None
     result = OperationStatusResult(

@@ -84,6 +84,84 @@ def test_environment_sources_are_used_and_flags_override_them(monkeypatch, tmp_p
     assert override_payload["result"]["items"] == []
 
 
+def test_doctor_derives_standard_sources_from_configured_registry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """One local registry selection is enough for the standard Doctor invocation."""
+    root = Path(__file__).resolve().parents[1]
+    host_id = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
+    checkout = tmp_path / "infra-registry"
+    hosts = checkout / "hosts"
+    host_root = hosts / host_id
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    host_id: {
+                        "canonical_name": "database.example.com",
+                        "status": "active",
+                        "tailscale_ip": "100.64.0.10",
+                        "controller_bootstrap": {
+                            "registry_read_identity_secret": {
+                                "project": "infra",
+                                "id": "registry-reader",
+                            },
+                            "registry_repo_url": "ssh://git@example.invalid/infra-registry.git",
+                            "registry_ref": "main",
+                        },
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    operations = host_root / "operations"
+    operations.mkdir()
+    (operations / "deployment.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "self-deploy.desired-state.v1",
+                "machine": {"uuid": host_id},
+                "controller": {"image": {"repository": "example/controller", "tag": "v1"}},
+                "infra_management": {"revision": "a" * 40},
+                "compose": {"project_name": "services"},
+                "images": {"node-exporter": {"repository": "prom/node-exporter", "tag": "v1"}},
+                "services": {"protected": ["node-exporter"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    edges = checkout / "network/main-dev/edges/edges.yml"
+    edges.parent.mkdir(parents=True)
+    edges.write_text((root / "examples/edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    observation = checkout / "operations/observation"
+    observation.mkdir(parents=True)
+    (observation / "core-plan.json").write_text('{"dependencies": []}', encoding="utf-8")
+    (observation / "adapter-bindings.yml").write_text("bindings: []\n", encoding="utf-8")
+    config_home = tmp_path / "config"
+    (config_home / "infralink").mkdir(parents=True)
+    (config_home / "infralink/config.yml").write_text(
+        yaml.safe_dump({"registry": str(checkout)}, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
+    monkeypatch.delenv("INFRALINK_EDGES", raising=False)
+
+    result = CliRunner().invoke(cli, ["--output", "json", "doctor", "host", host_id, "--validate"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["command"]["resolved"]["registry"] == str(checkout)
+    assert payload["command"]["resolved"]["edges"] == str(edges)
+    assert payload["command"]["resolved"]["observation_plan"] == str(observation / "core-plan.json")
+    assert payload["command"]["resolved"]["adapter_bindings"] == str(
+        observation / "adapter-bindings.yml"
+    )
+
+
 def test_explicit_invalid_edges_path_is_an_input_failure(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     missing_edges = tmp_path / "missing-edges.yml"
