@@ -1039,7 +1039,7 @@ def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action
             )
             for child in _help_children(tuple(path), command)
         ]
-    return [action("help", _help_argv_prefix(), "Show command usage")]
+    return [action("help", [*_help_argv_prefix(), *path], "Show command usage")]
 
 
 def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
