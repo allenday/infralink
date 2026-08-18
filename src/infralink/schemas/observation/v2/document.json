@@ -56,6 +56,13 @@
           "title": "Metric Bindings",
           "type": "array"
         },
+        "resource_bindings": {
+          "items": {
+            "$ref": "#/$defs/ResourceBinding"
+          },
+          "title": "Resource Bindings",
+          "type": "array"
+        },
         "slot_id": {
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
           "title": "Slot Id",
@@ -89,6 +96,13 @@
             "$ref": "#/$defs/MetricContract"
           },
           "title": "Metrics",
+          "type": "array"
+        },
+        "resource_slots": {
+          "items": {
+            "$ref": "#/$defs/ResourceSlot"
+          },
+          "title": "Resource Slots",
           "type": "array"
         }
       },
@@ -183,6 +197,28 @@
       ],
       "title": "EndpointProtocol",
       "type": "string"
+    },
+    "ExternalServiceContract": {
+      "additionalProperties": false,
+      "description": "An opaque declared external dependency; credentials remain a separate resource.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "ExternalServiceContract",
+      "type": "object"
     },
     "MetricBinding": {
       "additionalProperties": false,
@@ -302,6 +338,134 @@
       "title": "MetricContract",
       "type": "object"
     },
+    "ProviderAlias": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "object_id": {
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "project": {
+          "minLength": 1,
+          "title": "Project",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "project",
+        "object_id"
+      ],
+      "title": "ProviderAlias",
+      "type": "object"
+    },
+    "ResourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "minLength": 1,
+          "title": "Reference",
+          "type": "string"
+        },
+        "resource_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Resource Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "reference"
+      ],
+      "title": "ResourceBinding",
+      "type": "object"
+    },
+    "ResourceKind": {
+      "enum": [
+        "config",
+        "secret",
+        "storage",
+        "external-service"
+      ],
+      "title": "ResourceKind",
+      "type": "string"
+    },
+    "ResourceSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_ref": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contract Ref"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "ResourceSlot",
+      "type": "object"
+    },
+    "SecretReference": {
+      "additionalProperties": false,
+      "description": "A value-free named secret reference resolved through a provider alias.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "provider_alias_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Provider Alias Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider_alias_id"
+      ],
+      "title": "SecretReference",
+      "type": "object"
+    },
     "ServiceInstanceV2": {
       "additionalProperties": false,
       "description": "A host-local instantiation of a v2 service profile.",
@@ -375,10 +539,31 @@
       "title": "Component Edges",
       "type": "array"
     },
+    "external_service_contracts": {
+      "items": {
+        "$ref": "#/$defs/ExternalServiceContract"
+      },
+      "title": "External Service Contracts",
+      "type": "array"
+    },
+    "provider_aliases": {
+      "items": {
+        "$ref": "#/$defs/ProviderAlias"
+      },
+      "title": "Provider Aliases",
+      "type": "array"
+    },
     "schema_version": {
       "const": "infralink.observation/v2",
       "title": "Schema Version",
       "type": "string"
+    },
+    "secret_references": {
+      "items": {
+        "$ref": "#/$defs/SecretReference"
+      },
+      "title": "Secret References",
+      "type": "array"
     },
     "service_instances": {
       "items": {

@@ -6,12 +6,185 @@ from pydantic import ValidationError
 from infralink.observation.models_v2 import EdgeScope
 from infralink.observation.v2 import (
     V2MetricValidationError,
+    V2ResourceValidationError,
     V2TopologyValidationError,
     parse_v2_document,
     plan_v2_metric_contracts,
 )
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_component_resource_slots_bind_typed_inputs_without_secret_values() -> None:
+    parsed = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "external_service_contracts": [{"id": "mariadb-primary", "kind": "mariadb"}],
+            "provider_aliases": [
+                {"id": "bws", "provider": "bws", "project": "infra", "object_id": "archive-worker"}
+            ],
+            "secret_references": [{"id": "archive-worker", "provider_alias_id": "bws"}],
+            "service_profiles": [
+                {
+                    "id": "archive-worker",
+                    "components": [
+                        {
+                            "id": "worker",
+                            "endpoints": [],
+                            "resource_slots": [
+                                {"id": "config", "kind": "config", "required": True},
+                                {"id": "credentials", "kind": "secret", "required": True},
+                                {"id": "data", "kind": "storage", "required": True},
+                                {
+                                    "id": "database",
+                                    "kind": "external-service",
+                                    "contract_ref": "mariadb-primary",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "archive",
+                    "host_id": HOST_ID,
+                    "profile_id": "archive-worker",
+                    "components": [
+                        {
+                            "slot_id": "worker",
+                            "resource_bindings": [
+                                {"resource_id": "config", "reference": "archive-worker.yml"},
+                                {"resource_id": "credentials", "reference": "archive-worker"},
+                                {"resource_id": "data", "reference": "/data/archive"},
+                                {"resource_id": "database", "reference": "mariadb-primary"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    component = parsed.service_profiles[0].components[0]
+    assert [slot.kind.value for slot in component.resource_slots] == [
+        "config",
+        "secret",
+        "storage",
+        "external-service",
+    ]
+
+
+def test_component_resource_slots_reject_missing_required_binding() -> None:
+    with pytest.raises(ValueError, match="required component resource slot is unbound"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "worker",
+                        "components": [
+                            {
+                                "id": "worker",
+                                "endpoints": [],
+                                "resource_slots": [
+                                    {"id": "data", "kind": "storage", "required": True}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "archive",
+                        "host_id": HOST_ID,
+                        "profile_id": "worker",
+                        "components": [{"slot_id": "worker"}],
+                    }
+                ],
+            }
+        )
+
+
+def test_component_secret_resource_rejects_inline_value() -> None:
+    with pytest.raises(V2ResourceValidationError, match="declared value-free secret reference"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "worker",
+                        "components": [
+                            {
+                                "id": "worker",
+                                "endpoints": [],
+                                "resource_slots": [{"id": "credentials", "kind": "secret"}],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "archive",
+                        "host_id": HOST_ID,
+                        "profile_id": "worker",
+                        "components": [
+                            {
+                                "slot_id": "worker",
+                                "resource_bindings": [
+                                    {
+                                        "resource_id": "credentials",
+                                        "reference": "actual-secret-value",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_external_service_resource_requires_declared_contract() -> None:
+    with pytest.raises(V2ResourceValidationError, match="unknown contract"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "worker",
+                        "components": [
+                            {
+                                "id": "worker",
+                                "endpoints": [],
+                                "resource_slots": [
+                                    {
+                                        "id": "database",
+                                        "kind": "external-service",
+                                        "contract_ref": "missing",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "archive",
+                        "host_id": HOST_ID,
+                        "profile_id": "worker",
+                        "components": [
+                            {
+                                "slot_id": "worker",
+                                "resource_bindings": [
+                                    {"resource_id": "database", "reference": "missing"}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
 
 
 def test_component_metric_contract_projects_once_for_every_observer() -> None:

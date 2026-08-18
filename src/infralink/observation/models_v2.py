@@ -33,6 +33,47 @@ class EdgeScope(str, Enum):
     INTER_SERVICE = "inter-service"
 
 
+class ResourceKind(str, Enum):
+    CONFIG = "config"
+    SECRET = "secret"
+    STORAGE = "storage"
+    EXTERNAL_SERVICE = "external-service"
+
+
+class ResourceSlot(StrictModel):
+    id: CanonicalId
+    kind: ResourceKind
+    required: bool = True
+    contract_ref: CanonicalId | None = None
+
+    @model_validator(mode="after")
+    def validate_kind_contract(self) -> ResourceSlot:
+        if self.kind is ResourceKind.EXTERNAL_SERVICE and self.contract_ref is None:
+            raise ValueError("external-service resource slot requires contract_ref")
+        if self.kind is not ResourceKind.EXTERNAL_SERVICE and self.contract_ref is not None:
+            raise ValueError("contract_ref is only valid for external-service resource slots")
+        return self
+
+
+class ResourceBinding(StrictModel):
+    resource_id: CanonicalId
+    reference: Annotated[str, Field(min_length=1)]
+
+
+class ExternalServiceContract(StrictModel):
+    """An opaque declared external dependency; credentials remain a separate resource."""
+
+    id: CanonicalId
+    kind: CanonicalId
+
+
+class SecretReference(StrictModel):
+    """A value-free named secret reference resolved through a provider alias."""
+
+    id: CanonicalId
+    provider_alias_id: CanonicalId
+
+
 def parse_component_endpoint_ref(value: str) -> tuple[str, str, str, str]:
     """Validate and split a canonical host/service/component/endpoint identity."""
     parts = value.split("/")
@@ -57,6 +98,7 @@ class ComponentSlot(StrictModel):
 
     id: CanonicalId
     endpoints: list[Endpoint] = Field(default_factory=list)
+    resource_slots: list[ResourceSlot] = Field(default_factory=list)
     metrics: list[MetricContract] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -66,6 +108,9 @@ class ComponentSlot(StrictModel):
             raise ValueError("duplicate component endpoint id")
         if any(endpoint.address is not None for endpoint in self.endpoints):
             raise ValueError("component endpoint address must be bound by a service instance")
+        resource_ids = [slot.id for slot in self.resource_slots]
+        if len(resource_ids) != len(set(resource_ids)):
+            raise ValueError("duplicate component resource slot id")
         metric_ids = [metric.id for metric in self.metrics]
         if len(metric_ids) != len(set(metric_ids)):
             raise ValueError("duplicate component metric id")
@@ -126,6 +171,7 @@ class ComponentInstance(StrictModel):
 
     slot_id: CanonicalId
     endpoint_bindings: list[EndpointBinding] = Field(default_factory=list)
+    resource_bindings: list[ResourceBinding] = Field(default_factory=list)
     metric_bindings: list[MetricBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -133,6 +179,9 @@ class ComponentInstance(StrictModel):
         endpoint_ids = [binding.endpoint_id for binding in self.endpoint_bindings]
         if len(endpoint_ids) != len(set(endpoint_ids)):
             raise ValueError("duplicate component endpoint binding")
+        resource_ids = [binding.resource_id for binding in self.resource_bindings]
+        if len(resource_ids) != len(set(resource_ids)):
+            raise ValueError("duplicate component resource binding")
         metric_ids = [binding.metric_id for binding in self.metric_bindings]
         if len(metric_ids) != len(set(metric_ids)):
             raise ValueError("duplicate component metric binding")

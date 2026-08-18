@@ -8,10 +8,13 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from infralink.observation.models import Endpoint, EndpointProtocol, StrictModel
+from infralink.observation.models import Endpoint, EndpointProtocol, ProviderAlias, StrictModel
 from infralink.observation.models_v2 import (
     ComponentEdge,
+    ExternalServiceContract,
     MetricContract,
+    ResourceKind,
+    SecretReference,
     ServiceInstanceV2,
     ServiceProfileV2,
 )
@@ -24,6 +27,9 @@ class ObservationV2Document(StrictModel):
     service_profiles: list[ServiceProfileV2] = Field(default_factory=list)
     service_instances: list[ServiceInstanceV2] = Field(default_factory=list)
     component_edges: list[ComponentEdge] = Field(default_factory=list)
+    external_service_contracts: list[ExternalServiceContract] = Field(default_factory=list)
+    provider_aliases: list[ProviderAlias] = Field(default_factory=list)
+    secret_references: list[SecretReference] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_topology_identities(self) -> ObservationV2Document:
@@ -38,6 +44,12 @@ class ObservationV2Document(StrictModel):
         edge_ids = [edge.id for edge in self.component_edges]
         if len(edge_ids) != len(set(edge_ids)):
             raise ValueError("duplicate component edge id")
+        external_service_ids = [contract.id for contract in self.external_service_contracts]
+        if len(external_service_ids) != len(set(external_service_ids)):
+            raise ValueError("duplicate external service contract id")
+        secret_reference_ids = [reference.id for reference in self.secret_references]
+        if len(secret_reference_ids) != len(set(secret_reference_ids)):
+            raise ValueError("duplicate secret reference id")
 
         return self
 
@@ -92,6 +104,28 @@ class V2MetricValidationError(ValueError):
         super().__init__(message)
 
 
+class V2ResourceValidationError(ValueError):
+    """One stable, source-addressable v2 component resource failure."""
+
+    def __init__(
+        self,
+        code: str,
+        host_id: str,
+        instance_id: str,
+        component_id: str,
+        resource_id: str,
+        location_kind: Literal["resource-id", "resource-bindings", "reference"],
+        message: str,
+    ) -> None:
+        self.code, self.host_id, self.instance_id = code, host_id, instance_id
+        self.component_id, self.resource_id, self.location_kind = (
+            component_id,
+            resource_id,
+            location_kind,
+        )
+        super().__init__(message)
+
+
 class PrometheusMetricProjection(StrictModel):
     endpoint_id: str
     protocol: EndpointProtocol
@@ -139,6 +173,19 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
     profiles = {
         profile.id: profile for document in document_list for profile in document.service_profiles
     }
+    external_service_contracts = {
+        contract.id
+        for document in document_list
+        for contract in document.external_service_contracts
+    }
+    provider_aliases = {
+        alias.id for document in document_list for alias in document.provider_aliases
+    }
+    secret_references = {
+        reference.id: reference
+        for document in document_list
+        for reference in document.secret_references
+    }
     endpoint_refs: dict[str, Endpoint] = {}
     edges = [edge for document in document_list for edge in document.component_edges]
     for document in document_list:
@@ -163,6 +210,74 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
                         slot_id=component.slot_id,
                     )
                 metric_contracts = {metric.id: metric for metric in slot.metrics}
+                resource_slots = {resource.id: resource for resource in slot.resource_slots}
+                resource_bindings = {
+                    binding.resource_id: binding for binding in component.resource_bindings
+                }
+                for resource_id in resource_bindings:
+                    if resource_id not in resource_slots:
+                        raise V2ResourceValidationError(
+                            "component-resource-binding-unknown-slot",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            resource_id,
+                            "resource-id",
+                            "component resource binding references an unknown resource slot",
+                        )
+                for resource in slot.resource_slots:
+                    if resource.required and resource.id not in resource_bindings:
+                        raise V2ResourceValidationError(
+                            "component-resource-required-unbound",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            resource.id,
+                            "resource-bindings",
+                            "required component resource slot is unbound",
+                        )
+                    if (
+                        resource.kind is ResourceKind.EXTERNAL_SERVICE
+                        and resource.contract_ref not in external_service_contracts
+                    ):
+                        raise V2ResourceValidationError(
+                            "external-service-resource-unknown-contract",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            resource.id,
+                            "resource-id",
+                            "external-service resource slot references an unknown contract",
+                        )
+                    if resource.kind is ResourceKind.SECRET and resource.id in resource_bindings:
+                        reference = resource_bindings[resource.id].reference
+                        secret_reference = secret_references.get(reference)
+                        if (
+                            secret_reference is None
+                            or secret_reference.provider_alias_id not in provider_aliases
+                        ):
+                            raise V2ResourceValidationError(
+                                "secret-resource-binding-invalid-reference",
+                                instance.host_id,
+                                instance.id,
+                                component.slot_id,
+                                resource.id,
+                                "reference",
+                                "secret resource binding must select a declared value-free secret reference",
+                            )
+                    if resource.kind is ResourceKind.EXTERNAL_SERVICE and (
+                        resource.id in resource_bindings
+                        and resource_bindings[resource.id].reference != resource.contract_ref
+                    ):
+                        raise V2ResourceValidationError(
+                            "external-service-resource-binding-mismatch",
+                            instance.host_id,
+                            instance.id,
+                            component.slot_id,
+                            resource.id,
+                            "reference",
+                            "external-service resource binding must match contract_ref",
+                        )
                 endpoint_ids = {endpoint.id for endpoint in slot.endpoints}
                 endpoint_bindings = {
                     binding.endpoint_id: binding for binding in component.endpoint_bindings
