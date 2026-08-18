@@ -136,9 +136,7 @@ def test_parse_v2_document_rejects_component_edge_to_unknown_endpoint() -> None:
                         "components": [
                             {
                                 "id": "nginx",
-                                "endpoints": [
-                                    {"id": "http", "protocol": "http", "port": 8080}
-                                ],
+                                "endpoints": [{"id": "http", "protocol": "http", "port": 8080}],
                             }
                         ],
                     }
@@ -197,15 +195,11 @@ def test_parse_v2_document_rejects_duplicate_component_edge_semantics() -> None:
                         "components": [
                             {
                                 "id": "nginx",
-                                "endpoints": [
-                                    {"id": "http", "protocol": "http", "port": 8080}
-                                ],
+                                "endpoints": [{"id": "http", "protocol": "http", "port": 8080}],
                             },
                             {
                                 "id": "application",
-                                "endpoints": [
-                                    {"id": "http", "protocol": "http", "port": 8000}
-                                ],
+                                "endpoints": [{"id": "http", "protocol": "http", "port": 8000}],
                             },
                         ],
                     }
@@ -245,15 +239,11 @@ def test_parse_v2_document_rejects_incompatible_component_endpoint_protocols() -
                         "components": [
                             {
                                 "id": "nginx",
-                                "endpoints": [
-                                    {"id": "http", "protocol": "http", "port": 8080}
-                                ],
+                                "endpoints": [{"id": "http", "protocol": "http", "port": 8080}],
                             },
                             {
                                 "id": "application",
-                                "endpoints": [
-                                    {"id": "tls", "protocol": "https", "port": 8443}
-                                ],
+                                "endpoints": [{"id": "tls", "protocol": "https", "port": 8443}],
                             },
                         ],
                     }
