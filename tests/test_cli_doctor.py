@@ -493,6 +493,232 @@ def test_doctor_validate_requires_an_explicit_observation_plan() -> None:
     assert payload["error"]["details"] == {"source": "observation_plan"}
 
 
+def test_doctor_validate_host_compiles_v2_catalog_without_legacy_plan(tmp_path: Path) -> None:
+    registry_root = tmp_path / "registry"
+    host_root = registry_root / "hosts" / HOST_ID
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    HOST_ID: {
+                        "canonical_name": "database.example.com",
+                        "status": "provisioning",
+                        "tailscale_ip": "100.64.0.10",
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    catalog = registry_root / "service-catalog" / "v2"
+    catalog.mkdir(parents=True)
+    catalog_text = f"""\
+schema_version: infralink.observation/v2
+external_service_contracts:
+  - {{id: replica-source, kind: postgresql}}
+service_profiles:
+  - id: database
+    components:
+      - id: postgres
+        endpoints:
+          - {{id: sql, protocol: tcp, port: 5432}}
+        resource_slots:
+          - {{id: replica, kind: external-service, contract_ref: replica-source}}
+        metrics:
+          - {{id: up, endpoint_id: sql, path: /metrics, metric_name: pg_up, unit: state, allowed_labels: [role]}}
+service_instances:
+  - id: database
+    host_id: {HOST_ID}
+    profile_id: database
+    components:
+      - slot_id: postgres
+        endpoint_bindings:
+          - {{endpoint_id: sql, address: 100.64.0.10}}
+        resource_bindings:
+          - {{resource_id: replica, reference: replica-source}}
+        metric_bindings:
+          - {{metric_id: up, labels: {{role: archive}}}}
+"""
+    profiles, _, instances = catalog_text.partition("service_instances:")
+    (catalog / "profiles.yml").write_text(
+        profiles,
+        encoding="utf-8",
+    )
+    (catalog / "instances.yml").write_text(
+        "schema_version: infralink.observation/v2\nservice_instances:" + instances,
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry_root),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "doctor",
+            "host",
+            HOST_ID,
+            "--validate",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["command"]["resolved"]["v2_observation_source"] == str(catalog)
+    assert payload["result"]["declared"]["v2_observation"] == {
+        "status": "valid",
+        "service_instance_count": 1,
+        "component_count": 1,
+        "endpoint_count": 1,
+        "endpoint_binding_count": 1,
+        "resource_binding_count": 1,
+        "metric_contract_count": 1,
+    }
+    assert payload["result"]["coverage"] == {
+        "required": 0,
+        "bound": 0,
+        "unbound": 0,
+        "unsupported": 0,
+        "valid": True,
+    }
+
+
+def test_doctor_validate_host_fails_closed_for_invalid_v2_catalog(tmp_path: Path) -> None:
+    registry_root = tmp_path / "registry"
+    host_root = registry_root / "hosts" / HOST_ID
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    HOST_ID: {
+                        "canonical_name": "database.example.com",
+                        "status": "provisioning",
+                        "tailscale_ip": "100.64.0.10",
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    catalog = registry_root / "service-catalog" / "v2"
+    catalog.mkdir(parents=True)
+    (catalog / "database.yml").write_text(
+        f"""\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: database
+    components:
+      - id: postgres
+        resource_slots:
+          - {{id: required-config, kind: config}}
+service_instances:
+  - id: database
+    host_id: {HOST_ID}
+    profile_id: database
+    components:
+      - slot_id: postgres
+""",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry_root),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "doctor",
+            "host",
+            HOST_ID,
+            "--validate",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["status"] == "unhealthy"
+    assert payload["result"]["reason"] == "v2_observation_contract_invalid"
+    assert payload["result"]["declared"]["v2_observation"] == {
+        "status": "invalid",
+        "diagnostics": [
+            {
+                "code": "component-resource-required-unbound",
+                "severity": "error",
+                "location": "database.yml#document=0/service_instances/0/components/0/resource_bindings",
+                "message": "The v2 component resource binding is invalid.",
+            }
+        ],
+    }
+
+
+def test_doctor_validate_host_rejects_v1_document_in_v2_catalog(tmp_path: Path) -> None:
+    registry_root = tmp_path / "registry"
+    host_root = registry_root / "hosts" / HOST_ID
+    host_root.mkdir(parents=True)
+    (host_root / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    HOST_ID: {
+                        "canonical_name": "database.example.com",
+                        "status": "provisioning",
+                        "tailscale_ip": "100.64.0.10",
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    catalog = registry_root / "service-catalog" / "v2"
+    catalog.mkdir(parents=True)
+    (catalog / "legacy.yml").write_text(
+        "schema_version: infralink.observation/v1\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(registry_root),
+            "--edges",
+            str(EXAMPLES / "edges.yml"),
+            "doctor",
+            "host",
+            HOST_ID,
+            "--validate",
+        ],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["result"]["reason"] == "v2_observation_contract_invalid"
+    assert payload["result"]["declared"]["v2_observation"] == {
+        "status": "invalid",
+        "diagnostics": [
+            {
+                "code": "v2-observation-source-version-invalid",
+                "severity": "error",
+                "location": "legacy.yml#document=0/schema_version",
+                "message": "The V2 observation catalog contains a non-V2 document.",
+            }
+        ],
+    }
+
+
 def test_doctor_observation_inputs_use_environment_defaults_and_flags_override(
     tmp_path: Path,
 ) -> None:

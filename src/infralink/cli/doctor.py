@@ -36,12 +36,15 @@ from infralink.cli.main import (
 from infralink.cli.output import ok_envelope
 from infralink.host_registry_state import HostManifestGitState, inspect_host_manifest
 from infralink.host_transport import SshReadinessTransport
+from infralink.observation.loader import load_observation_documents
+from infralink.observation.v2 import ObservationV2Document
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
 ADAPTER_BINDINGS_ENVVAR = "INFRALINK_ADAPTER_BINDINGS"
 GATUS_URL_ENVVAR = "INFRALINK_GATUS_URL"
 GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
+V2_OBSERVATION_RELATIVE = "service-catalog/v2"
 
 
 def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
@@ -583,6 +586,7 @@ def _emit_result(
     adapter_bindings: Path | None = None,
     gatus_url: str | None = None,
     gatus_token_env: str | None = None,
+    v2_observation_source: Path | None = None,
 ) -> None:
     command = _context_for(path=path)
     if observation_plan is not None:
@@ -594,6 +598,8 @@ def _emit_result(
     command.resolved["gatus_configured"] = gatus_url is not None
     if gatus_token_env is not None:
         command.resolved["gatus_token_env"] = gatus_token_env
+    if v2_observation_source is not None:
+        command.resolved["v2_observation_source"] = str(v2_observation_source)
     _emit(ok_envelope(command, result, actions))
 
 
@@ -883,6 +889,94 @@ def _apply_host_deployment_contract(
     )
 
 
+def _host_v2_observation_contract(source: Path | None, host_id: str) -> dict[str, Any]:
+    """Compile one host's V2 declaration without consulting runtime state."""
+    if source is None:
+        return {"status": "absent"}
+    report = load_observation_documents(source)
+    if not report.valid:
+        return {
+            "status": "invalid",
+            "diagnostics": [
+                {
+                    "code": item.code,
+                    "severity": item.severity,
+                    "location": item.location.render(),
+                    "message": item.message,
+                }
+                for item in report.diagnostics
+            ],
+        }
+    non_v2_documents = [
+        document
+        for document in report.documents
+        if document.schema_version != "infralink.observation/v2"
+    ]
+    if non_v2_documents:
+        return {
+            "status": "invalid",
+            "diagnostics": [
+                {
+                    "code": "v2-observation-source-version-invalid",
+                    "severity": "error",
+                    "location": f"{document.source_path}#document={document.document_index}/schema_version",
+                    "message": "The V2 observation catalog contains a non-V2 document.",
+                }
+                for document in non_v2_documents
+            ],
+        }
+    documents = [
+        ObservationV2Document.model_validate_json(json.dumps(document.to_dict()))
+        for document in report.documents
+        if document.schema_version == "infralink.observation/v2"
+    ]
+    profiles = {
+        profile.id: profile for document in documents for profile in document.service_profiles
+    }
+    instances = [
+        instance
+        for document in documents
+        for instance in document.service_instances
+        if instance.host_id == host_id
+    ]
+    component_count = endpoint_count = endpoint_binding_count = resource_binding_count = 0
+    metric_contract_count = 0
+    for instance in instances:
+        profile = profiles[instance.profile_id]
+        slots = {slot.id: slot for slot in profile.components}
+        for component in instance.components:
+            slot = slots[component.slot_id]
+            component_count += 1
+            endpoint_count += len(slot.endpoints)
+            endpoint_binding_count += len(component.endpoint_bindings)
+            resource_binding_count += len(component.resource_bindings)
+            metric_contract_count += len(slot.metrics)
+    return {
+        "status": "valid",
+        "service_instance_count": len(instances),
+        "component_count": component_count,
+        "endpoint_count": endpoint_count,
+        "endpoint_binding_count": endpoint_binding_count,
+        "resource_binding_count": resource_binding_count,
+        "metric_contract_count": metric_contract_count,
+    }
+
+
+def _apply_host_v2_observation_contract(
+    result: DoctorResult, contract: dict[str, Any]
+) -> DoctorResult:
+    declared = {**result.declared, "v2_observation": contract}
+    if contract["status"] != "invalid":
+        return result.model_copy(update={"declared": declared})
+    return result.model_copy(
+        update={
+            "declared": declared,
+            "status": "unhealthy",
+            "reason": "v2_observation_contract_invalid",
+        }
+    )
+
+
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
     return action(
         "bootstrap-plan",
@@ -939,6 +1033,7 @@ def doctor(
     adapter_bindings = adapter_bindings or registry_companion(
         ctx.registry_path, "operations/observation/adapter-bindings.yml"
     )
+    v2_observation_source = registry_companion(ctx.registry_path, V2_OBSERVATION_RELATIVE)
     if target_type is None:
         if target_ref is not None:
             raise click.UsageError("a target type is required")
@@ -999,12 +1094,15 @@ def doctor(
 
     if target_ref is None:
         raise click.UsageError("a target reference is required")
-    if observation_plan is None:
+    static_v2_host_validation = (
+        declaration_only and target_type == "host" and v2_observation_source is not None
+    )
+    if observation_plan is None and not static_v2_host_validation:
         raise _configuration_required(ctx, "observation_plan")
-    if adapter_bindings is None:
+    if adapter_bindings is None and not static_v2_host_validation:
         raise _configuration_required(ctx, "adapter_bindings")
 
-    plan = _load_mapping(observation_plan, "observation_plan")
+    plan = _load_mapping(observation_plan, "observation_plan") if observation_plan else {}
     bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
     target, declared, target_id = _target(
         ctx,
@@ -1062,6 +1160,10 @@ def doctor(
     host = ctx.registry.get(target_ref) if target_type == "host" else None
     deployment_contract = _host_deployment_contract(ctx, host) if host is not None else None
     result = _apply_host_deployment_contract(result, deployment_contract)
+    if target_type == "host":
+        result = _apply_host_v2_observation_contract(
+            result, _host_v2_observation_contract(v2_observation_source, target_id)
+        )
     if deployment_contract is not None and deployment_contract["status"] != "ready":
         actions.append(
             action(
@@ -1093,6 +1195,7 @@ def doctor(
         adapter_bindings,
         gatus_url,
         gatus_token_env,
+        v2_observation_source,
     )
     return (
         0
