@@ -55,8 +55,8 @@ def _registry_root(ctx: Context, *, for_write: bool = False) -> Path:
     if root is None or not root.is_dir():
         raise _failure(
             "Registry authoring requires a directory registry",
-            "Provide --registry pointing to the registry hosts directory",
-            {"registry": str(root) if root is not None else None},
+            "Provide --registry pointing to a registry checkout root",
+            {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
         )
     resolved = root.resolve()
     runtime_registry = _managed_runtime_registry_root()
