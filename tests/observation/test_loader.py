@@ -233,6 +233,27 @@ def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) ->
     ]
 
 
+def test_duplicate_component_edges_across_v2_documents_report_both_locations(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "a.yml",
+        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+    )
+    _write(
+        tmp_path / "b.yml",
+        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    duplicates = [d for d in report.diagnostics if d.code == "duplicate-object-id"]
+    assert [(d.location.path, d.location.pointer, d.identity) for d in duplicates] == [
+        ("a.yml", "/component_edges/0/id", "component_edges/api-to-db"),
+        ("b.yml", "/component_edges/0/id", "component_edges/api-to-db"),
+    ]
+
+
 def test_service_instance_ids_are_scoped_to_their_host(tmp_path: Path) -> None:
     _write(
         tmp_path / "watchtower.yml",

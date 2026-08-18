@@ -24,10 +24,11 @@ MAX_YAML_EVENTS = 100_000
 MAX_YAML_DOCUMENTS = 100
 MAX_YAML_NESTING_DEPTH = 100
 
-# Identity-bearing top-level collections represented by the v1 source models.
+# Identity-bearing top-level collections represented by the versioned source models.
 _IDENTITY_COLLECTIONS = frozenset(
     {
         "applications",
+        "component_edges",
         "datasource_bindings",
         "dependency_contracts",
         "observation_backends",
