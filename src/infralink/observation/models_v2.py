@@ -92,7 +92,6 @@ class ComponentEdge(StrictModel):
     id: CanonicalId
     source_endpoint_id: str
     target_endpoint_id: str
-    required: bool = True
 
     @model_validator(mode="after")
     def validate_endpoint_references(self) -> ComponentEdge:

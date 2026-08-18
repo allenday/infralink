@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from infralink.observation.models_v2 import EdgeScope
-from infralink.observation.v2 import parse_v2_document
+from infralink.observation.v2 import V2TopologyValidationError, parse_v2_document
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -126,7 +126,7 @@ def test_parse_v2_document_rejects_duplicate_topology_identities(
 
 
 def test_parse_v2_document_rejects_component_edge_to_unknown_endpoint() -> None:
-    with pytest.raises(ValidationError, match="unknown component endpoint"):
+    with pytest.raises(V2TopologyValidationError, match="unknown component endpoint"):
         parse_v2_document(
             {
                 "schema_version": "infralink.observation/v2",
@@ -185,7 +185,7 @@ def test_parse_v2_document_allows_endpointless_components() -> None:
 
 
 def test_parse_v2_document_rejects_duplicate_component_edge_semantics() -> None:
-    with pytest.raises(ValidationError, match="duplicate component edge semantics"):
+    with pytest.raises(V2TopologyValidationError, match="duplicate component edge semantics"):
         parse_v2_document(
             {
                 "schema_version": "infralink.observation/v2",
@@ -229,7 +229,9 @@ def test_parse_v2_document_rejects_duplicate_component_edge_semantics() -> None:
 
 
 def test_parse_v2_document_rejects_incompatible_component_endpoint_protocols() -> None:
-    with pytest.raises(ValidationError, match="incompatible component endpoint protocols"):
+    with pytest.raises(
+        V2TopologyValidationError, match="incompatible component endpoint protocols"
+    ):
         parse_v2_document(
             {
                 "schema_version": "infralink.observation/v2",

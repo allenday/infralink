@@ -96,8 +96,58 @@ component_edges:
 
     assert report.documents == ()
     assert [item.code for item in report.diagnostics] == ["component-edge-unknown-endpoint"]
-    assert report.diagnostics[0].location == SourceLocation("v2.yml", "/", 0)
+    assert report.diagnostics[0].location == SourceLocation("v2.yml", "/component_edges/0", 0)
     assert report.diagnostics[0].next_actions
+
+
+def test_loader_resolves_v2_component_topology_across_split_documents(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "profiles.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8080
+      - id: application
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8000
+""",
+    )
+    _write(
+        tmp_path / "instances.yml",
+        """\
+schema_version: infralink.observation/v2
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components:
+      - slot_id: nginx
+      - slot_id: application
+""",
+    )
+    _write(
+        tmp_path / "edges.yml",
+        """\
+schema_version: infralink.observation/v2
+component_edges:
+  - id: nginx-to-application
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/http
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/api/application/http
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.valid
+    assert len(report.documents) == 3
 
 
 def test_parsed_document_content_is_deeply_immutable_and_can_be_thawed(tmp_path: Path) -> None:
@@ -325,7 +375,14 @@ def test_v1_and_v2_collection_ids_do_not_share_identity_namespace(tmp_path: Path
     )
     _write(
         tmp_path / "v2.yml",
-        "schema_version: infralink.observation/v2\nservice_profiles:\n  - id: nginx\n",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: nginx
+    components:
+      - id: nginx
+        endpoints: []
+""",
     )
 
     report = load_observation_documents(tmp_path)
