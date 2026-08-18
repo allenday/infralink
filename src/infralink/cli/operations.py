@@ -501,7 +501,7 @@ def _manifest_request(
     # Bootstrap-only hosts declare one pinned Tailnet SSH identity alongside the
     # canonical controller bootstrap state.  They deliberately carry no legacy
     # V2 promotion/reconcile fields or operations contract.
-    if "controller_bootstrap" in data:
+    if "controller_bootstrap" in data and "ssh" in data:
         ssh = data.get("ssh")
         address = data.get("tailscale_ip")
         if not isinstance(ssh, dict) or not isinstance(address, str):

@@ -146,6 +146,33 @@ def test_manifest_v2_apply_retains_legacy_transport_fingerprint_until_migrated(
     assert request.host_key_fingerprint == MANIFEST_FINGERPRINT
 
 
+def test_controller_bootstrap_metadata_does_not_disable_legacy_apply_contract(
+    tmp_path: Path,
+) -> None:
+    """Active desired-state metadata can coexist with the pre-manifest apply contract."""
+    from infralink.cli.operations import resolve_apply_request
+
+    registry = _registry_checkout(tmp_path)
+    manifest = registry / HOST_ID / "manifest.yml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "    controller_bootstrap:\n"
+        + "      registry_read_identity_secret:\n"
+        + "        project: infra\n"
+        + "        id: registry-reader\n"
+        + "      registry_repo_url: ssh://git@example.invalid/infra-registry.git\n"
+        + "      registry_ref: refs/heads/main\n",
+        encoding="utf-8",
+    )
+    _git(registry.parent, "add", ".")
+    _git(registry.parent, "commit", "--quiet", "-m", "add controller bootstrap metadata")
+    target = type("Target", (), {"uuid": HOST_ID, "canonical_name": HOST_NAME})()
+
+    request = resolve_apply_request(registry, target)
+
+    assert request.host_key_fingerprint == FINGERPRINT
+
+
 def _release_admission_layout(registry: Path, host_id: str = HOST_ID) -> None:
     operations = registry / host_id / "operations"
     operations.mkdir(exist_ok=True)
