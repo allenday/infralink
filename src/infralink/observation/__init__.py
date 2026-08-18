@@ -68,6 +68,7 @@ from infralink.observation.planner import (
     SourceRef,
     resolve_observation_documents,
 )
+from infralink.observation.v2 import ObservationV2Document, parse_v2_document
 
 __all__ = [
     "Application",
@@ -100,6 +101,7 @@ __all__ = [
     "MetricsEvaluator",
     "ObservationBackend",
     "ObservationDocument",
+    "ObservationV2Document",
     "OperationsView",
     "OperationsViewSection",
     "ProviderAlias",
@@ -135,5 +137,6 @@ __all__ = [
     "canonical_json_bytes",
     "explain",
     "project",
+    "parse_v2_document",
     "validate",
 ]
