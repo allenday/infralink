@@ -146,13 +146,13 @@ def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
     properties: dict[str, Any] = {}
     required: list[str] = []
     for argument in arguments:
-        parameter = arguments_by_name[argument.name]
-        properties[argument.name] = _parameter_schema(parameter)
+        argument_parameter = arguments_by_name[argument.name]
+        properties[argument.name] = _parameter_schema(argument_parameter)
         if argument.required:
             required.append(argument.name)
     for option in options:
-        parameter = _option_parameter(command, option.name)
-        properties[option.name] = _parameter_schema(parameter)
+        option_parameter = _option_parameter(command, option.name)
+        properties[option.name] = _parameter_schema(option_parameter)
         if option.required:
             required.append(option.name)
     if path == ("help",):
