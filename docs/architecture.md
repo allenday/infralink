@@ -72,6 +72,8 @@ protected Woodpecker release step.
 
 ## More Context
 
+- Observable topology, resources, metrics, and readiness rollups:
+  [docs/observable-model.md](../docs/observable-model.md)
 - Setup and PR flow: [CONTRIBUTING.md](../CONTRIBUTING.md)
 - Security boundaries: [docs/security-boundaries.md](security-boundaries.md)
 - v0.2 migration history: [docs/compatibility/v0.2.md](compatibility/v0.2.md)

@@ -157,6 +157,7 @@ templates.
 - Contribution flow and canonical checks: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Agent instructions: [AGENTS.md](AGENTS.md)
 - Architecture/navigation: [docs/architecture.md](docs/architecture.md)
+- Observable topology and metric contracts: [docs/observable-model.md](docs/observable-model.md)
 - Security boundaries: [docs/security-boundaries.md](docs/security-boundaries.md)
 - Release workflow: [docs/release-operator-workflow.md](docs/release-operator-workflow.md)
 - v0.2 migration history: [docs/compatibility/v0.2.md](docs/compatibility/v0.2.md)
