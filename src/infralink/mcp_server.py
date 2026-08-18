@@ -8,6 +8,7 @@ from typing import Any
 
 import click
 from click.testing import CliRunner
+from click.types import BoolParamType, IntParamType
 from mcp.server import InitializationOptions, NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent, Tool
@@ -103,22 +104,55 @@ def _native_paths() -> dict[str, tuple[str, ...]]:
     return paths
 
 
-def _json_type(name: str) -> str:
-    return {"integer": "integer", "boolean": "boolean"}.get(name, "string")
+def _parameter_schema(parameter: click.Parameter) -> dict[str, Any]:
+    """Project Click's parameter type, including bounded integers, to JSON Schema."""
+    parameter_type = parameter.type
+    if isinstance(parameter_type, BoolParamType):
+        return {"type": "boolean"}
+    if isinstance(parameter_type, IntParamType):
+        schema: dict[str, Any] = {"type": "integer"}
+        if isinstance(parameter_type, click.IntRange):
+            if parameter_type.min is not None:
+                schema["minimum"] = parameter_type.min
+            if parameter_type.max is not None:
+                schema["maximum"] = parameter_type.max
+        return schema
+    return {"type": "string"}
+
+
+def _option_parameter(command: click.Command, name: str) -> click.Option:
+    """Find a Click option by its public long-option descriptor name."""
+    for parameter in command.params:
+        if not isinstance(parameter, click.Option):
+            continue
+        long_option = next(
+            (option for option in parameter.opts if option.startswith("--")),
+            parameter.name or "",
+        )
+        if long_option.removeprefix("--").replace("-", "_") == name:
+            return parameter
+    raise ValueError(f"No Click option matches public descriptor: {name}")
 
 
 def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
     command = _command_for_path(path)
     assert command is not None
     arguments, options = _help_parameters(command)
+    arguments_by_name = {
+        parameter.name: parameter
+        for parameter in command.params
+        if isinstance(parameter, click.Argument)
+    }
     properties: dict[str, Any] = {}
     required: list[str] = []
     for argument in arguments:
-        properties[argument.name] = {"type": _json_type(argument.type)}
+        argument_parameter = arguments_by_name[argument.name]
+        properties[argument.name] = _parameter_schema(argument_parameter)
         if argument.required:
             required.append(argument.name)
     for option in options:
-        properties[option.name] = {"type": _json_type(option.type)}
+        option_parameter = _option_parameter(command, option.name)
+        properties[option.name] = _parameter_schema(option_parameter)
         if option.required:
             required.append(option.name)
     if path == ("help",):

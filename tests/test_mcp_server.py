@@ -12,7 +12,7 @@ from mcp import Client, ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from infralink.cli.main import cli
-from infralink.mcp_server import create_server, invoke_cli
+from infralink.mcp_server import _native_paths, _parameter_schema, create_server, invoke_cli
 
 
 def test_help_discovers_native_mcp_server_command() -> None:
@@ -72,6 +72,54 @@ def test_mcp_protocol_discovers_and_calls_infralink_command() -> None:
             bad_doctor = await client.call_tool("infralink_doctor", {"target_type": "host"})
             assert bad_doctor.is_error is True
             assert bad_doctor.structured_content["schema_version"] == "infralink.cli/v1"
+
+    asyncio.run(exercise_protocol())
+
+
+def test_native_mcp_preserves_bounded_integer_option_types() -> None:
+    async def exercise_protocol() -> None:
+        async with Client(create_server()) as client:
+            tools = await client.list_tools()
+            apply = next(tool for tool in tools.tools if tool.name == "infralink_host_apply")
+
+            timeout = apply.input_schema["properties"]["timeout"]
+            assert timeout == {"type": "integer", "minimum": 1, "maximum": 3600}
+
+    asyncio.run(exercise_protocol())
+
+
+def test_native_mcp_preserves_every_click_integer_parameter_type() -> None:
+    from click.types import IntParamType
+
+    from infralink.cli.main import _command_for_path
+
+    for path in _native_paths().values():
+        command = _command_for_path(path)
+        assert command is not None
+        for parameter in command.params:
+            if isinstance(parameter.type, IntParamType):
+                assert _parameter_schema(parameter)["type"] == "integer"
+
+
+def test_native_mcp_returns_a_canonical_usage_envelope_for_invalid_bounded_integer() -> None:
+    async def exercise_protocol() -> None:
+        async with Client(create_server()) as client:
+            result = await client.call_tool(
+                "infralink_host_apply",
+                {"host_ref": "relayos-staging", "dry_run": True, "timeout": "60s"},
+            )
+
+            assert result.is_error is True
+            assert result.structured_content["schema_version"] == "infralink.cli/v1"
+            assert result.structured_content["error"]["code"] == "usage_error"
+            assert result.structured_content["next_actions"] == [
+                {
+                    "rel": "help",
+                    "command": "infralink --output json help host apply",
+                    "description": "Show command usage",
+                    "safe": True,
+                }
+            ]
 
     asyncio.run(exercise_protocol())
 

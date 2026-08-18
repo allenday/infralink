@@ -35,7 +35,7 @@ def assert_schema(payload: dict, name: str) -> None:
 
 def test_root_discovers_canonical_commands_as_json() -> None:
     payload = payload_for()
-    assert payload["result"]["version"] == "0.6.1"
+    assert payload["result"]["version"] == "0.6.2"
     assert {"help", "version", "host", "service", "edge"} <= {
         item["name"] for item in payload["result"]["commands"]
     }
@@ -111,14 +111,14 @@ def test_host_detail_help_is_live_and_command_is_registered() -> None:
 def test_version_is_json() -> None:
     payload = payload_for("version")
     assert payload["result"] == {
-        "version": "0.6.1",
+        "version": "0.6.2",
         "cli_schema_version": "infralink.cli/v1",
     }
 
 
 def test_click_version_alias_is_json() -> None:
     payload = payload_for("--version")
-    assert payload["result"]["version"] == "0.6.1"
+    assert payload["result"]["version"] == "0.6.2"
     assert payload["command"]["raw"] == "infralink --output json --version"
 
 
@@ -140,6 +140,20 @@ def test_malformed_invocations_are_json_usage_errors(
     assert result.stderr == ""
     assert result.output.count("\n") == 1
     assert payload["error"]["code"] == expected_code
+
+
+def test_unknown_command_usage_action_returns_to_root_help() -> None:
+    result = invoke("not-a-command")
+    payload = json.loads(result.output)
+
+    assert payload["next_actions"] == [
+        {
+            "rel": "help",
+            "command": "infralink --output json help",
+            "description": "Show command usage",
+            "safe": True,
+        }
+    ]
 
 
 def test_missing_registry_is_json_input_error() -> None:
@@ -392,7 +406,7 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
 
     following = invoke("--version")
     assert following.exit_code == 0
-    assert json.loads(following.output)["result"]["version"] == "0.6.1"
+    assert json.loads(following.output)["result"]["version"] == "0.6.2"
 
 
 def raise_system_exit(code: object) -> None:
