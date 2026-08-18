@@ -25,6 +25,10 @@
 5. An edge always targets a component endpoint. A required-edge failure affects its source service readiness; it does not make the target unhealthy by implication.
 6. Node exporter and cAdvisor remain host-baseline capabilities. They are not invented as RelayOS application components.
 7. Registry observation adoption is data-only until static plan parity, observer configuration, and live evidence are independently reviewed. Existing legacy checks remain the operational fallback until that review succeeds.
+8. Incremental adoption may aggregate separately compiled v1 and v2 plans at
+   generic read-only boundaries such as Doctor. Aggregation must preserve each
+   schema's semantics and qualified identities, and must not silently convert
+   v1 component-profile meaning into v2 service/component meaning.
 
 ---
 
@@ -73,7 +77,13 @@ In \`models.py\`, add separate v2-only types instead of changing existing v1 cla
 
 Enforce stable uniqueness at the narrowest correct scope: service component slots per profile, component IDs per service instance, endpoint IDs per component profile, and resource bindings per component instance.
 
-In \`loader.py\`, recognize both explicit schema versions, keep separate identity collection maps for v1 and v2, and reject documents that mix the two versions in one planning invocation unless an explicit future cross-version adapter is introduced.
+In \`loader.py\`, recognize both explicit schema versions and keep separate
+identity collection maps for v1 and v2. The planner must reject a source batch
+that mixes v1 and v2 documents in one planning invocation, because there is no
+implicit cross-version conversion step. That rejection does not prevent a
+higher-level read-only consumer from invoking the planner separately for v1 and
+v2 sources and aggregating the resulting plans under the explicit coexistence
+contract above.
 
 **Step 4: Run the focused test to verify it passes**
 
@@ -238,7 +248,7 @@ Expected: FAIL until the generic #173 readiness implementation can consume a v2 
 
 Coordinate the exact files with the owner of #173, then:
 
-- feed both v1 and v2 compiled plans through the existing \`doctor host --validate\` boundary;
+- feed separately compiled v1 and v2 plans through the existing \`doctor host --validate\` boundary, preserving each plan's schema semantics and qualified identities;
 - evaluate v2 topology at component/resource/endpoint/edge granularity;
 - report static contract validity separately from live evidence status;
 - preserve bounded, secret-free findings and the existing CLI envelope;
