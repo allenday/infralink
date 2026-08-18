@@ -3,7 +3,7 @@
 Historical issue: `#37`.
 
 This document describes local release contract inspection and the protected
-Woodpecker publication boundary as of Infralink `0.5.6`. It is not a runbook for
+Woodpecker publication boundary as of Infralink `0.5.7`. It is not a runbook for
 publishing from a development checkout.
 
 Registry YAML is the source of intent. Operators continue to edit profiles,

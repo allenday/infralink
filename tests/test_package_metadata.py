@@ -28,8 +28,8 @@ def load_pyproject() -> dict[str, object]:
         return tomllib.load(pyproject_file)
 
 
-def test_package_version_is_0_5_6() -> None:
-    assert infralink.__version__ == "0.5.6"
+def test_package_version_is_0_5_7() -> None:
+    assert infralink.__version__ == "0.5.7"
 
 
 def test_project_uses_dynamic_version() -> None:
