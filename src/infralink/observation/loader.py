@@ -20,6 +20,7 @@ from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceL
 from infralink.observation.v2 import (
     ObservationV2Document,
     V2InstanceTopologyValidationError,
+    V2MetricValidationError,
     V2TopologyValidationError,
     validate_v2_documents,
 )
@@ -374,6 +375,29 @@ def _validate_v2_source_set(
                 "Repair the referenced service profile or component slot before loading.",
             ),
         )
+    except V2MetricValidationError as error:
+        location = _v2_metric_error_location(v2_documents, error)
+        next_actions = {
+            "component-endpoint-binding-unknown-endpoint": (
+                "Bind only declared component endpoints at the service instance.",
+            ),
+            "component-metric-source-endpoint-unbound": (
+                "Bind an address for the component metric source endpoint.",
+            ),
+            "component-metric-binding-unknown-contract": (
+                "Bind a metric declared by the selected component profile.",
+            ),
+        }.get(error.code, ("Bind only labels allowed by the component metric contract.",))
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 component metric binding is invalid.",
+            location=location,
+            identity=(
+                f"service_instances/{error.host_id}/{error.instance_id}/{error.component_id}"
+            ),
+            next_actions=next_actions,
+        )
     except ValueError:
         diagnostic = Diagnostic(
             code="v2-component-topology-invalid",
@@ -444,6 +468,65 @@ def _v2_service_instance_location(
                 document.document_index,
             )
     return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
+
+
+def _v2_metric_error_location(
+    documents: list[ObservationDocument], error: V2MetricValidationError
+) -> SourceLocation:
+    for document in documents:
+        instances = document.data.get("service_instances", ())
+        if not isinstance(instances, tuple):
+            continue
+        for instance_index, instance in enumerate(instances):
+            if not isinstance(instance, Mapping):
+                continue
+            if instance.get("host_id") != error.host_id or instance.get("id") != error.instance_id:
+                continue
+            components = instance.get("components", ())
+            if not isinstance(components, tuple):
+                break
+            for component_index, component in enumerate(components):
+                if (
+                    not isinstance(component, Mapping)
+                    or component.get("slot_id") != error.component_id
+                ):
+                    continue
+                component_pointer = (
+                    f"/service_instances/{instance_index}/components/{component_index}"
+                )
+                if error.location_kind == "component":
+                    return SourceLocation(
+                        document.source_path,
+                        f"{component_pointer}/endpoint_bindings",
+                        document.document_index,
+                    )
+                if error.location_kind == "endpoint-binding":
+                    bindings = component.get("endpoint_bindings", ())
+                    if isinstance(bindings, tuple):
+                        for binding_index, binding in enumerate(bindings):
+                            if (
+                                isinstance(binding, Mapping)
+                                and binding.get("endpoint_id") == error.metric_id
+                            ):
+                                return SourceLocation(
+                                    document.source_path,
+                                    f"{component_pointer}/endpoint_bindings/{binding_index}/endpoint_id",
+                                    document.document_index,
+                                )
+                bindings = component.get("metric_bindings", ())
+                if not isinstance(bindings, tuple):
+                    break
+                for binding_index, binding in enumerate(bindings):
+                    if isinstance(binding, Mapping) and binding.get("metric_id") == error.metric_id:
+                        field = "metric_id" if error.location_kind == "metric-id" else "labels"
+                        return SourceLocation(
+                            document.source_path,
+                            f"{component_pointer}/metric_bindings/{binding_index}/{field}",
+                            document.document_index,
+                        )
+    return _v2_service_instance_location(
+        documents, error.host_id, error.instance_id, error.component_id
+    )
 
 
 def _count_attempted_documents(raw: bytes) -> int:

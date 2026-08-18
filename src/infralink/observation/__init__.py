@@ -61,6 +61,7 @@ from infralink.observation.models import (
     WaiverScope,
     WaiverScopeKind,
 )
+from infralink.observation.models_v2 import MetricBinding, MetricContract
 from infralink.observation.planner import (
     Plan,
     PlanReport,
@@ -68,7 +69,12 @@ from infralink.observation.planner import (
     SourceRef,
     resolve_observation_documents,
 )
-from infralink.observation.v2 import ObservationV2Document, parse_v2_document
+from infralink.observation.v2 import (
+    ObservationV2Document,
+    PlannedMetricContract,
+    parse_v2_document,
+    plan_v2_metric_contracts,
+)
 
 __all__ = [
     "Application",
@@ -99,6 +105,8 @@ __all__ = [
     "MetricCondition",
     "MetricsCapability",
     "MetricsEvaluator",
+    "MetricBinding",
+    "MetricContract",
     "ObservationBackend",
     "ObservationDocument",
     "ObservationV2Document",
@@ -130,6 +138,7 @@ __all__ = [
     "Plan",
     "PlanReport",
     "PlanValidationError",
+    "PlannedMetricContract",
     "SourceRef",
     "resolve_observation_documents",
     "canonical_digest",
@@ -138,5 +147,6 @@ __all__ = [
     "explain",
     "project",
     "parse_v2_document",
+    "plan_v2_metric_contracts",
     "validate",
 ]

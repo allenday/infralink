@@ -4,9 +4,239 @@ import pytest
 from pydantic import ValidationError
 
 from infralink.observation.models_v2 import EdgeScope
-from infralink.observation.v2 import V2TopologyValidationError, parse_v2_document
+from infralink.observation.v2 import (
+    V2MetricValidationError,
+    V2TopologyValidationError,
+    parse_v2_document,
+    plan_v2_metric_contracts,
+)
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_component_metric_contract_projects_once_for_every_observer() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "web",
+                    "components": [
+                        {
+                            "id": "nginx",
+                            "endpoints": [
+                                {
+                                    "id": "metrics",
+                                    "protocol": "http",
+                                    "port": 9113,
+                                }
+                            ],
+                            "metrics": [
+                                {
+                                    "id": "requests",
+                                    "endpoint_id": "metrics",
+                                    "path": "/metrics",
+                                    "metric_name": "nginx_http_requests_total",
+                                    "unit": "requests",
+                                    "allowed_labels": ["environment"],
+                                    "health_query": "sum(nginx_http_requests_total)",
+                                    "condition": {"operator": "gte", "threshold": 0},
+                                    "readiness_required": True,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "edge",
+                    "host_id": HOST_ID,
+                    "profile_id": "web",
+                    "components": [
+                        {
+                            "slot_id": "nginx",
+                            "endpoint_bindings": [
+                                {"endpoint_id": "metrics", "address": "100.64.0.10"}
+                            ],
+                            "metric_bindings": [
+                                {
+                                    "metric_id": "requests",
+                                    "labels": {"environment": "production"},
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "id": "edge",
+                    "host_id": "22222222-2222-4222-8222-222222222222",
+                    "profile_id": "web",
+                    "components": [
+                        {
+                            "slot_id": "nginx",
+                            "endpoint_bindings": [
+                                {"endpoint_id": "metrics", "address": "100.64.0.11"}
+                            ],
+                            "metric_bindings": [
+                                {
+                                    "metric_id": "requests",
+                                    "labels": {"environment": "production"},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    projections = plan_v2_metric_contracts((document,))
+
+    assert len(projections) == 2
+    projection = next(item for item in projections if item.id.startswith(HOST_ID))
+    assert projection.id == f"{HOST_ID}/edge/nginx/requests"
+    assert projection.prometheus.endpoint_id == f"{HOST_ID}/edge/nginx/metrics"
+    assert (
+        projection.prometheus.protocol,
+        projection.prometheus.address,
+        projection.prometheus.port,
+    ) == (
+        "http",
+        "100.64.0.10",
+        9113,
+    )
+    assert projection.prometheus.path == "/metrics"
+    assert projection.prometheus.labels == {"environment": "production"}
+    assert projection.gatus.endpoint_id == f"{HOST_ID}/edge/nginx/metrics"
+    assert (projection.gatus.protocol, projection.gatus.address, projection.gatus.port) == (
+        "http",
+        "100.64.0.10",
+        9113,
+    )
+    assert projection.gatus.path == "/metrics"
+    assert projection.grafana.metric_name == "nginx_http_requests_total"
+    assert projection.grafana.unit == "requests"
+    assert projection.grafana.labels == {"environment": "production"}
+    assert projection.doctor.required is True
+    assert projection.doctor.query == "sum(nginx_http_requests_total)"
+    assert projection.doctor.operator == "gte"
+    assert projection.doctor.threshold == 0
+    assert {item.prometheus.address for item in projections} == {"100.64.0.10", "100.64.0.11"}
+
+
+def test_component_metric_contract_rejects_instance_label_outside_contract() -> None:
+    with pytest.raises(ValueError, match="metric label is not allowed by component contract"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "web",
+                        "components": [
+                            {
+                                "id": "nginx",
+                                "endpoints": [{"id": "metrics", "protocol": "http", "port": 9113}],
+                                "metrics": [
+                                    {
+                                        "id": "requests",
+                                        "endpoint_id": "metrics",
+                                        "path": "/metrics",
+                                        "metric_name": "nginx_http_requests_total",
+                                        "unit": "requests",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "edge",
+                        "host_id": HOST_ID,
+                        "profile_id": "web",
+                        "components": [
+                            {
+                                "slot_id": "nginx",
+                                "endpoint_bindings": [
+                                    {"endpoint_id": "metrics", "address": "100.64.0.10"}
+                                ],
+                                "metric_bindings": [
+                                    {"metric_id": "requests", "labels": {"secret": "value"}}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_readiness_required_metric_requires_evaluable_threshold() -> None:
+    with pytest.raises(ValidationError, match="readiness-required metric"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "web",
+                        "components": [
+                            {
+                                "id": "nginx",
+                                "endpoints": [{"id": "metrics", "protocol": "http", "port": 9113}],
+                                "metrics": [
+                                    {
+                                        "id": "requests",
+                                        "endpoint_id": "metrics",
+                                        "path": "/metrics",
+                                        "metric_name": "nginx_http_requests_total",
+                                        "unit": "requests",
+                                        "readiness_required": True,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_component_metric_contract_requires_instance_source_address_binding() -> None:
+    with pytest.raises(V2MetricValidationError, match="source endpoint has no instance address"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "web",
+                        "components": [
+                            {
+                                "id": "nginx",
+                                "endpoints": [{"id": "metrics", "protocol": "http", "port": 9113}],
+                                "metrics": [
+                                    {
+                                        "id": "requests",
+                                        "endpoint_id": "metrics",
+                                        "path": "/metrics",
+                                        "metric_name": "nginx_http_requests_total",
+                                        "unit": "requests",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "edge",
+                        "host_id": HOST_ID,
+                        "profile_id": "web",
+                        "components": [{"slot_id": "nginx"}],
+                    }
+                ],
+            }
+        )
 
 
 def test_parse_v2_document_keeps_component_endpoint_edges_typed() -> None:

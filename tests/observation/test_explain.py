@@ -22,11 +22,11 @@ def test_explain_catalog_covers_every_declared_emitted_code() -> None:
 
 
 def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
-    from infralink.observation import DIAGNOSTIC_CODES, api, loader, planner
+    from infralink.observation import DIAGNOSTIC_CODES, api, loader, planner, v2
     from infralink.observation.codes import DUPLICATE_IDENTITY_KINDS, V2_DIAGNOSTIC_CODES
 
     emitted: set[str] = set()
-    for module in (api, loader, planner):
+    for module in (api, loader, planner, v2):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -40,10 +40,28 @@ def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
                     emitted.add(keyword.value.value)
             if (
                 isinstance(node.func, ast.Name)
-                and node.func.id in {"_add", "_finding", "_argument_diagnostic"}
+                and node.func.id
+                in {
+                    "_add",
+                    "_finding",
+                    "_argument_diagnostic",
+                    "V2TopologyValidationError",
+                    "V2InstanceTopologyValidationError",
+                    "V2MetricValidationError",
+                }
                 and len(node.args) >= 2
             ):
-                code_arg = node.args[1] if node.func.id != "_argument_diagnostic" else node.args[0]
+                code_arg = (
+                    node.args[0]
+                    if node.func.id
+                    in {
+                        "_argument_diagnostic",
+                        "V2TopologyValidationError",
+                        "V2InstanceTopologyValidationError",
+                        "V2MetricValidationError",
+                    }
+                    else node.args[1]
+                )
                 if isinstance(code_arg, ast.Constant) and isinstance(code_arg.value, str):
                     emitted.add(code_arg.value)
 

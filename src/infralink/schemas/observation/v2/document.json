@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "ComparisonOperator": {
+      "enum": [
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "eq",
+        "ne"
+      ],
+      "title": "ComparisonOperator",
+      "type": "string"
+    },
+    "ComponentEdge": {
+      "additionalProperties": false,
+      "description": "An edge whose ownership is derived from its component endpoint identities.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "source_endpoint_id": {
+          "title": "Source Endpoint Id",
+          "type": "string"
+        },
+        "target_endpoint_id": {
+          "title": "Target Endpoint Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_endpoint_id",
+        "target_endpoint_id"
+      ],
+      "title": "ComponentEdge",
+      "type": "object"
+    },
+    "ComponentInstance": {
+      "additionalProperties": false,
+      "description": "One realized component slot in a service instance.",
+      "properties": {
+        "endpoint_bindings": {
+          "items": {
+            "$ref": "#/$defs/EndpointBinding"
+          },
+          "title": "Endpoint Bindings",
+          "type": "array"
+        },
+        "metric_bindings": {
+          "items": {
+            "$ref": "#/$defs/MetricBinding"
+          },
+          "title": "Metric Bindings",
+          "type": "array"
+        },
+        "slot_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Slot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot_id"
+      ],
+      "title": "ComponentInstance",
+      "type": "object"
+    },
+    "ComponentSlot": {
+      "additionalProperties": false,
+      "description": "A component template owned by a service profile.",
+      "properties": {
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          },
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricContract"
+          },
+          "title": "Metrics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ComponentSlot",
+      "type": "object"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "A generic named network endpoint exposed by a service.",
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/EndpointProtocol"
+        }
+      },
+      "required": [
+        "id",
+        "protocol",
+        "port"
+      ],
+      "title": "Endpoint",
+      "type": "object"
+    },
+    "EndpointBinding": {
+      "additionalProperties": false,
+      "description": "Deployment-specific address for one component endpoint.",
+      "properties": {
+        "address": {
+          "minLength": 1,
+          "title": "Address",
+          "type": "string"
+        },
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint_id",
+        "address"
+      ],
+      "title": "EndpointBinding",
+      "type": "object"
+    },
+    "EndpointProtocol": {
+      "enum": [
+        "tcp",
+        "http",
+        "https",
+        "smtp",
+        "irc",
+        "postgresql",
+        "redis"
+      ],
+      "title": "EndpointProtocol",
+      "type": "string"
+    },
+    "MetricBinding": {
+      "additionalProperties": false,
+      "description": "Deployment-specific labels for one declared component metric.",
+      "properties": {
+        "labels": {
+          "patternProperties": {
+            "^[a-zA-Z_][a-zA-Z0-9_]*$": {
+              "type": "string"
+            }
+          },
+          "title": "Labels",
+          "type": "object"
+        },
+        "metric_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Metric Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric_id"
+      ],
+      "title": "MetricBinding",
+      "type": "object"
+    },
+    "MetricCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/ComparisonOperator"
+        },
+        "threshold": {
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "operator",
+        "threshold"
+      ],
+      "title": "MetricCondition",
+      "type": "object"
+    },
+    "MetricContract": {
+      "additionalProperties": false,
+      "description": "One component-owned application metric and readiness assertion.",
+      "properties": {
+        "allowed_labels": {
+          "items": {
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Allowed Labels",
+          "type": "array"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "health_query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Health Query"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metric_name": {
+          "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+          "title": "Metric Name",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "readiness_required": {
+          "default": false,
+          "title": "Readiness Required",
+          "type": "boolean"
+        },
+        "unit": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "endpoint_id",
+        "path",
+        "metric_name",
+        "unit"
+      ],
+      "title": "MetricContract",
+      "type": "object"
+    },
+    "ServiceInstanceV2": {
+      "additionalProperties": false,
+      "description": "A host-local instantiation of a v2 service profile.",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentInstance"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "host_id": {
+          "title": "Host Id",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "profile_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Profile Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "host_id",
+        "profile_id",
+        "components"
+      ],
+      "title": "ServiceInstanceV2",
+      "type": "object"
+    },
+    "ServiceProfileV2": {
+      "additionalProperties": false,
+      "description": "A reusable service profile composed from component slots.",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentSlot"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "components"
+      ],
+      "title": "ServiceProfileV2",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One strict observation v2 source document, without planning or projection.",
+  "properties": {
+    "component_edges": {
+      "items": {
+        "$ref": "#/$defs/ComponentEdge"
+      },
+      "title": "Component Edges",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "infralink.observation/v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "service_instances": {
+      "items": {
+        "$ref": "#/$defs/ServiceInstanceV2"
+      },
+      "title": "Service Instances",
+      "type": "array"
+    },
+    "service_profiles": {
+      "items": {
+        "$ref": "#/$defs/ServiceProfileV2"
+      },
+      "title": "Service Profiles",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "ObservationV2Document",
+  "type": "object"
+}

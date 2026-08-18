@@ -21,9 +21,10 @@ from infralink.observation.models import (
     ServiceProfile,
     Waiver,
 )
+from infralink.observation.v2 import ObservationV2Document
 
 ROOT = Path(__file__).parents[1]
-OUTPUT = ROOT / "src/infralink/schemas/observation/v1"
+OUTPUT = ROOT / "src/infralink/schemas/observation"
 Version = Literal["infralink.observation/v1"]
 
 
@@ -78,18 +79,23 @@ def render_schemas() -> dict[str, str]:
     for name, model in MODELS.items():
         schema = model.model_json_schema()
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        rendered[f"{name}.json"] = json.dumps(schema, indent=2, sort_keys=True) + "\n"
+        rendered[f"v1/{name}.json"] = json.dumps(schema, indent=2, sort_keys=True) + "\n"
+    v2_schema = ObservationV2Document.model_json_schema()
+    v2_schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    rendered["v2/document.json"] = json.dumps(v2_schema, indent=2, sort_keys=True) + "\n"
     return rendered
 
 
 def write_schemas(output: Path = OUTPUT) -> None:
     output.mkdir(parents=True, exist_ok=True)
     rendered = render_schemas()
-    for path in output.glob("*.json"):
-        if path.name not in rendered:
+    for path in output.rglob("*.json"):
+        if path.relative_to(output).as_posix() not in rendered:
             path.unlink()
     for name, content in rendered.items():
-        (output / name).write_text(content, encoding="utf-8")
+        path = output / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
 
 if __name__ == "__main__":

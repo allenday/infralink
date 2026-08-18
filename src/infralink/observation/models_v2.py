@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Annotated
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, StringConstraints, TypeAdapter, field_validator, model_validator
 
-from infralink.observation.models import CanonicalId, Endpoint, HostId, StrictModel
+from infralink.observation.models import (
+    CanonicalId,
+    Endpoint,
+    HostId,
+    MetricCondition,
+    StrictModel,
+)
 
 _canonical_id_adapter = TypeAdapter(CanonicalId)
 _host_id_adapter = TypeAdapter(HostId)
+
+PrometheusMetricName = Annotated[
+    str,
+    StringConstraints(pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"),
+]
+PrometheusLabelName = Annotated[
+    str,
+    StringConstraints(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"),
+]
 
 
 class EdgeScope(str, Enum):
@@ -41,19 +57,86 @@ class ComponentSlot(StrictModel):
 
     id: CanonicalId
     endpoints: list[Endpoint] = Field(default_factory=list)
+    metrics: list[MetricContract] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_endpoint_ids(self) -> ComponentSlot:
         endpoint_ids = [endpoint.id for endpoint in self.endpoints]
         if len(endpoint_ids) != len(set(endpoint_ids)):
             raise ValueError("duplicate component endpoint id")
+        if any(endpoint.address is not None for endpoint in self.endpoints):
+            raise ValueError("component endpoint address must be bound by a service instance")
+        metric_ids = [metric.id for metric in self.metrics]
+        if len(metric_ids) != len(set(metric_ids)):
+            raise ValueError("duplicate component metric id")
+        endpoint_id_set = set(endpoint_ids)
+        for metric in self.metrics:
+            if metric.endpoint_id not in endpoint_id_set:
+                raise ValueError("component metric references an unknown endpoint")
         return self
+
+
+class MetricContract(StrictModel):
+    """One component-owned application metric and readiness assertion."""
+
+    id: CanonicalId
+    endpoint_id: CanonicalId
+    path: str
+    metric_name: PrometheusMetricName
+    unit: CanonicalId
+    allowed_labels: list[PrometheusLabelName] = Field(default_factory=list)
+    health_query: str | None = None
+    condition: MetricCondition | None = None
+    readiness_required: bool = False
+
+    @field_validator("path")
+    @classmethod
+    def require_absolute_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("metric scrape path must be absolute")
+        return value
+
+    @model_validator(mode="after")
+    def validate_metric_health_contract(self) -> MetricContract:
+        if len(self.allowed_labels) != len(set(self.allowed_labels)):
+            raise ValueError("duplicate allowed metric label")
+        if (self.health_query is None) != (self.condition is None):
+            raise ValueError("metric health query and condition must be declared together")
+        if self.readiness_required and self.health_query is None:
+            raise ValueError("readiness-required metric must declare health query and condition")
+        return self
+
+
+class EndpointBinding(StrictModel):
+    """Deployment-specific address for one component endpoint."""
+
+    endpoint_id: CanonicalId
+    address: Annotated[str, Field(min_length=1)]
+
+
+class MetricBinding(StrictModel):
+    """Deployment-specific labels for one declared component metric."""
+
+    metric_id: CanonicalId
+    labels: dict[PrometheusLabelName, str] = Field(default_factory=dict)
 
 
 class ComponentInstance(StrictModel):
     """One realized component slot in a service instance."""
 
     slot_id: CanonicalId
+    endpoint_bindings: list[EndpointBinding] = Field(default_factory=list)
+    metric_bindings: list[MetricBinding] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def reject_duplicate_metric_bindings(self) -> ComponentInstance:
+        endpoint_ids = [binding.endpoint_id for binding in self.endpoint_bindings]
+        if len(endpoint_ids) != len(set(endpoint_ids)):
+            raise ValueError("duplicate component endpoint binding")
+        metric_ids = [binding.metric_id for binding in self.metric_bindings]
+        if len(metric_ids) != len(set(metric_ids)):
+            raise ValueError("duplicate component metric binding")
+        return self
 
 
 class ServiceProfileV2(StrictModel):
