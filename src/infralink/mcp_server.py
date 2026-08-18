@@ -6,13 +6,14 @@ import asyncio
 import json
 from typing import Any
 
+import click
 from click.testing import CliRunner
 from mcp.server import InitializationOptions, NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent, Tool
 
 from infralink import __version__
-from infralink.cli.main import cli
+from infralink.cli.main import _command_for_path, _help_parameters, cli
 
 _TOOL_NAME = "infralink_command"
 _OUTPUT_SCHEMA: dict[str, Any] = {
@@ -84,20 +85,119 @@ def _tool() -> Tool:
     )
 
 
+def _native_paths() -> dict[str, tuple[str, ...]]:
+    paths: dict[str, tuple[str, ...]] = {}
+
+    def visit(command: click.Command, path: tuple[str, ...]) -> None:
+        if isinstance(command, click.Group):
+            context = click.Context(command)
+            for child_name in command.list_commands(context):
+                child = command.get_command(context, child_name)
+                if child is not None:
+                    visit(child, (*path, child_name))
+            return
+        if path != ("mcp", "serve"):
+            paths[f"infralink_{'_'.join(path).replace('-', '_')}"] = path
+
+    visit(cli, ())
+    return paths
+
+
+def _json_type(name: str) -> str:
+    return {"integer": "integer", "boolean": "boolean"}.get(name, "string")
+
+
+def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
+    command = _command_for_path(path)
+    assert command is not None
+    arguments, options = _help_parameters(command)
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for argument in arguments:
+        properties[argument.name] = {"type": _json_type(argument.type)}
+        if argument.required:
+            required.append(argument.name)
+    for option in options:
+        properties[option.name] = {"type": _json_type(option.type)}
+        if option.required:
+            required.append(option.name)
+    if path == ("help",):
+        properties = {"path": {"type": "array", "items": {"type": "string"}}}
+        required = []
+    return Tool(
+        name=name,
+        title="Infralink " + " ".join(path),
+        description=command.help or command.short_help or "",
+        input_schema={
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        },
+        output_schema=_OUTPUT_SCHEMA,
+    )
+
+
+def _native_tools() -> list[Tool]:
+    return [_native_tool(name, path) for name, path in _native_paths().items()]
+
+
+def _native_argv(name: str, arguments: Any) -> list[str]:
+    if not isinstance(arguments, dict):
+        raise ValueError("MCP tool arguments must be an object")
+    path = _native_paths().get(name)
+    if path is None:
+        raise ValueError(f"Unknown tool: {name}")
+    command = _command_for_path(path)
+    assert command is not None
+    if path == ("help",):
+        help_path = arguments.get("path", [])
+        if not isinstance(help_path, list) or any(
+            not isinstance(item, str) or not item for item in help_path
+        ):
+            raise ValueError("path must be an array of non-empty strings")
+        return ["help", *help_path]
+    positional, options = _help_parameters(command)
+    allowed = {item.name for item in positional} | {item.name for item in options}
+    unknown = set(arguments) - allowed
+    if unknown:
+        raise ValueError(f"Unknown tool arguments: {', '.join(sorted(unknown))}")
+    argv: list[str] = list(path)
+    for argument in positional:
+        value = arguments.get(argument.name)
+        if argument.required and (not isinstance(value, str) or not value):
+            raise ValueError(f"{argument.name} must be a non-empty string")
+        if value is not None:
+            argv.append(str(value))
+    for option in options:
+        value = arguments.get(option.name)
+        if option.required and value is None:
+            raise ValueError(f"{option.name} is required")
+        if isinstance(value, bool):
+            if value:
+                argv.append("--" + option.name.replace("_", "-"))
+        elif value is not None:
+            argv.extend(["--" + option.name.replace("_", "-"), str(value)])
+    return argv
+
+
 async def _list_tools(_context: ServerRequestContext[Any], _params: Any) -> ListToolsResult:
-    return ListToolsResult(tools=[_tool()])
+    return ListToolsResult(tools=[_tool(), *_native_tools()])
 
 
 async def _call_tool(
     _context: ServerRequestContext[Any], params: CallToolRequestParams
 ) -> CallToolResult:
-    if params.name != _TOOL_NAME:
+    if params.name != _TOOL_NAME and params.name not in _native_paths():
         return CallToolResult(
             content=[TextContent(text=f"Unknown tool: {params.name}")],
             is_error=True,
         )
     try:
-        argv, stdin = _arguments(params.arguments)
+        if params.name == _TOOL_NAME:
+            argv, stdin = _arguments(params.arguments)
+        else:
+            argv, stdin = _native_argv(params.name, params.arguments), None
         payload = invoke_cli(argv, stdin)
     except (RuntimeError, ValueError) as error:
         return CallToolResult(content=[TextContent(text=str(error))], is_error=True)

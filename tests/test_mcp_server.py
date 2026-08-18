@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -52,12 +54,24 @@ def test_mcp_protocol_discovers_and_calls_infralink_command() -> None:
     async def exercise_protocol() -> None:
         async with Client(create_server()) as client:
             tools = await client.list_tools()
-            assert [tool.name for tool in tools.tools] == ["infralink_command"]
+            names = {tool.name for tool in tools.tools}
+            assert "infralink_command" in names
+            assert {"infralink_help", "infralink_doctor", "infralink_host_apply"} <= names
+            assert "infralink_mcp_serve" not in names
 
             result = await client.call_tool("infralink_command", {"argv": ["version"]})
             assert result.is_error is False
             assert result.structured_content["schema_version"] == "infralink.cli/v1"
             assert result.structured_content["command"]["parsed"]["path"] == ["version"]
+
+            help_result = await client.call_tool("infralink_help", {"path": ["host"]})
+            assert help_result.is_error is False
+            assert help_result.structured_content["command"]["parsed"]["path"] == ["host"]
+            assert help_result.structured_content["result"]["path"] == ["host"]
+
+            bad_doctor = await client.call_tool("infralink_doctor", {"target_type": "host"})
+            assert bad_doctor.is_error is True
+            assert bad_doctor.structured_content["schema_version"] == "infralink.cli/v1"
 
     asyncio.run(exercise_protocol())
 
@@ -67,6 +81,10 @@ def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "infralink", "mcp", "serve"],
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+            },
         )
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as client:
@@ -74,6 +92,9 @@ def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
                 assert initialized.server_info.name == "infralink"
 
                 tools = await client.list_tools()
-                assert [tool.name for tool in tools.tools] == ["infralink_command"]
+                names = {tool.name for tool in tools.tools}
+                assert "infralink_command" in names
+                assert {"infralink_help", "infralink_doctor", "infralink_host_apply"} <= names
+                assert "infralink_mcp_serve" not in names
 
     asyncio.run(exercise_stdio())
