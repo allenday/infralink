@@ -97,4 +97,11 @@ def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
                 assert {"infralink_help", "infralink_doctor", "infralink_host_apply"} <= names
                 assert "infralink_mcp_serve" not in names
 
+                status = await client.call_tool(
+                    "infralink_host_status", {"host_ref": "missing-host"}
+                )
+                assert status.is_error is True
+                assert status.structured_content["schema_version"] == "infralink.cli/v1"
+                assert status.structured_content["error"]["code"] == "configuration_required"
+
     asyncio.run(exercise_stdio())
