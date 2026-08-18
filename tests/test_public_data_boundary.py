@@ -16,6 +16,7 @@ ROOT_PUBLIC_FILES = (
 )
 EXPECTED_PUBLIC_FILES = ROOT_PUBLIC_FILES + (
     PROJECT_ROOT / "docs" / "architecture.md",
+    PROJECT_ROOT / "docs" / "observable-model.md",
     PROJECT_ROOT / "docs" / "release-operator-workflow.md",
     PROJECT_ROOT / "docs" / "security-boundaries.md",
     PROJECT_ROOT / "examples" / "registry.yml",
@@ -118,6 +119,7 @@ SAFE_DOTTED_TOKENS = {
     "architecture.md",
     "contributing.md",
     "main.py",
+    "observable-model.md",
     "infralink.observation",
     "python3.12",
     "readme.md",
@@ -171,6 +173,7 @@ def tracked_public_files() -> tuple[Path, ...]:
                 "PRD.md",
                 "BACKLOG.md",
                 "docs/architecture.md",
+                "docs/observable-model.md",
                 "docs/release-operator-workflow.md",
                 "docs/security-boundaries.md",
                 "examples",
