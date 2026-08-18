@@ -29,7 +29,7 @@ def load_pyproject() -> dict[str, object]:
 
 
 def test_package_version_is_0_5_8() -> None:
-    assert infralink.__version__ == "0.5.8"
+    assert infralink.__version__ == "0.6.0"
 
 
 def test_project_uses_dynamic_version() -> None:
