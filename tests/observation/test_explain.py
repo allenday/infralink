@@ -18,7 +18,11 @@ def test_explain_catalog_covers_every_declared_emitted_code() -> None:
         assert result.likely_causes
         assert result.next_actions
 
-    assert {"invalid-as-of", "invalid-registry-revision"} <= set(DIAGNOSTIC_CODES)
+    assert {
+        "invalid-as-of",
+        "invalid-registry-revision",
+        "v2-observation-source-version-invalid",
+    } <= set(DIAGNOSTIC_CODES)
 
 
 def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:

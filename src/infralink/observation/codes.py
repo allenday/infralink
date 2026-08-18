@@ -117,6 +117,7 @@ V2_DIAGNOSTIC_CODES = frozenset(
         "service-instance-unknown-component-slot",
         "service-instance-unknown-profile",
         "v2-component-topology-invalid",
+        "v2-observation-source-version-invalid",
     }
 )
 
