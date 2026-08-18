@@ -12,9 +12,11 @@ from types import MappingProxyType
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
+from infralink.observation.v2 import parse_v2_document
 
 SCHEMA_VERSION = "infralink.observation/v1"
 SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, "infralink.observation/v2"})
@@ -277,6 +279,11 @@ def _load_file(
                 )
             )
             continue
+        if version == "infralink.observation/v2":
+            validation_finding = _validate_v2_document(parsed, source_path, document_index)
+            if validation_finding is not None:
+                findings.append(validation_finding)
+                continue
         semantic_sha256 = hashlib.sha256(canonical_parsed_content(parsed)).hexdigest()
         loaded.append(
             ObservationDocument(
@@ -289,6 +296,38 @@ def _load_file(
             )
         )
     return loaded, findings, len(parsed_documents)
+
+
+def _validate_v2_document(
+    data: dict[str, Any], source_path: str, document_index: int
+) -> Diagnostic | None:
+    try:
+        parse_v2_document(data)
+    except ValidationError as error:
+        message = str(error)
+        code = _v2_validation_code(message)
+        return Diagnostic(
+            code=code,
+            severity="error",
+            message="The v2 component topology is invalid.",
+            location=SourceLocation(source_path, "/", document_index),
+            next_actions=(
+                "Repair the v2 component, endpoint, and edge references before loading.",
+            ),
+        )
+    return None
+
+
+def _v2_validation_code(message: str) -> str:
+    for fragment, code in (
+        ("unknown component endpoint", "component-edge-unknown-endpoint"),
+        ("incompatible component endpoint protocols", "component-edge-incompatible-protocol"),
+        ("duplicate component edge id", "duplicate-component-edge-id"),
+        ("duplicate component edge semantics", "duplicate-component-edge-semantics"),
+    ):
+        if fragment in message:
+            return code
+    return "v2-component-topology-invalid"
 
 
 def _count_attempted_documents(raw: bytes) -> int:

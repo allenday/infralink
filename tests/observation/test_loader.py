@@ -66,6 +66,40 @@ def test_loader_accepts_v1_and_v2_documents_without_coercion(tmp_path: Path) -> 
     ]
 
 
+def test_loader_rejects_invalid_v2_component_topology(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8080
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components:
+      - slot_id: nginx
+component_edges:
+  - id: unknown-target
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/http
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/missing
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.documents == ()
+    assert [item.code for item in report.diagnostics] == ["component-edge-unknown-endpoint"]
+    assert report.diagnostics[0].location == SourceLocation("v2.yml", "/", 0)
+    assert report.diagnostics[0].next_actions
+
+
 def test_parsed_document_content_is_deeply_immutable_and_can_be_thawed(tmp_path: Path) -> None:
     _write(
         tmp_path / "contract.yml",
@@ -236,13 +270,43 @@ def test_duplicate_ids_across_documents_report_both_locations(tmp_path: Path) ->
 def test_duplicate_component_edges_across_v2_documents_report_both_locations(
     tmp_path: Path,
 ) -> None:
+    document = """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components:
+      - id: nginx
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8080
+      - id: application
+        endpoints:
+          - id: http
+            protocol: http
+            port: 8000
+service_instances:
+  - id: api
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components:
+      - slot_id: nginx
+      - slot_id: application
+component_edges:
+  - id: api-to-db
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/api/nginx/http
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/api/application/http
+"""
     _write(
         tmp_path / "a.yml",
-        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+        document,
     )
     _write(
         tmp_path / "b.yml",
-        "schema_version: infralink.observation/v2\ncomponent_edges:\n  - id: api-to-db\n",
+        document.replace("id: proxy\n", "id: proxy-b\n")
+        .replace("profile_id: proxy\n", "profile_id: proxy-b\n")
+        .replace("id: api\n", "id: api-b\n")
+        .replace("/api/", "/api-b/"),
     )
 
     report = load_observation_documents(tmp_path)

@@ -99,10 +99,23 @@ PLANNER_DIAGNOSTIC_CODES = _DYNAMIC_DUPLICATE_CODES | frozenset(
     }
 )
 
+V2_DIAGNOSTIC_CODES = frozenset(
+    {
+        "component-edge-incompatible-protocol",
+        "component-edge-unknown-endpoint",
+        "duplicate-component-edge-id",
+        "duplicate-component-edge-semantics",
+        "v2-component-topology-invalid",
+    }
+)
+
 PUBLIC_API_DIAGNOSTIC_CODES = frozenset({"invalid-as-of", "invalid-registry-revision"})
 
 ALL_DIAGNOSTIC_CODES = (
-    LOADER_DIAGNOSTIC_CODES | PLANNER_DIAGNOSTIC_CODES | PUBLIC_API_DIAGNOSTIC_CODES
+    LOADER_DIAGNOSTIC_CODES
+    | PLANNER_DIAGNOSTIC_CODES
+    | V2_DIAGNOSTIC_CODES
+    | PUBLIC_API_DIAGNOSTIC_CODES
 )
 
 __all__ = [
@@ -111,4 +124,5 @@ __all__ = [
     "LOADER_DIAGNOSTIC_CODES",
     "PLANNER_DIAGNOSTIC_CODES",
     "PUBLIC_API_DIAGNOSTIC_CODES",
+    "V2_DIAGNOSTIC_CODES",
 ]
