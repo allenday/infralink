@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from infralink.observation.models import StrictModel
+from infralink.observation.models import Endpoint, StrictModel
 from infralink.observation.models_v2 import ComponentEdge, ServiceInstanceV2, ServiceProfileV2
 
 
@@ -32,6 +32,38 @@ class ObservationV2Document(StrictModel):
         edge_ids = [edge.id for edge in self.component_edges]
         if len(edge_ids) != len(set(edge_ids)):
             raise ValueError("duplicate component edge id")
+
+        profiles = {profile.id: profile for profile in self.service_profiles}
+        endpoint_refs: dict[str, Endpoint] = {}
+        for instance in self.service_instances:
+            profile = profiles.get(instance.profile_id)
+            if profile is None:
+                raise ValueError("unknown service profile")
+            slots = {slot.id: slot for slot in profile.components}
+            for component in instance.components:
+                slot = slots.get(component.slot_id)
+                if slot is None:
+                    raise ValueError("unknown component slot")
+                for endpoint in slot.endpoints:
+                    endpoint_refs[
+                        f"{instance.host_id}/{instance.id}/{component.slot_id}/{endpoint.id}"
+                    ] = endpoint
+
+        edge_semantics = [
+            (edge.source_endpoint_id, edge.target_endpoint_id) for edge in self.component_edges
+        ]
+        if len(edge_semantics) != len(set(edge_semantics)):
+            raise ValueError("duplicate component edge semantics")
+        for edge in self.component_edges:
+            if edge.source_endpoint_id not in endpoint_refs:
+                raise ValueError("unknown component endpoint")
+            if edge.target_endpoint_id not in endpoint_refs:
+                raise ValueError("unknown component endpoint")
+            if (
+                endpoint_refs[edge.source_endpoint_id].protocol
+                != endpoint_refs[edge.target_endpoint_id].protocol
+            ):
+                raise ValueError("incompatible component endpoint protocols")
         return self
 
 

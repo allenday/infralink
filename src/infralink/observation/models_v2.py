@@ -40,7 +40,7 @@ class ComponentSlot(StrictModel):
     """A component template owned by a service profile."""
 
     id: CanonicalId
-    endpoints: list[Endpoint] = Field(min_length=1)
+    endpoints: list[Endpoint] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_endpoint_ids(self) -> ComponentSlot:
@@ -92,6 +92,7 @@ class ComponentEdge(StrictModel):
     id: CanonicalId
     source_endpoint_id: str
     target_endpoint_id: str
+    required: bool = True
 
     @model_validator(mode="after")
     def validate_endpoint_references(self) -> ComponentEdge:
