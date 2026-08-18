@@ -52,7 +52,7 @@ UUID = re.compile(
 )
 GCP_KEY = re.compile(
     r"(?<![a-z0-9_])(?:export\s+)?"
-    r"(?:(?:gcp_)?project(?:_id)?|google_cloud_project)[ \t]*[:=][ \t]*"
+    r"(?:gcp_project(?:_id)?|project_id|google_cloud_project)[ \t]*[:=][ \t]*"
     r"[`'\"]?(?P<value>[^\s`'\"]*)",
     re.IGNORECASE,
 )
@@ -63,7 +63,12 @@ BWS_KEY = re.compile(
     re.IGNORECASE,
 )
 HOST_FIELD = re.compile(
-    r"^\s*(?:host|hostname|canonical_name|tailscale_name|endpoint|url|source)\s*:\s*(\S+)",
+    r"^\s*(?:host|hostname|canonical_name|tailscale_name|endpoint|url)\s*:\s*(\S+)",
+    re.MULTILINE | re.IGNORECASE,
+)
+QUOTED_HOST_FIELD = re.compile(
+    r"^\s*(?:[{\[]\s*)?[\"'](?:host|hostname|canonical_name|tailscale_name|endpoint|url)[\"']"
+    r"\s*:\s*[\"']?([^\"'\s,{}\[\]]+)",
     re.MULTILINE | re.IGNORECASE,
 )
 HOST_LIST_ITEM = re.compile(
@@ -85,6 +90,14 @@ DOTTED_TOKEN = re.compile(
     re.IGNORECASE,
 )
 VERSION_IDENTIFIER = re.compile(r"^v?\d+(?:\.\d+){1,3}$", re.IGNORECASE)
+VERSION_RANGE_IDENTIFIER = re.compile(
+    r"^(?:v?\d+(?:\.\d+){1,3}-v?\d+(?:\.\d+){1,3}|\d+\.x)$",
+    re.IGNORECASE,
+)
+PACKAGE_ARTIFACT = re.compile(
+    r"^infralink-\d+(?:\.\d+){2}(?:-py3-none-any\.whl|\.tar\.gz)$",
+    re.IGNORECASE,
+)
 ISO_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}z$", re.IGNORECASE)
 ISO_TIMESTAMP_PORT_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}$", re.IGNORECASE)
 ISO_TIMESTAMP_TAIL = re.compile(r"^\d{2}t\d{2}:\d{2}:\d{2}z$", re.IGNORECASE)
@@ -135,6 +148,7 @@ SAFE_DOTTED_TOKENS = {
     "template.py",
     "nginx.access",
     "ci.builds",
+    "cli.main",
     "manifest.json",
     "prd.md",
     "registry.load",
@@ -142,13 +156,20 @@ SAFE_DOTTED_TOKENS = {
     "resolver.get",
     "roles.yml",
     "sha256sums.sigstore.json",
+    "site.getsitepackages",
     "v0.2.md",
+}
+SAFE_PUBLIC_HOSTNAMES = {
+    "api.bitwarden.com",
+    "github.com",
+    "ghcr.io",
+    "identity.bitwarden.com",
 }
 SAFE_LINE_REFERENCE_FILES = {
     token for token in SAFE_DOTTED_TOKENS if token.endswith((".json", ".md", ".yaml", ".yml"))
 } | {path.name.lower() for path in ROOT_PUBLIC_FILES}
 GCP_PROJECT_ALLOWLIST = {"example-project", "example-staging-project"}
-GCP_PROJECT_PLACEHOLDER = "<project-id>"
+GCP_PROJECT_PLACEHOLDER = {"<project-id>", "str", "string"}
 BWS_PLACEHOLDERS = {
     "organization": {"<organization-id>", "<organization-uuid>"},
     "project": {"<project-id>"},
@@ -158,6 +179,8 @@ PATH_FILE_SUFFIXES = (".json", ".md", ".tar.gz", ".whl", ".yaml", ".yml")
 MAX_URL_PAYLOAD_LENGTH = 16_384
 MAX_URL_DECODE_ROUNDS = 4
 MAX_NESTED_AUTHORITY_DEPTH = 4
+INLINE_CODE_SPAN = re.compile(r"`[^`\n]+`")
+FENCE_START = re.compile(r"^\s*(```|~~~)")
 
 
 def tracked_public_files() -> tuple[Path, ...]:
@@ -173,12 +196,8 @@ def tracked_public_files() -> tuple[Path, ...]:
                 "README.md",
                 "PRD.md",
                 "BACKLOG.md",
-                "docs/architecture.md",
-                "docs/observable-model.md",
-                "docs/release-operator-workflow.md",
-                "docs/security-boundaries.md",
+                ":(glob)docs/**/*.md",
                 "examples",
-                "docs/compatibility",
             ],
             cwd=PROJECT_ROOT,
             check=True,
@@ -191,7 +210,7 @@ def tracked_public_files() -> tuple[Path, ...]:
     missing_expected = set(EXPECTED_PUBLIC_FILES) - tracked
     if missing_expected:
         raise AssertionError(f"missing tracked public files: {sorted(missing_expected)}")
-    for directory in (PROJECT_ROOT / "examples", PROJECT_ROOT / "docs" / "compatibility"):
+    for directory in (PROJECT_ROOT / "docs", PROJECT_ROOT / "examples"):
         if not any(path.is_relative_to(directory) for path in tracked):
             raise AssertionError(f"missing tracked public files under {directory.name}")
     if any(not path.is_file() or path.is_symlink() for path in tracked):
@@ -204,6 +223,33 @@ def _normalize_prose_token(value: str) -> str:
     while candidate and candidate[-1] in TERMINAL_PROSE_PUNCTUATION:
         candidate = candidate[:-1]
     return candidate
+
+
+def _code_spans(text: str) -> tuple[tuple[int, int], ...]:
+    spans: list[tuple[int, int]] = []
+    fence_marker: str | None = None
+    fence_start = 0
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        line_start = offset
+        line_end = offset + len(line)
+        offset = line_end
+        match = FENCE_START.match(line)
+        if match is None:
+            continue
+        marker = match.group(1)
+        if fence_marker is None:
+            fence_marker = marker
+            fence_start = line_start
+        elif marker == fence_marker:
+            spans.append((fence_start, line_end))
+            fence_marker = None
+    if fence_marker is not None:
+        spans.append((fence_start, len(text)))
+    for match in INLINE_CODE_SPAN.finditer(text):
+        if not any(start <= match.start() and match.end() <= end for start, end in spans):
+            spans.append(match.span())
+    return tuple(sorted(spans))
 
 
 def _parse_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -282,6 +328,8 @@ def _hostname_violation(hostname: str | None) -> str | None:
     if not HOSTNAME.fullmatch(candidate) or not any(character.isalpha() for character in candidate):
         return "invalid endpoint authority"
     if candidate == "example.com" or candidate.endswith(".example.com"):
+        return None
+    if candidate in SAFE_PUBLIC_HOSTNAMES:
         return None
     return f"non-example hostname: {candidate}"
 
@@ -362,6 +410,10 @@ def _is_safe_dotted_token(
     inside_url_path: bool = False,
 ) -> bool:
     candidate = candidate.lower()
+    if candidate == "e.g" or VERSION_RANGE_IDENTIFIER.fullmatch(candidate):
+        return True
+    if PACKAGE_ARTIFACT.fullmatch(candidate):
+        return True
     if inside_url_path and candidate.endswith(PATH_FILE_SUFFIXES):
         return True
     if candidate in SAFE_DOTTED_TOKENS:
@@ -435,6 +487,7 @@ def boundary_violations(
     url_path_spans: list[tuple[int, int]] = []
     raw_payloads: list[tuple[tuple[int, int], str, bool]] = []
     decoded_payloads: list[tuple[tuple[int, int], str, bool]] = []
+    code_spans = _code_spans(text)
 
     def record(
         violation: str | None,
@@ -486,6 +539,9 @@ def boundary_violations(
         return _url_payload or any(
             start <= span[0] and span[1] <= end for start, end in url_source_spans
         )
+
+    def inside_code_span(span: tuple[int, int]) -> bool:
+        return any(start <= span[0] and span[1] <= end for start, end in code_spans)
 
     def queue_decoded_payload(
         payload: str,
@@ -576,10 +632,14 @@ def boundary_violations(
 
     for match in HOST_FIELD.finditer(text):
         process_authority(match.group(1), match.span(1), allow_placeholder=True)
+    for match in QUOTED_HOST_FIELD.finditer(text):
+        process_authority(match.group(1), match.span(1), allow_placeholder=True)
     for match in HOST_LIST_ITEM.finditer(text):
         process_authority(match.group(1), match.span(1))
 
     for match in BRACKET_AUTHORITY_TOKEN.finditer(text):
+        if inside_code_span(match.span()) and not starts_in_authority_span(match.span()):
+            continue
         raw_token = match.group(0)
         token = _normalize_prose_token(raw_token)
         closing_bracket = raw_token.find("]")
@@ -613,11 +673,14 @@ def boundary_violations(
             record("invalid endpoint authority", span=match.span(), value=token)
 
     for match in PORT_AUTHORITY_TOKEN.finditer(text):
+        if match.group(0).lower().startswith("superpowers:"):
+            continue
         if (
             not inside_ssh_fingerprint(match.span())
             and not inside_bracket_span(match.span())
             and not inside_balanced_bracket_span(match.span())
             and not inside_generic_bracket_span(match.span())
+            and not inside_code_span(match.span())
         ):
             process_authority(match.group(0), match.span())
 
@@ -626,6 +689,7 @@ def boundary_violations(
             not inside_authority_span(match.span())
             and not inside_bracket_span(match.span())
             and not inside_balanced_bracket_span(match.span())
+            and not inside_code_span(match.span())
         ):
             record(
                 _dotted_token_violation(
@@ -639,7 +703,11 @@ def boundary_violations(
             )
 
     for match in ADDRESS_TOKEN.finditer(text):
-        if inside_authority_span(match.span()) or inside_bracket_span(match.span()):
+        if (
+            inside_authority_span(match.span())
+            or inside_bracket_span(match.span())
+            or inside_code_span(match.span())
+        ):
             continue
         token = match.group(0)
         address = _parse_address(token)
@@ -682,7 +750,7 @@ def boundary_violations(
 
     for match in GCP_KEY.finditer(text):
         project = match.group("value")
-        if project.lower() not in GCP_PROJECT_ALLOWLIST | {GCP_PROJECT_PLACEHOLDER}:
+        if project.lower() not in GCP_PROJECT_ALLOWLIST | GCP_PROJECT_PLACEHOLDER:
             record("GCP project identifier", span=match.span(), value=project)
     for match in BWS_KEY.finditer(text):
         kind = match.group("kind").lower()
@@ -879,6 +947,40 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     assert boundary_violations(text) == []
 
 
+def test_boundary_detector_allows_public_authorities_and_code_identifiers() -> None:
+    text = """
+    See https://github.com/cyberstorm-dev/infralink for source.
+    Hosted BWS endpoints are https://api.bitwarden.com and https://identity.bitwarden.com.
+    GHCR examples may reference ghcr.io/example/infralink:<source-sha>.
+    Python 3.10-3.12 and Woodpecker 3.x are version identifiers.
+    `RoleConfig.slots`, `schema.py`, and `infralink.core.schema` are code identifiers.
+
+    ```python
+    from infralink.core.schema import HostSchema
+    assert report.documents
+    assert result.output.count("\\n") == 1
+    ```
+    """
+
+    assert boundary_violations(text) == []
+
+
+def test_boundary_detector_still_scans_semantic_host_fields_inside_code() -> None:
+    yaml_fixture = """
+    ```yaml
+    host: privatehost
+    ```
+    """
+    json_fixture = """
+    ```json
+    {"host": "db.production.internal"}
+    ```
+    """
+
+    assert "non-example hostname: privatehost" in boundary_violations(yaml_fixture)
+    assert "non-example hostname: db.production.internal" in boundary_violations(json_fixture)
+
+
 def test_boundary_detector_allows_canonical_public_ssh_fingerprints() -> None:
     assert (
         boundary_violations("fingerprint: SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") == []
@@ -1020,7 +1122,7 @@ def test_release_operator_workflow_rejects_private_host_fixture() -> None:
     assert "non-example hostname: privatehost" in boundary_violations(fixture)
 
 
-def test_public_file_inventory_tracks_all_shipped_examples_and_compatibility_docs() -> None:
+def test_public_file_inventory_tracks_all_shipped_examples_and_docs() -> None:
     tracked = {
         PROJECT_ROOT / path
         for path in subprocess.run(
@@ -1034,8 +1136,8 @@ def test_public_file_inventory_tracks_all_shipped_examples_and_compatibility_doc
     expected = set(EXPECTED_PUBLIC_FILES) | {
         path
         for path in tracked
-        if path.is_relative_to(PROJECT_ROOT / "examples")
-        or path.is_relative_to(PROJECT_ROOT / "docs" / "compatibility")
+        if path.is_relative_to(PROJECT_ROOT / "docs")
+        or path.is_relative_to(PROJECT_ROOT / "examples")
     }
 
     assert set(tracked_public_files()) == expected
