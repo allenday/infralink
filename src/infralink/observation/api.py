@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -11,6 +12,11 @@ from infralink.observation.canonical import canonical_digest
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.loader import ObservationDocument, load_observation_documents
 from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
+from infralink.observation.v2 import (
+    ObservationV2Document,
+    PlannedMetricContract,
+    plan_v2_metric_contracts,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +54,20 @@ class ProjectResult:
     def to_dict(self) -> dict[str, object]:
         return {
             "plan": self.plan.model_dump(mode="json"),
+            "sources": [asdict(source) for source in self.sources],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class V2MetricProjectResult:
+    """One typed V2 metric projection with source provenance."""
+
+    metrics: tuple[PlannedMetricContract, ...]
+    sources: tuple[SourceProvenance, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "metrics": [metric.model_dump(mode="json") for metric in self.metrics],
             "sources": [asdict(source) for source in self.sources],
         }
 
@@ -175,6 +195,60 @@ def project(
     return ProjectResult(plan=plan, sources=_source_provenance(loaded.documents))
 
 
+def project_v2_metric_contracts(paths: Sequence[Path], *, limit: int = 50) -> V2MetricProjectResult:
+    """Load explicit V2 sources and produce only normalized metric contracts.
+
+    This is an offline boundary for generic adapter consumers. It accepts no
+    rendered artifacts, binding documents, or provider configuration.
+    """
+
+    loaded = load_observation_documents(paths, diagnostic_limit=limit)
+    version_findings: list[Diagnostic] = []
+    documents: list[ObservationV2Document] = []
+    provenance: list[ObservationDocument] = []
+    for document in loaded.documents:
+        if document.schema_version != "infralink.observation/v2":
+            version_findings.append(
+                Diagnostic(
+                    code="v2-metric-source-version-invalid",
+                    severity="error",
+                    message="V2 metric projection accepts only infralink.observation/v2 sources.",
+                    location=SourceLocation(
+                        document.source_path,
+                        "/schema_version",
+                        document.document_index,
+                    ),
+                    identity=document.schema_version,
+                    next_actions=("Supply only infralink.observation/v2 source documents.",),
+                )
+            )
+            continue
+        documents.append(ObservationV2Document.model_validate_json(json.dumps(document.to_dict())))
+        provenance.append(document)
+    if not documents and not version_findings and not loaded.diagnostics.error_count:
+        version_findings.append(
+            _argument_diagnostic(
+                "no-usable-v2-metric-document",
+                "/sources",
+                "sources",
+                "Supply at least one infralink.observation/v2 source document.",
+            )
+        )
+    combined = _combine_diagnostics(
+        [
+            loaded.diagnostics,
+            DiagnosticSet.from_diagnostics(version_findings, limit=limit),
+        ],
+        limit=limit,
+    )
+    if combined.error_count:
+        raise ProjectValidationError(ValidationReport(combined, loaded.attempted_document_count))
+    return V2MetricProjectResult(
+        metrics=plan_v2_metric_contracts(documents),
+        sources=_source_provenance(tuple(provenance)),
+    )
+
+
 def _invalid_as_of_diagnostic(as_of: object) -> Diagnostic | None:
     if isinstance(as_of, datetime):
         try:
@@ -246,6 +320,8 @@ __all__ = [
     "ProjectValidationError",
     "SourceProvenance",
     "ValidationReport",
+    "V2MetricProjectResult",
     "project",
+    "project_v2_metric_contracts",
     "validate",
 ]

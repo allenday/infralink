@@ -21,6 +21,8 @@ def test_explain_catalog_covers_every_declared_emitted_code() -> None:
     assert {
         "invalid-as-of",
         "invalid-registry-revision",
+        "no-usable-v2-metric-document",
+        "v2-metric-source-version-invalid",
         "v2-observation-source-version-invalid",
     } <= set(DIAGNOSTIC_CODES)
 

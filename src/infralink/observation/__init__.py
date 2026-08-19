@@ -4,8 +4,10 @@ from infralink.observation.api import (
     ProjectResult,
     ProjectValidationError,
     SourceProvenance,
+    V2MetricProjectResult,
     ValidationReport,
     project,
+    project_v2_metric_contracts,
     validate,
 )
 from infralink.observation.canonical import canonical_digest, canonical_json, canonical_json_bytes
@@ -147,6 +149,7 @@ __all__ = [
     "WaiverScope",
     "WaiverScopeKind",
     "ValidationReport",
+    "V2MetricProjectResult",
     "load_observation_documents",
     "Plan",
     "PlanReport",
@@ -159,6 +162,7 @@ __all__ = [
     "canonical_json_bytes",
     "explain",
     "project",
+    "project_v2_metric_contracts",
     "parse_v2_document",
     "plan_v2_metric_contracts",
     "validate",
