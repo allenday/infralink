@@ -330,6 +330,16 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
                     endpoint_refs[
                         f"{instance.host_id}/{instance.id}/{component.slot_id}/{endpoint.id}"
                     ] = endpoint
+            bound_slot_ids = {component.slot_id for component in instance.components}
+            missing_slot_ids = sorted(set(slots) - bound_slot_ids)
+            if missing_slot_ids:
+                raise V2InstanceTopologyValidationError(
+                    "service-instance-missing-component-slot",
+                    instance.host_id,
+                    instance.id,
+                    "service instance is missing a required component slot binding",
+                    slot_id=missing_slot_ids[0],
+                )
 
     edge_semantics = [(edge.source_endpoint_id, edge.target_endpoint_id) for edge in edges]
     if len(edge_semantics) != len(set(edge_semantics)):

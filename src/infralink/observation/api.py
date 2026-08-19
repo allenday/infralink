@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from infralink.observation.canonical import canonical_digest
+from infralink.observation.codes import V2_DIAGNOSTIC_CODES
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.loader import ObservationDocument, load_observation_documents
 from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
@@ -17,6 +18,9 @@ from infralink.observation.v2 import (
     PlannedMetricContract,
     plan_v2_metric_contracts,
 )
+
+V1_SCHEMA_VERSION = "infralink.observation/v1"
+V2_SCHEMA_VERSION = "infralink.observation/v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,30 +113,40 @@ def validate(
                     limit=limit,
                 )
             )
-        try:
-            plan = resolve_observation_documents(
-                loaded.documents, as_of=as_of, diagnostic_limit=limit
-            )
-            if (
-                registry_revision is not None
-                and registry_revision.strip()
-                and plan.registry_revision not in (None, registry_revision)
-            ):
-                phases.append(
-                    DiagnosticSet.from_diagnostics(
-                        [
-                            _argument_diagnostic(
-                                "registry-revision-conflict",
-                                "/registry_revision",
-                                "registry_revision",
-                                "Use the source registry revision or update the source documents.",
-                            )
-                        ],
-                        limit=limit,
-                    )
+        selected_version, selection_diagnostic = _select_validation_schema(
+            loaded.documents, loaded.diagnostics
+        )
+        if selection_diagnostic is not None:
+            phases.append(DiagnosticSet.from_diagnostics([selection_diagnostic], limit=limit))
+        elif selected_version == V1_SCHEMA_VERSION:
+            try:
+                plan = resolve_observation_documents(
+                    loaded.documents, as_of=as_of, diagnostic_limit=limit
                 )
-        except PlanValidationError as error:
-            phases.append(error.report.diagnostics)
+                if (
+                    registry_revision is not None
+                    and registry_revision.strip()
+                    and plan.registry_revision not in (None, registry_revision)
+                ):
+                    phases.append(
+                        DiagnosticSet.from_diagnostics(
+                            [
+                                _argument_diagnostic(
+                                    "registry-revision-conflict",
+                                    "/registry_revision",
+                                    "registry_revision",
+                                    "Use the source registry revision or update the source documents.",
+                                )
+                            ],
+                            limit=limit,
+                        )
+                    )
+            except PlanValidationError as error:
+                phases.append(error.report.diagnostics)
+        elif registry_revision is not None and registry_revision.strip():
+            phases.append(
+                DiagnosticSet.from_diagnostics([_v2_registry_revision_diagnostic()], limit=limit)
+            )
     return ValidationReport(
         _combine_diagnostics(phases, limit=limit), loaded.attempted_document_count
     )
@@ -273,6 +287,48 @@ def _argument_diagnostic(code: str, pointer: str, identity: str, action: str) ->
         identity=identity,
         next_actions=(action,),
     )
+
+
+def _v2_registry_revision_diagnostic() -> Diagnostic:
+    return Diagnostic(
+        code="v2-registry-revision-unsupported",
+        severity="error",
+        message="V2 validation does not accept registry_revision until V2 declares one.",
+        location=SourceLocation("<input>", "/registry_revision"),
+        identity="registry_revision",
+        next_actions=(
+            "Omit registry_revision for v2 validation until the source declares an authoritative binding.",
+        ),
+    )
+
+
+def _select_validation_schema(
+    documents: tuple[ObservationDocument, ...], diagnostics: DiagnosticSet
+) -> tuple[str | None, Diagnostic | None]:
+    """Select one declared schema version for validation without coercion."""
+
+    versions = {document.schema_version for document in documents}
+    if V1_SCHEMA_VERSION in versions and V2_SCHEMA_VERSION in versions:
+        selected = next(
+            document for document in documents if document.schema_version == V2_SCHEMA_VERSION
+        )
+        return None, Diagnostic(
+            code="mixed-observation-schema-versions",
+            severity="error",
+            message="Validate one declared observation schema version at a time.",
+            location=SourceLocation(
+                selected.source_path, "/schema_version", selected.document_index
+            ),
+            identity=V2_SCHEMA_VERSION,
+            next_actions=("Split v1 and v2 declarations into separate validation invocations.",),
+        )
+    if V2_SCHEMA_VERSION in versions:
+        return V2_SCHEMA_VERSION, None
+    if V1_SCHEMA_VERSION not in versions and any(
+        diagnostic.code in V2_DIAGNOSTIC_CODES for diagnostic in diagnostics
+    ):
+        return V2_SCHEMA_VERSION, None
+    return V1_SCHEMA_VERSION, None
 
 
 def _combine_diagnostics(phases: Sequence[DiagnosticSet], *, limit: int) -> DiagnosticSet:

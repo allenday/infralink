@@ -366,7 +366,7 @@ def _validate_v2_source_set(
         )
     except V2InstanceTopologyValidationError as error:
         location = _v2_service_instance_location(
-            v2_documents, error.host_id, error.instance_id, error.slot_id
+            v2_documents, error.host_id, error.instance_id, error.slot_id, error.code
         )
         diagnostic = Diagnostic(
             code=error.code,
@@ -462,6 +462,7 @@ def _v2_service_instance_location(
     host_id: str,
     instance_id: str,
     slot_id: str | None,
+    code: str | None = None,
 ) -> SourceLocation:
     for document in documents:
         instances = document.data.get("service_instances", ())
@@ -487,6 +488,12 @@ def _v2_service_instance_location(
                             f"/service_instances/{instance_index}/components/{component_index}/slot_id",
                             document.document_index,
                         )
+                if code == "service-instance-missing-component-slot":
+                    return SourceLocation(
+                        document.source_path,
+                        f"/service_instances/{instance_index}/components",
+                        document.document_index,
+                    )
             return SourceLocation(
                 document.source_path,
                 f"/service_instances/{instance_index}",
