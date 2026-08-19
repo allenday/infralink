@@ -95,7 +95,9 @@ def compare_operation_status_projection(
     """Compare the operation-status fields that must not drift between CLI and MCP."""
     parsed = cli_envelope.get("command", {}).get("parsed", {})
     if parsed.get("path") != _PROOF_OPERATION_PATH:
-        mismatches = ("unsupported operation projection: expected operation status",)
+        mismatches: tuple[str, ...] = (
+            "unsupported operation projection: expected operation status",
+        )
         return ProjectionComparison(
             operation="operation-status",
             status="fail",
