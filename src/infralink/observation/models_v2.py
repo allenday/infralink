@@ -10,8 +10,10 @@ from pydantic import Field, StringConstraints, TypeAdapter, field_validator, mod
 from infralink.observation.models import (
     CanonicalId,
     Endpoint,
+    EndpointExposure,
     HostId,
     MetricCondition,
+    Port,
     StrictModel,
 )
 
@@ -159,6 +161,15 @@ class EndpointBinding(StrictModel):
     address: Annotated[str, Field(min_length=1)]
 
 
+class ComponentEndpointOverride(StrictModel):
+    """Instance-specific transport and visibility values for one profile endpoint."""
+
+    endpoint_id: CanonicalId
+    address: str | None = None
+    port: Port | None = None
+    exposure: EndpointExposure | None = None
+
+
 class MetricBinding(StrictModel):
     """Deployment-specific labels for one declared component metric."""
 
@@ -171,6 +182,7 @@ class ComponentInstance(StrictModel):
 
     slot_id: CanonicalId
     endpoint_bindings: list[EndpointBinding] = Field(default_factory=list)
+    endpoint_overrides: list[ComponentEndpointOverride] = Field(default_factory=list)
     resource_bindings: list[ResourceBinding] = Field(default_factory=list)
     metric_bindings: list[MetricBinding] = Field(default_factory=list)
 
@@ -179,6 +191,9 @@ class ComponentInstance(StrictModel):
         endpoint_ids = [binding.endpoint_id for binding in self.endpoint_bindings]
         if len(endpoint_ids) != len(set(endpoint_ids)):
             raise ValueError("duplicate component endpoint binding")
+        override_endpoint_ids = [override.endpoint_id for override in self.endpoint_overrides]
+        if len(override_endpoint_ids) != len(set(override_endpoint_ids)):
+            raise ValueError("duplicate component endpoint override")
         resource_ids = [binding.resource_id for binding in self.resource_bindings]
         if len(resource_ids) != len(set(resource_ids)):
             raise ValueError("duplicate component resource binding")

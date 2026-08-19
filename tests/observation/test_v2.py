@@ -3,16 +3,116 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from infralink.observation.models import EndpointExposure
 from infralink.observation.models_v2 import EdgeScope
 from infralink.observation.v2 import (
+    V2InstanceTopologyValidationError,
     V2MetricValidationError,
     V2ResourceValidationError,
     V2TopologyValidationError,
     parse_v2_document,
     plan_v2_metric_contracts,
+    validate_v2_documents,
 )
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_component_endpoint_override_resolves_address_port_and_exposure() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "smtp-tenant",
+                    "components": [
+                        {
+                            "id": "postfix",
+                            "endpoints": [{"id": "submission", "protocol": "smtp", "port": 587}],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "tenant-one",
+                    "host_id": HOST_ID,
+                    "profile_id": "smtp-tenant",
+                    "components": [
+                        {
+                            "slot_id": "postfix",
+                            "endpoint_overrides": [
+                                {
+                                    "endpoint_id": "submission",
+                                    "address": "203.0.113.10",
+                                    "port": 2587,
+                                    "exposure": "public",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "component_edges": [
+                {
+                    "id": "smtp-to-smtp",
+                    "source_endpoint_id": f"{HOST_ID}/tenant-one/postfix/submission",
+                    "target_endpoint_id": f"{HOST_ID}/tenant-one/postfix/submission",
+                }
+            ],
+        }
+    )
+
+    endpoints = validate_v2_documents((document,))
+
+    endpoint = endpoints[f"{HOST_ID}/tenant-one/postfix/submission"]
+    assert (endpoint.address, endpoint.port, endpoint.exposure) == (
+        "203.0.113.10",
+        2587,
+        EndpointExposure.PUBLIC,
+    )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"endpoint_id": "missing", "port": 2587}, "unknown component endpoint"),
+        (
+            {"endpoint_id": "submission", "protocol": "tcp"},
+            "Extra inputs are not permitted",
+        ),
+    ],
+)
+def test_component_endpoint_override_rejects_unknown_endpoint_or_protocol_mutation(
+    override: dict[str, object], message: str
+) -> None:
+    with pytest.raises((ValidationError, V2InstanceTopologyValidationError), match=message):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "smtp-tenant",
+                        "components": [
+                            {
+                                "id": "postfix",
+                                "endpoints": [
+                                    {"id": "submission", "protocol": "smtp", "port": 587}
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "tenant-one",
+                        "host_id": HOST_ID,
+                        "profile_id": "smtp-tenant",
+                        "components": [{"slot_id": "postfix", "endpoint_overrides": [override]}],
+                    }
+                ],
+            }
+        )
 
 
 def test_component_resource_slots_bind_typed_inputs_without_secret_values() -> None:
@@ -232,6 +332,14 @@ def test_component_metric_contract_projects_once_for_every_observer() -> None:
                             "endpoint_bindings": [
                                 {"endpoint_id": "metrics", "address": "100.64.0.10"}
                             ],
+                            "endpoint_overrides": [
+                                {
+                                    "endpoint_id": "metrics",
+                                    "address": "203.0.113.10",
+                                    "port": 9154,
+                                    "exposure": "public",
+                                }
+                            ],
                             "metric_bindings": [
                                 {
                                     "metric_id": "requests",
@@ -276,16 +384,16 @@ def test_component_metric_contract_projects_once_for_every_observer() -> None:
         projection.prometheus.port,
     ) == (
         "http",
-        "100.64.0.10",
-        9113,
+        "203.0.113.10",
+        9154,
     )
     assert projection.prometheus.path == "/metrics"
     assert projection.prometheus.labels == {"environment": "production"}
     assert projection.gatus.endpoint_id == f"{HOST_ID}/edge/nginx/metrics"
     assert (projection.gatus.protocol, projection.gatus.address, projection.gatus.port) == (
         "http",
-        "100.64.0.10",
-        9113,
+        "203.0.113.10",
+        9154,
     )
     assert projection.gatus.path == "/metrics"
     assert projection.grafana.metric_name == "nginx_http_requests_total"
@@ -295,7 +403,11 @@ def test_component_metric_contract_projects_once_for_every_observer() -> None:
     assert projection.doctor.query == "sum(nginx_http_requests_total)"
     assert projection.doctor.operator == "gte"
     assert projection.doctor.threshold == 0
-    assert {item.prometheus.address for item in projections} == {"100.64.0.10", "100.64.0.11"}
+    assert projection.prometheus.address == "203.0.113.10"
+    assert projection.prometheus.port == 9154
+    assert projection.gatus.address == "203.0.113.10"
+    assert projection.gatus.port == 9154
+    assert {item.prometheus.address for item in projections} == {"203.0.113.10", "100.64.0.11"}
 
 
 def test_component_metric_contract_rejects_instance_label_outside_contract() -> None:

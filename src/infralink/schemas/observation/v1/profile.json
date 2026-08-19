@@ -28,6 +28,17 @@
           "default": null,
           "title": "Address"
         },
+        "exposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointExposure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
           "title": "Id",
@@ -62,6 +73,14 @@
       ],
       "title": "Endpoint",
       "type": "object"
+    },
+    "EndpointExposure": {
+      "enum": [
+        "private",
+        "public"
+      ],
+      "title": "EndpointExposure",
+      "type": "string"
     },
     "EndpointProtocol": {
       "enum": [
