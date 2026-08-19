@@ -69,10 +69,91 @@ def test_public_api_imports_without_click_or_provider_modules(
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
-    from infralink.observation import project, validate
+    from infralink.observation import project, project_v2_metric_contracts, validate
 
     assert callable(project)
+    assert callable(project_v2_metric_contracts)
     assert callable(validate)
+
+
+def test_public_api_projects_split_v2_metric_contracts_with_source_provenance(
+    tmp_path: Path,
+) -> None:
+    from infralink.observation import project_v2_metric_contracts
+
+    profiles = tmp_path / "profiles.yml"
+    profiles.write_text(
+        """schema_version: infralink.observation/v2
+service_profiles:
+  - id: nginx
+    components:
+      - id: exporter
+        endpoints:
+          - {id: metrics, protocol: http, port: 9113}
+        metrics:
+          - id: requests
+            endpoint_id: metrics
+            path: /metrics
+            metric_name: nginx_http_requests_total
+            unit: requests
+            allowed_labels: [environment]
+            health_query: sum(nginx_http_requests_total)
+            condition: {operator: gte, threshold: 0}
+            readiness_required: true
+""",
+        encoding="ascii",
+    )
+    instances = tmp_path / "instances.yml"
+    instances.write_text(
+        """schema_version: infralink.observation/v2
+service_instances:
+  - id: nginx
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: nginx
+    components:
+      - slot_id: exporter
+        endpoint_bindings:
+          - {endpoint_id: metrics, address: 100.64.0.10}
+        metric_bindings:
+          - metric_id: requests
+            labels: {environment: production}
+""",
+        encoding="ascii",
+    )
+
+    result = project_v2_metric_contracts([profiles, instances])
+
+    assert [item.id for item in result.metrics] == [
+        "11111111-1111-4111-8111-111111111111/nginx/exporter/requests"
+    ]
+    assert result.metrics[0].prometheus.address == "100.64.0.10"
+    assert result.metrics[0].doctor.required is True
+    assert [source.path for source in result.sources] == ["instances.yml", "profiles.yml"]
+
+
+def test_public_api_rejects_non_v2_metric_source(tmp_path: Path) -> None:
+    from infralink.observation import ProjectValidationError, project_v2_metric_contracts
+
+    source = tmp_path / "legacy.yml"
+    _write_contract(source)
+
+    with pytest.raises(ProjectValidationError) as caught:
+        project_v2_metric_contracts([source])
+
+    assert [item.code for item in caught.value.report.diagnostics] == [
+        "v2-metric-source-version-invalid"
+    ]
+
+
+def test_public_api_rejects_empty_v2_metric_source_set(tmp_path: Path) -> None:
+    from infralink.observation import ProjectValidationError, project_v2_metric_contracts
+
+    with pytest.raises(ProjectValidationError) as caught:
+        project_v2_metric_contracts([tmp_path])
+
+    assert [item.code for item in caught.value.report.diagnostics] == [
+        "no-usable-v2-metric-document"
+    ]
 
 
 def test_public_api_projects_same_instance_key_on_distinct_hosts(tmp_path: Path) -> None:

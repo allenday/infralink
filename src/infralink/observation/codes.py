@@ -114,9 +114,11 @@ V2_DIAGNOSTIC_CODES = frozenset(
         "component-metric-source-endpoint-unbound",
         "duplicate-component-edge-id",
         "duplicate-component-edge-semantics",
+        "no-usable-v2-metric-document",
         "service-instance-unknown-component-slot",
         "service-instance-unknown-profile",
         "v2-component-topology-invalid",
+        "v2-metric-source-version-invalid",
         "v2-observation-source-version-invalid",
     }
 )
