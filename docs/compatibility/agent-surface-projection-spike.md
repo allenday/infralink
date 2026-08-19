@@ -1,6 +1,6 @@
 # Agent Surface Projection Spike
 
-Issue: https://github.com/cyberstorm-dev/infralink/issues/202
+Issue: #202
 
 Status: unavailable for production integration; proof path passes against the existing native MCP
 projection.
