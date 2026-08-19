@@ -38,6 +38,59 @@
       "title": "ComponentEdge",
       "type": "object"
     },
+    "ComponentEndpointOverride": {
+      "additionalProperties": false,
+      "description": "Instance-specific transport and visibility values for one profile endpoint.",
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "endpoint_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "exposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointExposure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "port": {
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        }
+      },
+      "required": [
+        "endpoint_id"
+      ],
+      "title": "ComponentEndpointOverride",
+      "type": "object"
+    },
     "ComponentInstance": {
       "additionalProperties": false,
       "description": "One realized component slot in a service instance.",
@@ -47,6 +100,13 @@
             "$ref": "#/$defs/EndpointBinding"
           },
           "title": "Endpoint Bindings",
+          "type": "array"
+        },
+        "endpoint_overrides": {
+          "items": {
+            "$ref": "#/$defs/ComponentEndpointOverride"
+          },
+          "title": "Endpoint Overrides",
           "type": "array"
         },
         "metric_bindings": {
@@ -128,6 +188,17 @@
           "default": null,
           "title": "Address"
         },
+        "exposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointExposure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
           "title": "Id",
@@ -184,6 +255,14 @@
       ],
       "title": "EndpointBinding",
       "type": "object"
+    },
+    "EndpointExposure": {
+      "enum": [
+        "private",
+        "public"
+      ],
+      "title": "EndpointExposure",
+      "type": "string"
     },
     "EndpointProtocol": {
       "enum": [

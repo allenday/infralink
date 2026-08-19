@@ -152,6 +152,7 @@ class Endpoint(StrictModel):
     protocol: EndpointProtocol
     port: Port
     address: str | None = None
+    exposure: EndpointExposure | None = None
     path: str | None = None
 
 

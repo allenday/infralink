@@ -166,7 +166,7 @@ class PlannedMetricContract(StrictModel):
     doctor: DoctorMetricProjection
 
 
-def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
+def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[str, Endpoint]:
     """Resolve v2 topology across the complete source set."""
 
     document_list = tuple(documents)
@@ -293,6 +293,18 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
                             "endpoint-binding",
                             "component endpoint binding references an unknown endpoint",
                         )
+                endpoint_overrides = {
+                    override.endpoint_id: override for override in component.endpoint_overrides
+                }
+                for endpoint_id in endpoint_overrides:
+                    if endpoint_id not in endpoint_ids:
+                        raise V2InstanceTopologyValidationError(
+                            "service-instance-unknown-component-endpoint",
+                            instance.host_id,
+                            instance.id,
+                            "unknown component endpoint",
+                            slot_id=component.slot_id,
+                        )
                 for binding in component.metric_bindings:
                     metric_contract = metric_contracts.get(binding.metric_id)
                     if metric_contract is None:
@@ -327,9 +339,26 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
                             "component metric source endpoint has no instance address binding",
                         )
                 for endpoint in slot.endpoints:
+                    override = endpoint_overrides.get(endpoint.id)
+                    endpoint_binding = endpoint_bindings.get(endpoint.id)
+                    resolved_endpoint = endpoint.model_copy(
+                        update={
+                            "address": override.address
+                            if override is not None and override.address is not None
+                            else endpoint_binding.address
+                            if endpoint_binding is not None
+                            else endpoint.address,
+                            "port": override.port
+                            if override is not None and override.port is not None
+                            else endpoint.port,
+                            "exposure": override.exposure
+                            if override is not None and override.exposure is not None
+                            else endpoint.exposure,
+                        }
+                    )
                     endpoint_refs[
                         f"{instance.host_id}/{instance.id}/{component.slot_id}/{endpoint.id}"
-                    ] = endpoint
+                    ] = resolved_endpoint
             bound_slot_ids = {component.slot_id for component in instance.components}
             missing_slot_ids = sorted(set(slots) - bound_slot_ids)
             if missing_slot_ids:
@@ -375,6 +404,7 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> None:
                 edge.id,
                 "incompatible component endpoint protocols",
             )
+    return endpoint_refs
 
 
 def parse_v2_document(data: dict[str, Any]) -> ObservationV2Document:
@@ -390,7 +420,7 @@ def plan_v2_metric_contracts(
     """Project component metric contracts once for all observation adapters."""
 
     document_list = tuple(documents)
-    validate_v2_documents(document_list)
+    endpoint_refs = validate_v2_documents(document_list)
     profiles = {
         profile.id: profile for document in document_list for profile in document.service_profiles
     }
@@ -402,24 +432,21 @@ def plan_v2_metric_contracts(
             for component in instance.components:
                 slot = slots[component.slot_id]
                 bindings = {binding.metric_id: binding for binding in component.metric_bindings}
-                endpoints = {endpoint.id: endpoint for endpoint in slot.endpoints}
-                endpoint_bindings = {
-                    binding.endpoint_id: binding for binding in component.endpoint_bindings
-                }
                 for metric in slot.metrics:
                     binding = bindings.get(metric.id)
                     labels = {} if binding is None else dict(binding.labels)
                     endpoint_id = (
                         f"{instance.host_id}/{instance.id}/{component.slot_id}/{metric.endpoint_id}"
                     )
+                    endpoint = endpoint_refs[endpoint_id]
                     projections.append(
                         _project_metric_contract(
                             instance.host_id,
                             instance.id,
                             component.slot_id,
                             metric,
-                            endpoint=endpoints[metric.endpoint_id],
-                            endpoint_address=endpoint_bindings[metric.endpoint_id].address,
+                            endpoint=endpoint,
+                            endpoint_address=endpoint.address,
                             endpoint_id=endpoint_id,
                             labels=labels,
                         )
@@ -433,7 +460,7 @@ def _project_metric_contract(
     component_id: str,
     metric: MetricContract,
     endpoint: Endpoint,
-    endpoint_address: str,
+    endpoint_address: str | None,
     endpoint_id: str,
     labels: dict[str, str],
 ) -> PlannedMetricContract:

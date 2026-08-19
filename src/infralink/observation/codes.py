@@ -116,6 +116,7 @@ V2_DIAGNOSTIC_CODES = frozenset(
         "duplicate-component-edge-semantics",
         "no-usable-v2-metric-document",
         "mixed-observation-schema-versions",
+        "service-instance-unknown-component-endpoint",
         "service-instance-unknown-component-slot",
         "service-instance-missing-component-slot",
         "service-instance-unknown-profile",
