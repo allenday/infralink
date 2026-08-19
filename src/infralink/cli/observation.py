@@ -306,16 +306,19 @@ def capabilities(ctx: Any) -> int:
         document_schema_versions=["infralink.observation/v1", "infralink.observation/v2"],
         plan_schema_versions=["infralink.plan.v1"],
         input_schemas={
-            name: f"infralink/schemas/observation/v1/{name}.json"
-            for name in (
-                "profile",
-                "instance",
-                "application",
-                "dependency",
-                "secrets",
-                "operations-view",
-                "readiness-suite",
-            )
+            **{
+                name: f"infralink/schemas/observation/v1/{name}.json"
+                for name in (
+                    "profile",
+                    "instance",
+                    "application",
+                    "dependency",
+                    "secrets",
+                    "operations-view",
+                    "readiness-suite",
+                )
+            },
+            "v2-document": "infralink/schemas/observation/v2/document.json",
         },
         evaluator_types={
             "health": sorted(evaluator.value for evaluator in HealthEvaluator),

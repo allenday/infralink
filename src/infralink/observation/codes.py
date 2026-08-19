@@ -122,6 +122,7 @@ V2_DIAGNOSTIC_CODES = frozenset(
         "v2-component-topology-invalid",
         "v2-metric-source-version-invalid",
         "v2-observation-source-version-invalid",
+        "v2-registry-revision-unsupported",
     }
 )
 

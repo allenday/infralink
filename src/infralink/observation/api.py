@@ -143,6 +143,10 @@ def validate(
                     )
             except PlanValidationError as error:
                 phases.append(error.report.diagnostics)
+        elif registry_revision is not None and registry_revision.strip():
+            phases.append(
+                DiagnosticSet.from_diagnostics([_v2_registry_revision_diagnostic()], limit=limit)
+            )
     return ValidationReport(
         _combine_diagnostics(phases, limit=limit), loaded.attempted_document_count
     )
@@ -282,6 +286,19 @@ def _argument_diagnostic(code: str, pointer: str, identity: str, action: str) ->
         location=SourceLocation("<input>", pointer),
         identity=identity,
         next_actions=(action,),
+    )
+
+
+def _v2_registry_revision_diagnostic() -> Diagnostic:
+    return Diagnostic(
+        code="v2-registry-revision-unsupported",
+        severity="error",
+        message="V2 validation does not accept registry_revision until V2 declares one.",
+        location=SourceLocation("<input>", "/registry_revision"),
+        identity="registry_revision",
+        next_actions=(
+            "Omit registry_revision for v2 validation until the source declares an authoritative binding.",
+        ),
     )
 
 

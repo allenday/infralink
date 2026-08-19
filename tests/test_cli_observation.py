@@ -105,6 +105,9 @@ def test_project_observation_and_capabilities_are_offline_yaml(tmp_path: Path) -
     advertised = yaml.safe_load(capabilities.output)["result"]
     assert "infralink.observation/v1" in advertised["document_schema_versions"]
     assert "infralink.observation/v2" in advertised["document_schema_versions"]
+    assert advertised["input_schemas"]["v2-document"] == (
+        "infralink/schemas/observation/v2/document.json"
+    )
     assert "observation" in advertised["projections"]
     assert "redis-ready" in advertised["evaluator_types"]["health"]
 
@@ -121,6 +124,35 @@ def test_observation_validate_accepts_declared_v2_source(tmp_path: Path) -> None
     payload = yaml.safe_load(result.output)
     assert payload["result"]["valid"] is True
     assert payload["result"]["diagnostics"]["error_count"] == 0
+
+
+def test_observation_validate_rejects_registry_revision_for_v2_source(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path, V2_SOURCE)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "validate",
+            "--source",
+            str(source),
+            "--as-of",
+            "2026-08-04T00:00:00Z",
+            "--registry-revision",
+            "registry-7",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = yaml.safe_load(result.output)
+    assert payload["error"]["code"] == "v2-registry-revision-unsupported"
+    diagnostic = payload["error"]["details"]["diagnostics"][0]
+    assert diagnostic["location"] == {
+        "path": "<input>",
+        "pointer": "/registry_revision",
+        "document_index": 0,
+    }
 
 
 def test_observation_validate_reports_v2_edge_location(tmp_path: Path) -> None:
