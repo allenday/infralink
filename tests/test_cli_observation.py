@@ -30,6 +30,30 @@ service_instances:
     profile_id: web
 """
 
+V2_SOURCE = """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: smtp-stack
+    components:
+      - id: submission
+        endpoints:
+          - {id: smtp, protocol: smtp, port: 587}
+      - id: delivery
+        endpoints:
+          - {id: smtp, protocol: smtp, port: 2525}
+service_instances:
+  - id: mta
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: smtp-stack
+    components:
+      - {slot_id: submission}
+      - {slot_id: delivery}
+component_edges:
+  - id: submission-to-delivery
+    source_endpoint_id: 11111111-1111-4111-8111-111111111111/mta/submission/smtp
+    target_endpoint_id: 11111111-1111-4111-8111-111111111111/mta/delivery/smtp
+"""
+
 
 def _source(tmp_path: Path, text: str = SOURCE) -> Path:
     path = tmp_path / "observation.yml"
@@ -80,8 +104,82 @@ def test_project_observation_and_capabilities_are_offline_yaml(tmp_path: Path) -
     assert any(action["rel"] == "validate" for action in payload["next_actions"])
     advertised = yaml.safe_load(capabilities.output)["result"]
     assert "infralink.observation/v1" in advertised["document_schema_versions"]
+    assert "infralink.observation/v2" in advertised["document_schema_versions"]
     assert "observation" in advertised["projections"]
     assert "redis-ready" in advertised["evaluator_types"]["health"]
+
+
+def test_observation_validate_accepts_declared_v2_source(tmp_path: Path) -> None:
+    source = _source(tmp_path, V2_SOURCE)
+
+    result = CliRunner().invoke(
+        cli,
+        ["validate", "--source", str(source), "--as-of", "2026-08-04T00:00:00Z"],
+    )
+
+    assert result.exit_code == 0
+    payload = yaml.safe_load(result.output)
+    assert payload["result"]["valid"] is True
+    assert payload["result"]["diagnostics"]["error_count"] == 0
+
+
+def test_observation_validate_reports_v2_edge_location(tmp_path: Path) -> None:
+    source = _source(
+        tmp_path, V2_SOURCE.replace("protocol: smtp, port: 2525", "protocol: tcp, port: 2525")
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["validate", "--source", str(source), "--as-of", "2026-08-04T00:00:00Z"],
+    )
+
+    assert result.exit_code == 1
+    payload = yaml.safe_load(result.output)
+    assert payload["error"]["code"] == "component-edge-incompatible-protocol"
+    diagnostic = payload["error"]["details"]["diagnostics"][0]
+    assert diagnostic["location"] == {
+        "path": source.name,
+        "pointer": "/component_edges/0",
+        "document_index": 0,
+    }
+
+
+def test_observation_validate_rejects_missing_v2_component_slot(tmp_path: Path) -> None:
+    source = _source(
+        tmp_path,
+        V2_SOURCE.replace("      - {slot_id: delivery}\n", ""),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["validate", "--source", str(source), "--as-of", "2026-08-04T00:00:00Z"],
+    )
+
+    assert result.exit_code == 1
+    payload = yaml.safe_load(result.output)
+    assert payload["error"]["code"] == "service-instance-missing-component-slot"
+    diagnostic = payload["error"]["details"]["diagnostics"][0]
+    assert diagnostic["location"] == {
+        "path": source.name,
+        "pointer": "/service_instances/0/components",
+        "document_index": 0,
+    }
+
+
+def test_observation_validate_rejects_mixed_source_versions(tmp_path: Path) -> None:
+    _source(tmp_path, SOURCE)
+    (tmp_path / "v2.yml").write_text(V2_SOURCE, encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        ["validate", "--source", str(tmp_path), "--as-of", "2026-08-04T00:00:00Z"],
+    )
+
+    assert result.exit_code == 1
+    payload = yaml.safe_load(result.output)
+    assert payload["error"]["code"] == "mixed-observation-schema-versions"
+    diagnostic = payload["error"]["details"]["diagnostics"][0]
+    assert diagnostic["location"]["pointer"] == "/schema_version"
 
 
 def test_project_view_exposes_profile_metrics_membership(tmp_path: Path) -> None:

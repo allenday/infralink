@@ -303,7 +303,7 @@ def capabilities(ctx: Any) -> int:
     from infralink.observation.models import HealthEvaluator, LogEvaluator, MetricsEvaluator
 
     result = CapabilitiesResult(
-        document_schema_versions=["infralink.observation/v1"],
+        document_schema_versions=["infralink.observation/v1", "infralink.observation/v2"],
         plan_schema_versions=["infralink.plan.v1"],
         input_schemas={
             name: f"infralink/schemas/observation/v1/{name}.json"
