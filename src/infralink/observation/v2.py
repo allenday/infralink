@@ -345,7 +345,7 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                         update={
                             "address": override.address
                             if override is not None and override.address is not None
-                            else endpoint_binding.address
+                            else endpoint_binding.canonical_address
                             if endpoint_binding is not None
                             else endpoint.address,
                             "port": override.port

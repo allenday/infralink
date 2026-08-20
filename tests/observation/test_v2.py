@@ -73,6 +73,47 @@ def test_component_endpoint_override_resolves_address_port_and_exposure() -> Non
     )
 
 
+def test_component_endpoint_binding_accepts_multiple_addresses_with_first_as_canonical() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "smtp-tenant",
+                    "components": [
+                        {
+                            "id": "postfix",
+                            "endpoints": [{"id": "submission", "protocol": "smtp", "port": 587}],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "tenant-one",
+                    "host_id": HOST_ID,
+                    "profile_id": "smtp-tenant",
+                    "components": [
+                        {
+                            "slot_id": "postfix",
+                            "endpoint_bindings": [
+                                {
+                                    "endpoint_id": "submission",
+                                    "addresses": ["203.0.113.10", "203.0.113.11"],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    endpoint = validate_v2_documents((document,))[f"{HOST_ID}/tenant-one/postfix/submission"]
+
+    assert endpoint.address == "203.0.113.10"
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     [
