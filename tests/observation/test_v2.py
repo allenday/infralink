@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import ValidationError
 
 from infralink.observation.models import EndpointExposure
@@ -112,6 +117,28 @@ def test_component_endpoint_binding_accepts_multiple_addresses_with_first_as_can
     endpoint = validate_v2_documents((document,))[f"{HOST_ID}/tenant-one/postfix/submission"]
 
     assert endpoint.address == "203.0.113.10"
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"endpoint_id": "submission", "addresses": []},
+        {
+            "endpoint_id": "submission",
+            "address": "203.0.113.10",
+            "addresses": ["203.0.113.11"],
+        },
+    ],
+)
+def test_endpoint_binding_schema_rejects_the_same_invalid_address_forms_as_model(
+    binding: dict[str, object],
+) -> None:
+    schema_path = Path(__file__).parents[2] / "src/infralink/schemas/observation/v2/document.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    endpoint_binding_schema = schema["$defs"]["EndpointBinding"]
+
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(endpoint_binding_schema).validate(binding)
 
 
 @pytest.mark.parametrize(

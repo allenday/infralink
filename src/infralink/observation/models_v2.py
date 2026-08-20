@@ -5,7 +5,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated
 
-from pydantic import Field, StringConstraints, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from infralink.observation.models import (
     CanonicalId,
@@ -165,6 +172,28 @@ class EndpointBinding(StrictModel):
     endpoint_id: CanonicalId
     address: Annotated[str, Field(min_length=1)] | None = None
     addresses: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "oneOf": [
+                {
+                    "properties": {
+                        "address": {"type": "string", "minLength": 1},
+                        "addresses": {"maxItems": 0},
+                    },
+                    "required": ["address"],
+                },
+                {
+                    "properties": {
+                        "address": {"type": "null"},
+                        "addresses": {"minItems": 1},
+                    },
+                    "required": ["addresses"],
+                },
+            ]
+        },
+    )
 
     @model_validator(mode="after")
     def validate_address_forms(self) -> EndpointBinding:

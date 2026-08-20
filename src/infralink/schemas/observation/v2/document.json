@@ -237,6 +237,35 @@
     "EndpointBinding": {
       "additionalProperties": false,
       "description": "Deployment-specific bind addresses for one component endpoint.\n\n``address`` remains accepted for existing catalogs.  ``addresses`` records\na complete multi-address bind set; its first member is the canonical\nobservation target unless an instance override supplies one.",
+      "oneOf": [
+        {
+          "properties": {
+            "address": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "addresses": {
+              "maxItems": 0
+            }
+          },
+          "required": [
+            "address"
+          ]
+        },
+        {
+          "properties": {
+            "address": {
+              "type": "null"
+            },
+            "addresses": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "addresses"
+          ]
+        }
+      ],
       "properties": {
         "address": {
           "anyOf": [
