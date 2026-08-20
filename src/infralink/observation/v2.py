@@ -328,7 +328,10 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                             "metric label is not allowed by component contract",
                         )
                 for metric in slot.metrics:
-                    if metric.endpoint_id not in endpoint_bindings:
+                    override = endpoint_overrides.get(metric.endpoint_id)
+                    if metric.endpoint_id not in endpoint_bindings and (
+                        override is None or override.address is None
+                    ):
                         raise V2MetricValidationError(
                             "component-metric-source-endpoint-unbound",
                             instance.host_id,
@@ -345,7 +348,7 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                         update={
                             "address": override.address
                             if override is not None and override.address is not None
-                            else endpoint_binding.address
+                            else endpoint_binding.canonical_address
                             if endpoint_binding is not None
                             else endpoint.address,
                             "port": override.port

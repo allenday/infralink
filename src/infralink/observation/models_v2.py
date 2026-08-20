@@ -5,7 +5,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated
 
-from pydantic import Field, StringConstraints, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from infralink.observation.models import (
     CanonicalId,
@@ -155,10 +162,52 @@ class MetricContract(StrictModel):
 
 
 class EndpointBinding(StrictModel):
-    """Deployment-specific address for one component endpoint."""
+    """Deployment-specific bind addresses for one component endpoint.
+
+    ``address`` remains accepted for existing catalogs.  ``addresses`` records
+    a complete multi-address bind set; its first member is the canonical
+    observation target unless an instance override supplies one.
+    """
 
     endpoint_id: CanonicalId
-    address: Annotated[str, Field(min_length=1)]
+    address: Annotated[str, Field(min_length=1)] | None = None
+    addresses: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "oneOf": [
+                {
+                    "properties": {
+                        "address": {"type": "string", "minLength": 1},
+                        "addresses": {"maxItems": 0},
+                    },
+                    "required": ["address"],
+                },
+                {
+                    "properties": {
+                        "address": {"type": "null"},
+                        "addresses": {"minItems": 1},
+                    },
+                    "required": ["addresses"],
+                },
+            ]
+        },
+    )
+
+    @model_validator(mode="after")
+    def validate_address_forms(self) -> EndpointBinding:
+        if self.address is not None and self.addresses:
+            raise ValueError("component endpoint binding accepts address or addresses, not both")
+        if self.address is None and not self.addresses:
+            raise ValueError("component endpoint binding requires address or addresses")
+        if len(self.addresses) != len(set(self.addresses)):
+            raise ValueError("duplicate component endpoint bind address")
+        return self
+
+    @property
+    def canonical_address(self) -> str:
+        return self.address if self.address is not None else self.addresses[0]
 
 
 class ComponentEndpointOverride(StrictModel):

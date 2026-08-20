@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import ValidationError
 
 from infralink.observation.models import EndpointExposure
@@ -71,6 +76,114 @@ def test_component_endpoint_override_resolves_address_port_and_exposure() -> Non
         2587,
         EndpointExposure.PUBLIC,
     )
+
+
+def test_component_endpoint_binding_accepts_multiple_addresses_with_first_as_canonical() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "smtp-tenant",
+                    "components": [
+                        {
+                            "id": "postfix",
+                            "endpoints": [{"id": "submission", "protocol": "smtp", "port": 587}],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "tenant-one",
+                    "host_id": HOST_ID,
+                    "profile_id": "smtp-tenant",
+                    "components": [
+                        {
+                            "slot_id": "postfix",
+                            "endpoint_bindings": [
+                                {
+                                    "endpoint_id": "submission",
+                                    "addresses": ["203.0.113.10", "203.0.113.11"],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    endpoint = validate_v2_documents((document,))[f"{HOST_ID}/tenant-one/postfix/submission"]
+
+    assert endpoint.address == "203.0.113.10"
+
+
+def test_component_metric_accepts_endpoint_override_as_its_address_binding() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "exporter",
+                    "components": [
+                        {
+                            "id": "exporter",
+                            "endpoints": [{"id": "metrics", "protocol": "http", "port": 9100}],
+                            "metrics": [
+                                {
+                                    "id": "healthy",
+                                    "endpoint_id": "metrics",
+                                    "path": "/metrics",
+                                    "metric_name": "process_start_time_seconds",
+                                    "unit": "seconds",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "exporter",
+                    "host_id": HOST_ID,
+                    "profile_id": "exporter",
+                    "components": [
+                        {
+                            "slot_id": "exporter",
+                            "endpoint_overrides": [
+                                {"endpoint_id": "metrics", "address": "100.64.0.1"}
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert plan_v2_metric_contracts((document,))[0].prometheus.address == "100.64.0.1"
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"endpoint_id": "submission", "addresses": []},
+        {
+            "endpoint_id": "submission",
+            "address": "203.0.113.10",
+            "addresses": ["203.0.113.11"],
+        },
+    ],
+)
+def test_endpoint_binding_schema_rejects_the_same_invalid_address_forms_as_model(
+    binding: dict[str, object],
+) -> None:
+    schema_path = Path(__file__).parents[2] / "src/infralink/schemas/observation/v2/document.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    endpoint_binding_schema = schema["$defs"]["EndpointBinding"]
+
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(endpoint_binding_schema).validate(binding)
 
 
 @pytest.mark.parametrize(
