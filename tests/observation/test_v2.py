@@ -119,6 +119,51 @@ def test_component_endpoint_binding_accepts_multiple_addresses_with_first_as_can
     assert endpoint.address == "203.0.113.10"
 
 
+def test_component_metric_accepts_endpoint_override_as_its_address_binding() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "exporter",
+                    "components": [
+                        {
+                            "id": "exporter",
+                            "endpoints": [{"id": "metrics", "protocol": "http", "port": 9100}],
+                            "metrics": [
+                                {
+                                    "id": "healthy",
+                                    "endpoint_id": "metrics",
+                                    "path": "/metrics",
+                                    "metric_name": "process_start_time_seconds",
+                                    "unit": "seconds",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "exporter",
+                    "host_id": HOST_ID,
+                    "profile_id": "exporter",
+                    "components": [
+                        {
+                            "slot_id": "exporter",
+                            "endpoint_overrides": [
+                                {"endpoint_id": "metrics", "address": "100.64.0.1"}
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert plan_v2_metric_contracts((document,))[0].prometheus.address == "100.64.0.1"
+
+
 @pytest.mark.parametrize(
     "binding",
     [
