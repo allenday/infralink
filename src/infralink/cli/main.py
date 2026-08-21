@@ -2083,35 +2083,31 @@ def _bootstrap_bws_token_apply_action(ctx: Context, target: Any, address: str) -
     )
 
 
-_TAILNET_NETWORK = ipaddress.ip_network("100.64.0.0/10")
-
-
 def _bootstrap_tailnet_address(target: Any, ssh_host: str) -> str:
     """Accept only the exact registry-owned Tailnet SSH target."""
+    from agent_surface import OperationError  # type: ignore[import-untyped]
+
+    from infralink.operator_surface import (
+        HostBootstrapTransportRequest,
+        validate_bootstrap_transport,
+    )
+
     try:
-        supplied = ipaddress.ip_address(ssh_host)
-        declared = ipaddress.ip_address(str(target.tailscale_ip))
-    except ValueError:
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Host bootstrap requires a declared Tailnet IPv4 address",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Declare the host Tailnet IPv4 and pass it with --ssh-host",
-            details={"host": target.uuid},
-        ) from None
-    if (
-        not isinstance(supplied, ipaddress.IPv4Address)
-        or supplied not in _TAILNET_NETWORK
-        or supplied != declared
-    ):
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Bootstrap SSH host must exactly match the declared Tailnet IPv4",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Pass the registry tailscale_ip with --ssh-host",
-            details={"host": target.uuid, "declared_tailscale_ip": str(declared)},
+        return validate_bootstrap_transport(
+            HostBootstrapTransportRequest(
+                host_ref=str(target.uuid),
+                ssh_host=ssh_host,
+                declared_ssh_host=str(target.tailscale_ip),
+            )
         )
-    return str(supplied)
+    except OperationError as error:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message=error.message,
+            exit_code=ExitCode.INPUT_ERROR,
+            fix=error.fix or "Declare the host Tailnet IPv4 and pass it with --ssh-host",
+            details=error.details[0] if error.details else {"host": target.uuid},
+        ) from None
 
 
 def _bootstrap_declared_bws_projects(ctx: Context, target: Any) -> tuple[str, ...]:

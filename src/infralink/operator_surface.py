@@ -16,6 +16,12 @@ class _OperationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class HostBootstrapTransportRequest(_OperationModel):
+    host_ref: str = Field(min_length=1)
+    ssh_host: str = Field(min_length=1)
+    declared_ssh_host: str = Field(min_length=1)
+
+
 class DoctorBootstrapPlanRequest(_OperationModel):
     host_ref: str = Field(min_length=1)
     ssh_host: str = Field(min_length=1)
@@ -28,6 +34,27 @@ class DoctorBootstrapPlanResult(_OperationModel):
 operator_surface = App("infralink")
 
 
+def validate_bootstrap_transport(request: HostBootstrapTransportRequest) -> str:
+    """Accept only the exact declared Tailnet IPv4 bootstrap transport."""
+    if not _is_tailnet_ipv4(request.declared_ssh_host):
+        raise OperationError(
+            "tailnet_address_required",
+            "Host bootstrap requires a declared Tailnet IPv4 address",
+            details=({"host": request.host_ref},),
+            fix="Declare a 100.64.0.0/10 host address before planning bootstrap.",
+        )
+    if request.ssh_host != request.declared_ssh_host:
+        raise OperationError(
+            "bootstrap_transport_mismatch",
+            "Bootstrap SSH host must exactly match the declared Tailnet IPv4",
+            details=(
+                {"host": request.host_ref, "declared_tailscale_ip": request.declared_ssh_host},
+            ),
+            fix="Pass the registry tailscale_ip with --ssh-host.",
+        )
+    return request.ssh_host
+
+
 @operator_surface.operation(
     "doctor.host.bootstrap_plan",
     summary="Plan declared host bootstrap prerequisites",
@@ -35,14 +62,15 @@ operator_surface = App("infralink")
 )  # type: ignore[untyped-decorator]
 def doctor_host_bootstrap_plan(request: DoctorBootstrapPlanRequest) -> DoctorBootstrapPlanResult:
     """Build the only executable bootstrap-plan transition for a Tailnet host."""
-    if not _is_tailnet_ipv4(request.ssh_host):
-        raise OperationError(
-            "tailnet_address_required",
-            "Host bootstrap requires a declared Tailnet IPv4 address",
-            fix="Declare a 100.64.0.0/10 host address before planning bootstrap.",
+    address = validate_bootstrap_transport(
+        HostBootstrapTransportRequest(
+            host_ref=request.host_ref,
+            ssh_host=request.ssh_host,
+            declared_ssh_host=request.ssh_host,
         )
+    )
     return DoctorBootstrapPlanResult(
-        argv=("host", "bootstrap", request.host_ref, "--ssh-host", request.ssh_host, "--plan")
+        argv=("host", "bootstrap", request.host_ref, "--ssh-host", address, "--plan")
     )
 
 
