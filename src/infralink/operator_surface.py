@@ -16,26 +16,27 @@ class _OperationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class HostBootstrapTransportRequest(_OperationModel):
+class DoctorBootstrapPlanRequest(_OperationModel):
     host_ref: str = Field(min_length=1)
     ssh_host: str = Field(min_length=1)
     declared_ssh_host: str = Field(min_length=1)
 
 
-class DoctorBootstrapPlanRequest(_OperationModel):
-    host_ref: str = Field(min_length=1)
-    ssh_host: str = Field(min_length=1)
-
-
 class DoctorBootstrapPlanResult(_OperationModel):
     argv: tuple[str, ...]
+    ssh_host: str
 
 
 operator_surface = App("infralink")
 
 
-def validate_bootstrap_transport(request: HostBootstrapTransportRequest) -> str:
-    """Accept only the exact declared Tailnet IPv4 bootstrap transport."""
+@operator_surface.operation(
+    "doctor.host.bootstrap_plan",
+    summary="Plan declared host bootstrap prerequisites",
+    read_only=True,
+)  # type: ignore[untyped-decorator]
+def doctor_host_bootstrap_plan(request: DoctorBootstrapPlanRequest) -> DoctorBootstrapPlanResult:
+    """Validate and build the only executable bootstrap-plan transition."""
     if not _is_tailnet_ipv4(request.declared_ssh_host):
         raise OperationError(
             "tailnet_address_required",
@@ -52,25 +53,16 @@ def validate_bootstrap_transport(request: HostBootstrapTransportRequest) -> str:
             ),
             fix="Pass the registry tailscale_ip with --ssh-host.",
         )
-    return request.ssh_host
-
-
-@operator_surface.operation(
-    "doctor.host.bootstrap_plan",
-    summary="Plan declared host bootstrap prerequisites",
-    read_only=True,
-)  # type: ignore[untyped-decorator]
-def doctor_host_bootstrap_plan(request: DoctorBootstrapPlanRequest) -> DoctorBootstrapPlanResult:
-    """Build the only executable bootstrap-plan transition for a Tailnet host."""
-    address = validate_bootstrap_transport(
-        HostBootstrapTransportRequest(
-            host_ref=request.host_ref,
-            ssh_host=request.ssh_host,
-            declared_ssh_host=request.ssh_host,
-        )
-    )
     return DoctorBootstrapPlanResult(
-        argv=("host", "bootstrap", request.host_ref, "--ssh-host", address, "--plan")
+        argv=(
+            "host",
+            "bootstrap",
+            request.host_ref,
+            "--ssh-host",
+            request.ssh_host,
+            "--plan",
+        ),
+        ssh_host=request.ssh_host,
     )
 
 

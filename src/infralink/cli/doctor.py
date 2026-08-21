@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from ipaddress import ip_address, ip_network
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 from urllib.error import HTTPError, URLError
@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 import click
 import yaml
+from agent_surface import OperationError  # type: ignore[import-untyped]
 
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
@@ -1106,30 +1107,31 @@ def _apply_host_v2_observation_contract(
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
     host = ctx.registry.get(host_id)
     address = getattr(host, "tailscale_ip", None) if host is not None else None
-    if not _is_tailnet_ipv4(address):
+    if not isinstance(address, str):
         return action(
             "declare-bootstrap-transport",
             [*_root_source_argv(ctx), "host", "show", host_id],
             "Declare the host Tailnet IPv4 before planning bootstrap",
         )
-    assert isinstance(address, str)
-    operation = doctor_host_bootstrap_plan(
-        DoctorBootstrapPlanRequest(host_ref=host_id, ssh_host=address)
-    )
+    try:
+        operation = doctor_host_bootstrap_plan(
+            DoctorBootstrapPlanRequest(
+                host_ref=host_id,
+                ssh_host=address,
+                declared_ssh_host=address,
+            )
+        )
+    except OperationError:
+        return action(
+            "declare-bootstrap-transport",
+            [*_root_source_argv(ctx), "host", "show", host_id],
+            "Declare the host Tailnet IPv4 before planning bootstrap",
+        )
     return action(
         "bootstrap-plan",
         [*_root_source_argv(ctx), *operation.argv],
         "Plan the failed host bootstrap prerequisites",
     )
-
-
-def _is_tailnet_ipv4(address: object) -> bool:
-    if not isinstance(address, str):
-        return False
-    try:
-        return ip_address(address) in ip_network("100.64.0.0/10")
-    except ValueError:
-        return False
 
 
 def _verifier_action(ctx: Context, host_id: str) -> Any:

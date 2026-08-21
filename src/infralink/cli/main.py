@@ -2088,18 +2088,23 @@ def _bootstrap_tailnet_address(target: Any, ssh_host: str) -> str:
     from agent_surface import OperationError  # type: ignore[import-untyped]
 
     from infralink.operator_surface import (
-        HostBootstrapTransportRequest,
-        validate_bootstrap_transport,
+        DoctorBootstrapPlanRequest,
+        DoctorBootstrapPlanResult,
+        doctor_host_bootstrap_plan,
     )
 
     try:
-        return validate_bootstrap_transport(
-            HostBootstrapTransportRequest(
-                host_ref=str(target.uuid),
-                ssh_host=ssh_host,
-                declared_ssh_host=str(target.tailscale_ip),
-            )
+        operation = cast(
+            DoctorBootstrapPlanResult,
+            doctor_host_bootstrap_plan(
+                DoctorBootstrapPlanRequest(
+                    host_ref=str(target.uuid),
+                    ssh_host=ssh_host,
+                    declared_ssh_host=str(target.tailscale_ip),
+                )
+            ),
         )
+        return operation.ssh_host
     except OperationError as error:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,

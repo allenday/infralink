@@ -173,6 +173,8 @@ def _healthy_probe() -> HostReadinessProbe:
         self_deploy_reconcile_active_state="inactive",
         self_deploy_reconcile_sub_state="dead",
         self_deploy_reconcile_exit_timestamp_monotonic=1,
+        controller_image="ghcr.io/example/controller:main",
+        controller_python_version="3.12.3",
         error=None,
     )
 

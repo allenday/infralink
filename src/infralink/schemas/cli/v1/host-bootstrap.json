@@ -284,6 +284,30 @@
           "title": "Checks",
           "type": "array"
         },
+        "controller_image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controller Image"
+        },
+        "controller_python_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controller Python Version"
+        },
         "ready": {
           "title": "Ready",
           "type": "boolean"

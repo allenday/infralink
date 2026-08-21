@@ -49,9 +49,7 @@ def test_release_secrets_are_isolated_to_manual_release_step() -> None:
         "GH_TOKEN": {"from_secret": "infralink_release_github_token"},
         "COSIGN_PRIVATE_KEY": {"from_secret": "infralink_gate_cosign_private_key"},
     }
-    assert all(
-        "environment" not in steps[f"quality-{version}"] for version in ("3.12",)
-    )
+    assert all("environment" not in steps[f"quality-{version}"] for version in ("3.12",))
     assert WOODPECKER.read_text().count("infralink_release_github_token") == 1
     assert WOODPECKER.read_text().count("infralink_gate_cosign_private_key") == 1
 
