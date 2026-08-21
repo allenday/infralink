@@ -824,7 +824,7 @@ def _firewall_rule_lines(entry: dict[str, Any], protocol: str) -> list[str]:
     ):
         return []
     return [
-        f'iifname "{interface}" ip saddr {_nft_source(source)} {protocol} dport {port} accept'
+        f'iifname "{interface}" {_nft_address_family(source)} saddr {_nft_source(source)} {protocol} dport {port} accept'
         for source in sources
         for port in ports
         if isinstance(source, str) and isinstance(port, int)
@@ -840,6 +840,13 @@ def _nft_source(source: str) -> str:
     return (
         str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
     )
+
+
+def _nft_address_family(source: str) -> str:
+    try:
+        return "ip6" if ip_network(source, strict=True).version == 6 else "ip"
+    except ValueError:
+        return "ip"
 
 
 def _apply_host_readiness(result: DoctorResult, readiness: Any) -> DoctorResult:
