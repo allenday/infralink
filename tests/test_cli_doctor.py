@@ -108,9 +108,7 @@ def test_gatus_evidence_uses_rendered_display_name_for_live_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     check_id = "prometheus-to-es2-node-exporter"
-    display_name = (
-        "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)"
-    )
+    display_name = "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)"
     monkeypatch.setattr(
         "infralink.cli.doctor._fetch_gatus_statuses",
         lambda _url, _token: [
