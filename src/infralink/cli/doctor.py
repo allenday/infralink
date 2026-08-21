@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from ipaddress import ip_network
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, NoReturn
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -47,31 +48,66 @@ GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
 V2_OBSERVATION_RELATIVE = "service-catalog/v2"
 
 
-def gatus_display_names(registry_root: Path | None) -> dict[str, str]:
-    """Read the rendered Gatus identity map from the configured registry checkout.
+def gatus_display_names(observation_plan: Path, adapter_bindings: Path) -> dict[str, str]:
+    """Read the rendered Gatus identity map beside selected observer inputs.
 
     Gatus exposes its human-readable endpoint name, while dependency evidence is
     keyed by the registry's stable check ID.  The rendered artifact is the sole
     projection that joins those identities; Doctor must not recreate that
     presentation logic.
     """
-    if registry_root is None:
-        return {}
-    directory = registry_root / "operations" / "observation" / "rendered" / "gatus"
+    plan_directory = observation_plan.resolve().parent
+    bindings_directory = adapter_bindings.resolve().parent
+    if plan_directory != bindings_directory:
+        _gatus_identity_failure(
+            "Observation plan and adapter bindings must be from the same directory",
+            "Provide observer inputs from one registry checkout",
+            {
+                "source": "gatus_rendered_identities",
+                "observation_plan": str(observation_plan),
+                "adapter_bindings": str(adapter_bindings),
+            },
+        )
+    directory = plan_directory / "rendered" / "gatus"
     if not directory.is_dir():
-        return {}
+        _gatus_identity_failure(
+            "Rendered Gatus identity artifacts could not be loaded",
+            "Render the selected registry observation artifacts before running live Doctor",
+            {"source": "gatus_rendered_identities", "path": str(directory)},
+        )
     result: dict[str, str] = {}
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
         try:
             document = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
-            return {}
+            _gatus_identity_failure(
+                "Rendered Gatus identity artifacts could not be loaded",
+                "Render valid Gatus artifacts from the selected registry checkout",
+                {"source": "gatus_rendered_identities", "path": str(path)},
+            )
+        if (
+            not isinstance(document, dict)
+            or document.get("schema_version") != "infra-observe.gatus-fragment.v1"
+        ):
+            _gatus_identity_failure(
+                "Rendered Gatus identity artifacts are invalid",
+                "Render valid Gatus artifacts from the selected registry checkout",
+                {"source": "gatus_rendered_identities", "path": str(path)},
+            )
         checks = document.get("checks") if isinstance(document, dict) else None
         if not isinstance(checks, list):
-            return {}
+            _gatus_identity_failure(
+                "Rendered Gatus identity artifacts are invalid",
+                "Render valid Gatus artifacts from the selected registry checkout",
+                {"source": "gatus_rendered_identities", "path": str(path)},
+            )
         for check in checks:
             if not isinstance(check, dict):
-                return {}
+                _gatus_identity_failure(
+                    "Rendered Gatus identity artifacts are invalid",
+                    "Render valid Gatus artifacts from the selected registry checkout",
+                    {"source": "gatus_rendered_identities", "path": str(path)},
+                )
             check_id = check.get("id")
             display_name = check.get("display_name")
             if (
@@ -80,12 +116,30 @@ def gatus_display_names(registry_root: Path | None) -> dict[str, str]:
                 or not isinstance(display_name, str)
                 or not display_name
             ):
-                return {}
+                _gatus_identity_failure(
+                    "Rendered Gatus identity artifacts are invalid",
+                    "Render valid Gatus artifacts from the selected registry checkout",
+                    {"source": "gatus_rendered_identities", "path": str(path)},
+                )
             prior = result.get(check_id)
             if prior is not None and prior != display_name:
-                return {}
+                _gatus_identity_failure(
+                    "Rendered Gatus identity artifacts conflict",
+                    "Resolve duplicate Gatus check IDs in the selected registry checkout",
+                    {"source": "gatus_rendered_identities", "path": str(path)},
+                )
             result[check_id] = display_name
     return result
+
+
+def _gatus_identity_failure(message: str, fix: str, details: dict[str, str]) -> NoReturn:
+    raise CliFailure(
+        code=ErrorCode.INPUT_LOAD_FAILED,
+        message=message,
+        exit_code=ExitCode.INPUT_ERROR,
+        fix=fix,
+        details=details,
+    )
 
 
 def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
@@ -129,7 +183,7 @@ def _gatus_evidence(
     updated: list[DoctorEvidence] = []
     for item in evidence:
         binding = binding_by_identity.get(item.id)
-        display_name = (display_names or {}).get(item.id)
+        display_name = display_names.get(item.id) if display_names is not None else None
         status = (
             by_identity.get(display_name)
             if display_name is not None
@@ -140,7 +194,18 @@ def _gatus_evidence(
         if item.adapter != "gatus" or item.reason != "no_live_observation_evidence":
             updated.append(item)
         elif status is None:
-            updated.append(item.model_copy(update={"reason": "gatus_output_identity_missing"}))
+            updated.append(
+                item.model_copy(
+                    update={
+                        "status": "unavailable" if display_names is not None else "unknown",
+                        "reason": (
+                            "gatus_rendered_identity_missing"
+                            if display_names is not None
+                            else "gatus_output_identity_missing"
+                        ),
+                    }
+                )
+            )
         else:
             results = status.get("results")
             latest = (
@@ -1100,12 +1165,19 @@ def doctor(
         ):
             raise _configuration_required(ctx, "gatus_url")
         if not declaration_only:
+            assert observation_plan is not None
+            assert adapter_bindings is not None
+            display_names = (
+                gatus_display_names(observation_plan, adapter_bindings)
+                if any(item.adapter == "gatus" for item in evidence)
+                else None
+            )
             evidence = _gatus_evidence(
                 evidence,
                 bindings,
                 gatus_url,
                 os.environ.get(gatus_token_env),
-                gatus_display_names(ctx.registry_path),
+                display_names,
             )
         status, reason = _result_status(coverage, evidence, gatus_url)
 
@@ -1171,12 +1243,19 @@ def doctor(
     ):
         raise _configuration_required(ctx, "gatus_url")
     if not declaration_only:
+        assert observation_plan is not None
+        assert adapter_bindings is not None
+        display_names = (
+            gatus_display_names(observation_plan, adapter_bindings)
+            if any(item.adapter == "gatus" for item in evidence)
+            else None
+        )
         evidence = _gatus_evidence(
             evidence,
             bindings,
             gatus_url,
             os.environ.get(gatus_token_env),
-            gatus_display_names(ctx.registry_path),
+            display_names,
         )
     status, reason = _result_status(coverage, evidence, gatus_url)
     result = DoctorResult(
