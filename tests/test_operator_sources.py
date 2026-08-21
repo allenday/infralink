@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from agent_surface import OperationError
+from agent_surface.adapters.click import ClickAdapter
+from click.testing import CliRunner
 
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
 from infralink.operator_surface import operator_surface
@@ -70,3 +73,24 @@ def test_read_only_operations_share_one_typed_source_boundary(tmp_path: Path) ->
     assert host_result.items == ["11111111-1111-4111-8111-111111111111"]
     assert edge_result.items == []
     assert info_result.summary.host_count == 1
+
+
+def test_generated_click_projects_host_list_from_the_shared_operation(tmp_path: Path) -> None:
+    hosts = tmp_path / "hosts" / "11111111-1111-4111-8111-111111111111"
+    hosts.mkdir(parents=True)
+    (hosts / "manifest.yml").write_text(
+        "hosts:\n  11111111-1111-4111-8111-111111111111:\n"
+        "    canonical_name: host-1\n    status: provisioning\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        ClickAdapter(operator_surface).command(),
+        ["host", "list", "--registry", str(tmp_path), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["command"]["parsed"]["path"] == ["host", "list"]
+    assert payload["result"]["items"] == ["11111111-1111-4111-8111-111111111111"]
