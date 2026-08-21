@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -1194,8 +1195,32 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
         "detail": None,
     }
     plan_action = next(item for item in payload["next_actions"] if item["rel"] == "bootstrap-plan")
-    assert shlex.split(plan_action["command"])[-4:] == ["host", "bootstrap", HOST_ID, "--plan"]
+    assert shlex.split(plan_action["command"])[-6:] == [
+        "host",
+        "bootstrap",
+        HOST_ID,
+        "--ssh-host",
+        "192.0.2.10",
+        "--plan",
+    ]
     assert plan_action["safe"] is True
+
+
+def test_bootstrap_plan_action_requires_declared_tailnet_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infralink.cli.doctor import _bootstrap_plan_action
+
+    monkeypatch.setattr("infralink.cli.doctor._root_source_argv", lambda ctx: ["infralink"])
+    context = SimpleNamespace(
+        registry=SimpleNamespace(get=lambda host_id: SimpleNamespace(tailscale_ip=None))
+    )
+
+    result = _bootstrap_plan_action(context, HOST_ID)
+
+    assert result.rel == "declare-bootstrap-transport"
+    assert result.command == f"infralink host show {HOST_ID}"
+    assert result.safe is True
 
 
 def test_doctor_normalizes_single_host_firewall_sources_for_nft() -> None:

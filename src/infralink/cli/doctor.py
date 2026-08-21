@@ -1099,9 +1099,25 @@ def _apply_host_v2_observation_contract(
 
 
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
+    host = ctx.registry.get(host_id)
+    address = getattr(host, "tailscale_ip", None) if host is not None else None
+    if not isinstance(address, str) or not address:
+        return action(
+            "declare-bootstrap-transport",
+            [*_root_source_argv(ctx), "host", "show", host_id],
+            "Declare the host Tailnet IPv4 before planning bootstrap",
+        )
     return action(
         "bootstrap-plan",
-        [*_root_source_argv(ctx), "host", "bootstrap", host_id, "--plan"],
+        [
+            *_root_source_argv(ctx),
+            "host",
+            "bootstrap",
+            host_id,
+            "--ssh-host",
+            address,
+            "--plan",
+        ],
         "Plan the failed host bootstrap prerequisites",
     )
 
