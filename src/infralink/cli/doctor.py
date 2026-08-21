@@ -76,6 +76,7 @@ def gatus_display_names(observation_plan: Path, adapter_bindings: Path) -> dict[
             {"source": "gatus_rendered_identities", "path": str(directory)},
         )
     result: dict[str, str] = {}
+    display_ids: dict[str, str] = {}
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
         try:
             document = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -128,7 +129,15 @@ def gatus_display_names(observation_plan: Path, adapter_bindings: Path) -> dict[
                     "Resolve duplicate Gatus check IDs in the selected registry checkout",
                     {"source": "gatus_rendered_identities", "path": str(path)},
                 )
+            prior_id = display_ids.get(display_name)
+            if prior_id is not None and prior_id != check_id:
+                _gatus_identity_failure(
+                    "Rendered Gatus identity artifacts conflict",
+                    "Resolve duplicate Gatus display names in the selected registry checkout",
+                    {"source": "gatus_rendered_identities", "path": str(path)},
+                )
             result[check_id] = display_name
+            display_ids[display_name] = check_id
     return result
 
 

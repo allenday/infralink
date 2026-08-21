@@ -157,6 +157,31 @@ def test_gatus_display_names_rejects_malformed_rendered_artifact(tmp_path: Path)
         gatus_display_names(plan, bindings)
 
 
+def test_gatus_display_names_rejects_duplicate_display_names(tmp_path: Path) -> None:
+    plan = tmp_path / "core-plan.json"
+    bindings = tmp_path / "adapter-bindings.yml"
+    rendered = tmp_path / "rendered" / "gatus"
+    rendered.mkdir(parents=True)
+    plan.write_text("{}", encoding="utf-8")
+    bindings.write_text("{}", encoding="utf-8")
+    (rendered / "core-dependencies.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infra-observe.gatus-fragment.v1",
+                "checks": [
+                    {"id": "first", "display_name": "same"},
+                    {"id": "second", "display_name": "same"},
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception, match="Rendered Gatus"):
+        gatus_display_names(plan, bindings)
+
+
 def test_gatus_evidence_uses_rendered_display_name_for_live_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
