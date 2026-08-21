@@ -42,6 +42,8 @@ class HostReadinessProbe:
     tailscale_ips: tuple[str, ...] = ()
     tailscale_running: bool = False
     tailscale_name: str | None = None
+    controller_image: str | None = None
+    controller_python_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,12 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
         "inspect_self_deploy_reconcile",
         "Inspect and repair the latest self-deploy reconciliation failure.",
     ),
+    BaselineRequirement(
+        "controller_python",
+        "Resolved controller image embeds Python 3.12 or newer.",
+        "refresh_controller_image",
+        "Publish or pull a controller image with Python 3.12 or newer.",
+    ),
 )
 
 
@@ -218,21 +226,25 @@ class HostReadinessEvaluator:
                 "self_deploy_timer_inactive",
             ),
             "self_deploy_reconcile": (reconcile_passed, reconcile_detail),
+            "controller_python": _controller_python_outcome(probe),
         }
         checks = [
             ReadinessCheck(
                 id=requirement.id,
                 required=require_reconcile
-                or requirement.id not in {"self_deploy_timer", "self_deploy_reconcile"},
+                or requirement.id
+                not in {"self_deploy_timer", "self_deploy_reconcile", "controller_python"},
                 passed=outcomes[requirement.id][0]
                 if require_reconcile
-                or requirement.id not in {"self_deploy_timer", "self_deploy_reconcile"}
+                or requirement.id
+                not in {"self_deploy_timer", "self_deploy_reconcile", "controller_python"}
                 else True,
                 description=requirement.description,
                 detail=None
                 if (
                     not require_reconcile
-                    and requirement.id in {"self_deploy_timer", "self_deploy_reconcile"}
+                    and requirement.id
+                    in {"self_deploy_timer", "self_deploy_reconcile", "controller_python"}
                 )
                 or outcomes[requirement.id][0]
                 else outcomes[requirement.id][1],
@@ -286,6 +298,26 @@ class HostReadinessEvaluator:
             checks=checks,
             actions=actions,
         )
+
+
+def _controller_python_outcome(probe: HostReadinessProbe) -> tuple[bool, str | None]:
+    """Validate only the controller image interpreter for controller-managed hosts."""
+    if not probe.reachable:
+        return False, probe.error or "ssh_unreachable"
+    if not probe.requires_controller_reconcile:
+        return True, None
+    if not probe.controller_image:
+        return False, "controller_image_unresolved"
+    version = probe.controller_python_version
+    if version is None:
+        return False, "controller_python_unavailable"
+    try:
+        major, minor, *_ = (int(part) for part in version.split("."))
+    except ValueError:
+        return False, "controller_python_invalid"
+    if (major, minor) < (3, 12):
+        return False, f"controller_python_too_old:{version}"
+    return True, None
 
 
 def _reconcile_outcome(probe: HostReadinessProbe) -> tuple[bool, str | None]:

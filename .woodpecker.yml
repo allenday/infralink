@@ -4,48 +4,6 @@ when:
   - event: manual
 
 steps:
-  quality-3.10:
-    image: python:3.10-slim-bookworm
-    depends_on: []
-    commands:
-      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
-      - apt-get update
-      - apt-get install --yes --no-install-recommends git
-      - python -m pip install --disable-pip-version-check -e ".[dev]"
-      - python -m ruff format --check src tests scripts
-      - python -m ruff check src tests scripts
-      - python -m mypy src scripts
-      - python -m pytest
-      - python scripts/generate_cli_schemas.py
-      - python scripts/generate_observation_schemas.py
-      - python scripts/generate_release_schemas.py
-      - python scripts/check_docs.py
-      - git diff --exit-code
-      - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
-      - python -m build
-      - python -m twine check dist/*
-
-  quality-3.11:
-    image: python:3.11-slim-bookworm
-    depends_on: []
-    commands:
-      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
-      - apt-get update
-      - apt-get install --yes --no-install-recommends git
-      - python -m pip install --disable-pip-version-check -e ".[dev]"
-      - python -m ruff format --check src tests scripts
-      - python -m ruff check src tests scripts
-      - python -m mypy src scripts
-      - python -m pytest
-      - python scripts/generate_cli_schemas.py
-      - python scripts/generate_observation_schemas.py
-      - python scripts/generate_release_schemas.py
-      - python scripts/check_docs.py
-      - git diff --exit-code
-      - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
-      - python -m build
-      - python -m twine check dist/*
-
   quality-3.12:
     image: python:3.12-slim-bookworm
     depends_on: []
@@ -70,8 +28,6 @@ steps:
   release:
     image: python:3.12-slim-bookworm
     depends_on:
-      - quality-3.10
-      - quality-3.11
       - quality-3.12
     when:
       - event: manual

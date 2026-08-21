@@ -117,6 +117,38 @@ def test_v2_reconcile_success_satisfies_readiness() -> None:
     assert reconcile.passed is True
 
 
+def test_controller_hosts_require_python_312_inside_the_resolved_controller_image() -> None:
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relaxgg-db-es1",
+        probe=_probe(
+            requires_controller_reconcile=True,
+            controller_image="ghcr.io/cyberstorm-dev/infralink-controller:main",
+            controller_python_version="3.11.9",
+        ),
+    )
+
+    check = next(check for check in readiness.checks if check.id == "controller_python")
+    assert check.required is True
+    assert check.passed is False
+    assert check.detail == "controller_python_too_old:3.11.9"
+
+
+def test_controller_readiness_uses_runtime_image_not_bootstrap_declaration() -> None:
+    probe = _probe(
+        requires_controller_reconcile=True,
+        controller_image="ghcr.io/cyberstorm-dev/infralink-controller:main",
+        controller_python_version="3.12.3",
+    )
+
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relayos-staging",
+        probe=probe,
+    )
+
+    check = next(check for check in readiness.checks if check.id == "controller_python")
+    assert check.passed is True
+
+
 def test_declared_firewall_fails_closed_when_a_rule_is_missing() -> None:
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name="relaxgg-db-es1",
@@ -219,6 +251,8 @@ self_deploy_reconcile_exit_status=1
 self_deploy_reconcile_active_state=failed
 self_deploy_reconcile_sub_state=failed
 self_deploy_reconcile_exit_timestamp_monotonic=123
+controller_image=ghcr.io/cyberstorm-dev/infralink-controller:main
+controller_python_version=3.12.3
 """
 
     calls: list[object] = []
@@ -247,14 +281,20 @@ self_deploy_reconcile_exit_timestamp_monotonic=123
     assert probe.self_deploy_reconcile_active_state == "failed"
     assert probe.self_deploy_reconcile_sub_state == "failed"
     assert probe.self_deploy_reconcile_exit_timestamp_monotonic == 123
+    assert probe.controller_image == "ghcr.io/cyberstorm-dev/infralink-controller:main"
+    assert probe.controller_python_version == "3.12.3"
 
 
 def test_ssh_transport_requires_a_nonempty_bws_token_in_controller_host_env() -> None:
-    from infralink.host_transport import _REMOTE_PROBE
+    from infralink.host_transport import _REMOTE_PROBE, _controller_python_probe
 
     assert "grep -Eq '^[[:space:]]*BWS_ACCESS_TOKEN=.+' /etc/infralink/host.env" in _REMOTE_PROBE
     assert "bws.json" not in _REMOTE_PROBE
     assert "bws.conf" not in _REMOTE_PROBE
+    controller_probe = _controller_python_probe()
+    assert "/etc/infralink/host.env" in controller_probe
+    assert "INFRALINK_CONTROLLER_IMAGE" in controller_probe
+    assert "deployment.yml" not in controller_probe
 
 
 def test_ssh_transport_probes_the_active_controller_units() -> None:

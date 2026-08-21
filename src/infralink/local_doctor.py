@@ -40,6 +40,7 @@ _CHECK_IDS = frozenset(
         "self_deploy_runtime",
         "self_deploy_timer",
         "self_deploy_reconcile",
+        "controller_python",
         "legacy_compatibility",
         "firewall_default_deny",
         "firewall_management_ssh",

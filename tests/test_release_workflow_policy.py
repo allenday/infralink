@@ -15,7 +15,7 @@ def test_github_actions_workflows_are_absent() -> None:
     assert not WORKFLOWS.exists() or list(WORKFLOWS.iterdir()) == []
 
 
-def test_woodpecker_three_version_quality_gate_is_authoritative() -> None:
+def test_woodpecker_python_312_quality_gate_is_authoritative() -> None:
     workflow = load_woodpecker()
 
     assert workflow["when"] == [
@@ -24,7 +24,7 @@ def test_woodpecker_three_version_quality_gate_is_authoritative() -> None:
         {"event": "manual"},
     ]
     assert "matrix" not in workflow
-    for version in ("3.10", "3.11", "3.12"):
+    for version in ("3.12",):
         quality = workflow["steps"][f"quality-{version}"]
         assert quality["image"] == f"python:{version}-slim-bookworm"
         assert quality["depends_on"] == []
