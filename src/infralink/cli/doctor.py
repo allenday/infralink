@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 import click
 import yaml
-from agent_surface import OperationError  # type: ignore[import-untyped]
+from agent_surface import OperationError
 
 from infralink.cli.actions import action
 from infralink.cli.contracts import (

@@ -130,6 +130,10 @@ strict = true
 warn_return_any = true
 warn_unused_ignores = true
 
+[[tool.mypy.overrides]]
+module = ["agent_surface", "agent_surface.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --cov=infralink --cov-branch --cov-report=term-missing --cov-fail-under=70"

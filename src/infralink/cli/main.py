@@ -2085,7 +2085,7 @@ def _bootstrap_bws_token_apply_action(ctx: Context, target: Any, address: str) -
 
 def _bootstrap_tailnet_address(target: Any, ssh_host: str) -> str:
     """Accept only the exact registry-owned Tailnet SSH target."""
-    from agent_surface import OperationError  # type: ignore[import-untyped]
+    from agent_surface import OperationError
 
     from infralink.operator_surface import (
         DoctorBootstrapPlanRequest,

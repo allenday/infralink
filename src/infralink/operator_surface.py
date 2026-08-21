@@ -1,15 +1,26 @@
-"""Typed operator operations shared by future Click and MCP projections.
+"""Typed operator operations projected through Infralink's public adapters.
 
-The existing CLI envelope remains public API.  New operator transitions enter
-through this registry so Click and MCP do not acquire independent schemas.
+Every public transport consumes these Pydantic contracts; transport code must
+not introduce an independent validation path.
 """
 
 from __future__ import annotations
 
 from ipaddress import ip_address, ip_network
 
-from agent_surface import App, OperationError  # type: ignore[import-untyped]
+from agent_surface import App, OperationError
 from pydantic import BaseModel, ConfigDict, Field
+
+from infralink.cli.contracts import (
+    EdgeListResult,
+    HostListResult,
+    InfoResult,
+    InfoSources,
+    InfoSummary,
+    ServiceListResult,
+)
+from infralink.cli.queries import list_edges, list_hosts, list_services
+from infralink.operator_sources import SourceRequest, load_registry, load_sources
 
 
 class _OperationModel(BaseModel):
@@ -28,6 +39,55 @@ class DoctorBootstrapPlanResult(_OperationModel):
 
 
 operator_surface = App("infralink")
+
+
+class HostListRequest(SourceRequest):
+    """List hosts from one explicit registry source."""
+
+
+class ServiceListRequest(SourceRequest):
+    """List logical services from one explicit registry source."""
+
+
+class EdgeListRequest(SourceRequest):
+    """List declared edges from one explicit registry source."""
+
+
+class InfoRequest(SourceRequest):
+    """Summarize one explicit registry source."""
+
+
+@operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
+def host_list(request: HostListRequest) -> HostListResult:
+    """Return the registry host list without a Click context."""
+    return list_hosts(load_registry(request).registry)
+
+
+@operator_surface.operation("service.list", summary="List declared services", read_only=True)  # type: ignore[untyped-decorator]
+def service_list(request: ServiceListRequest) -> ServiceListResult:
+    """Return the registry service list without a Click context."""
+    sources = load_sources(request)
+    return list_services(sources.registry, sources.edges)
+
+
+@operator_surface.operation("edge.list", summary="List declared edges", read_only=True)  # type: ignore[untyped-decorator]
+def edge_list(request: EdgeListRequest) -> EdgeListResult:
+    """Return the selected registry edge list without a Click context."""
+    return list_edges(load_sources(request).edges)
+
+
+@operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[untyped-decorator]
+def info(request: InfoRequest) -> InfoResult:
+    """Return topology counts and the exact resolved declaration sources."""
+    sources = load_sources(request)
+    return InfoResult(
+        sources=InfoSources(registry=str(sources.registry_path), edges=str(sources.edges_path)),
+        summary=InfoSummary(
+            host_count=len(sources.registry),
+            service_count=len(list_services(sources.registry, sources.edges).items),
+            edge_count=len(sources.edges),
+        ),
+    )
 
 
 @operator_surface.operation(
