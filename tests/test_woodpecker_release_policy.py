@@ -31,7 +31,7 @@ def test_exactly_one_release_step_is_manual_main_after_all_quality_steps() -> No
     assert len(release_steps) == 1
     release = release_steps[0]
     assert release["image"] == "python:3.12-slim-bookworm"
-    assert release["depends_on"] == ["quality-3.10", "quality-3.11", "quality-3.12"]
+    assert release["depends_on"] == ["quality-3.12"]
     assert release["when"] == [
         {
             "event": "manual",
@@ -50,7 +50,7 @@ def test_release_secrets_are_isolated_to_manual_release_step() -> None:
         "COSIGN_PRIVATE_KEY": {"from_secret": "infralink_gate_cosign_private_key"},
     }
     assert all(
-        "environment" not in steps[f"quality-{version}"] for version in ("3.10", "3.11", "3.12")
+        "environment" not in steps[f"quality-{version}"] for version in ("3.12",)
     )
     assert WOODPECKER.read_text().count("infralink_release_github_token") == 1
     assert WOODPECKER.read_text().count("infralink_gate_cosign_private_key") == 1
