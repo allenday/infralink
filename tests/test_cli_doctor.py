@@ -9,6 +9,8 @@ import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
+from infralink.cli.contracts import DoctorEvidence
+from infralink.cli.doctor import _gatus_evidence, gatus_display_names
 from infralink.cli.main import cli
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,11 +71,175 @@ def _observation_inputs(tmp_path: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
+    rendered = tmp_path / "rendered" / "gatus"
+    rendered.mkdir(parents=True)
+    (rendered / "core-dependencies.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infra-observe.gatus-fragment.v1",
+                "checks": [{"id": OBSERVATION_ID, "display_name": OBSERVATION_ID}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     return plan, bindings
 
 
 def _invoke(*args: str):
     return CliRunner().invoke(cli, ["--output", "json", *_sources(), "doctor", *args])
+
+
+def test_gatus_display_names_are_loaded_beside_the_selected_observation_inputs(
+    tmp_path: Path,
+) -> None:
+    plan = tmp_path / "operations" / "observation" / "core-plan.json"
+    bindings = tmp_path / "operations" / "observation" / "adapter-bindings.yml"
+    rendered = plan.parent / "rendered" / "gatus"
+    rendered.mkdir(parents=True)
+    plan.write_text("{}", encoding="utf-8")
+    bindings.write_text("{}", encoding="utf-8")
+    (rendered / "core-dependencies.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infra-observe.gatus-fragment.v1",
+                "checks": [
+                    {
+                        "id": "prometheus-to-es2-node-exporter",
+                        "display_name": "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)",
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert gatus_display_names(plan, bindings) == {
+        "prometheus-to-es2-node-exporter": "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)"
+    }
+
+
+def test_gatus_display_names_rejects_mixed_observation_input_roots(tmp_path: Path) -> None:
+    plan = tmp_path / "candidate" / "core-plan.json"
+    bindings = tmp_path / "active" / "adapter-bindings.yml"
+    plan.parent.mkdir()
+    bindings.parent.mkdir()
+    plan.write_text("{}", encoding="utf-8")
+    bindings.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(Exception, match="same directory"):
+        gatus_display_names(plan, bindings)
+
+
+def test_gatus_display_names_rejects_missing_rendered_artifacts(tmp_path: Path) -> None:
+    plan = tmp_path / "core-plan.json"
+    bindings = tmp_path / "adapter-bindings.yml"
+    plan.write_text("{}", encoding="utf-8")
+    bindings.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(Exception, match="Rendered Gatus"):
+        gatus_display_names(plan, bindings)
+
+
+def test_gatus_display_names_rejects_malformed_rendered_artifact(tmp_path: Path) -> None:
+    plan = tmp_path / "core-plan.json"
+    bindings = tmp_path / "adapter-bindings.yml"
+    rendered = tmp_path / "rendered" / "gatus"
+    rendered.mkdir(parents=True)
+    plan.write_text("{}", encoding="utf-8")
+    bindings.write_text("{}", encoding="utf-8")
+    (rendered / "core-dependencies.yml").write_text(
+        "schema_version: invalid\nchecks: []\n", encoding="utf-8"
+    )
+
+    with pytest.raises(Exception, match="Rendered Gatus"):
+        gatus_display_names(plan, bindings)
+
+
+def test_gatus_display_names_rejects_duplicate_display_names(tmp_path: Path) -> None:
+    plan = tmp_path / "core-plan.json"
+    bindings = tmp_path / "adapter-bindings.yml"
+    rendered = tmp_path / "rendered" / "gatus"
+    rendered.mkdir(parents=True)
+    plan.write_text("{}", encoding="utf-8")
+    bindings.write_text("{}", encoding="utf-8")
+    (rendered / "core-dependencies.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infra-observe.gatus-fragment.v1",
+                "checks": [
+                    {"id": "first", "display_name": "same"},
+                    {"id": "second", "display_name": "same"},
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception, match="Rendered Gatus"):
+        gatus_display_names(plan, bindings)
+
+
+def test_gatus_evidence_uses_rendered_display_name_for_live_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_id = "prometheus-to-es2-node-exporter"
+    display_name = "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)"
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            {
+                "name": display_name,
+                "results": [{"success": True, "timestamp": "2026-08-21T00:00:00Z"}],
+            }
+        ],
+    )
+
+    evidence = _gatus_evidence(
+        [
+            DoctorEvidence(
+                id=check_id,
+                adapter="gatus",
+                signal_refs=["dependency/test/health/reachable"],
+                status="unknown",
+                reason="no_live_observation_evidence",
+            )
+        ],
+        {"bindings": [{"renderer_kind": "gatus", "output_identity": check_id}]},
+        "http://gatus.test",
+        None,
+        {check_id: display_name},
+    )
+
+    assert evidence[0].status == "healthy"
+    assert evidence[0].observed_at == "2026-08-21T00:00:00Z"
+
+
+def test_gatus_evidence_fails_closed_when_rendered_identity_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("infralink.cli.doctor._fetch_gatus_statuses", lambda _url, _token: [])
+
+    evidence = _gatus_evidence(
+        [
+            DoctorEvidence(
+                id="missing-check",
+                adapter="gatus",
+                signal_refs=["dependency/test/health/reachable"],
+                status="unknown",
+                reason="no_live_observation_evidence",
+            )
+        ],
+        {"bindings": [{"renderer_kind": "gatus", "output_identity": "missing-check"}]},
+        "http://gatus.test",
+        None,
+        {},
+    )
+
+    assert evidence[0].status == "unavailable"
+    assert evidence[0].reason == "gatus_rendered_identity_missing"
 
 
 def test_global_doctor_requires_declared_observation_inputs() -> None:
