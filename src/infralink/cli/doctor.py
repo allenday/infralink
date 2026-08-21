@@ -6,7 +6,7 @@ import json
 import os
 from ipaddress import ip_network
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -47,6 +47,47 @@ GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
 V2_OBSERVATION_RELATIVE = "service-catalog/v2"
 
 
+def gatus_display_names(registry_root: Path | None) -> dict[str, str]:
+    """Read the rendered Gatus identity map from the configured registry checkout.
+
+    Gatus exposes its human-readable endpoint name, while dependency evidence is
+    keyed by the registry's stable check ID.  The rendered artifact is the sole
+    projection that joins those identities; Doctor must not recreate that
+    presentation logic.
+    """
+    if registry_root is None:
+        return {}
+    directory = registry_root / "operations" / "observation" / "rendered" / "gatus"
+    if not directory.is_dir():
+        return {}
+    result: dict[str, str] = {}
+    for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return {}
+        checks = document.get("checks") if isinstance(document, dict) else None
+        if not isinstance(checks, list):
+            return {}
+        for check in checks:
+            if not isinstance(check, dict):
+                return {}
+            check_id = check.get("id")
+            display_name = check.get("display_name")
+            if (
+                not isinstance(check_id, str)
+                or not check_id
+                or not isinstance(display_name, str)
+                or not display_name
+            ):
+                return {}
+            prior = result.get(check_id)
+            if prior is not None and prior != display_name:
+                return {}
+            result[check_id] = display_name
+    return result
+
+
 def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
     request = Request(f"{url.rstrip('/')}/api/v1/endpoints/statuses")
     if token:
@@ -66,6 +107,7 @@ def _gatus_evidence(
     bindings: dict[str, Any] | None,
     url: str | None,
     token: str | None,
+    display_names: Mapping[str, str] | None = None,
 ) -> list[DoctorEvidence]:
     if not url:
         return evidence
@@ -87,8 +129,13 @@ def _gatus_evidence(
     updated: list[DoctorEvidence] = []
     for item in evidence:
         binding = binding_by_identity.get(item.id)
+        display_name = (display_names or {}).get(item.id)
         status = (
-            by_identity.get(binding.get("output_identity")) if isinstance(binding, dict) else None
+            by_identity.get(display_name)
+            if display_name is not None
+            else by_identity.get(binding.get("output_identity"))
+            if isinstance(binding, dict)
+            else None
         )
         if item.adapter != "gatus" or item.reason != "no_live_observation_evidence":
             updated.append(item)
@@ -1054,7 +1101,11 @@ def doctor(
             raise _configuration_required(ctx, "gatus_url")
         if not declaration_only:
             evidence = _gatus_evidence(
-                evidence, bindings, gatus_url, os.environ.get(gatus_token_env)
+                evidence,
+                bindings,
+                gatus_url,
+                os.environ.get(gatus_token_env),
+                gatus_display_names(ctx.registry_path),
             )
         status, reason = _result_status(coverage, evidence, gatus_url)
 
@@ -1120,7 +1171,13 @@ def doctor(
     ):
         raise _configuration_required(ctx, "gatus_url")
     if not declaration_only:
-        evidence = _gatus_evidence(evidence, bindings, gatus_url, os.environ.get(gatus_token_env))
+        evidence = _gatus_evidence(
+            evidence,
+            bindings,
+            gatus_url,
+            os.environ.get(gatus_token_env),
+            gatus_display_names(ctx.registry_path),
+        )
     status, reason = _result_status(coverage, evidence, gatus_url)
     result = DoctorResult(
         target=target,

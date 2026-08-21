@@ -10,6 +10,8 @@ from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
 from infralink.cli.main import cli
+from infralink.cli.contracts import DoctorEvidence
+from infralink.cli.doctor import _gatus_evidence, gatus_display_names
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
@@ -74,6 +76,69 @@ def _observation_inputs(tmp_path: Path) -> tuple[Path, Path]:
 
 def _invoke(*args: str):
     return CliRunner().invoke(cli, ["--output", "json", *_sources(), "doctor", *args])
+
+
+def test_gatus_display_names_are_loaded_from_the_rendered_registry_artifact(
+    tmp_path: Path,
+) -> None:
+    rendered = tmp_path / "operations" / "observation" / "rendered" / "gatus"
+    rendered.mkdir(parents=True)
+    (rendered / "core-dependencies.yml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infra-observe.gatus-fragment.v1",
+                "checks": [
+                    {
+                        "id": "prometheus-to-es2-node-exporter",
+                        "display_name": "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)",
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert gatus_display_names(tmp_path) == {
+        "prometheus-to-es2-node-exporter": "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)"
+    }
+
+
+def test_gatus_evidence_uses_rendered_display_name_for_live_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_id = "prometheus-to-es2-node-exporter"
+    display_name = (
+        "cyberstorm-watchtower / Prometheus -> relaxgg-db-es2 / Node Exporter (metrics)"
+    )
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            {
+                "name": display_name,
+                "results": [{"success": True, "timestamp": "2026-08-21T00:00:00Z"}],
+            }
+        ],
+    )
+
+    evidence = _gatus_evidence(
+        [
+            DoctorEvidence(
+                id=check_id,
+                adapter="gatus",
+                signal_refs=["dependency/test/health/reachable"],
+                status="unknown",
+                reason="no_live_observation_evidence",
+            )
+        ],
+        {"bindings": [{"renderer_kind": "gatus", "output_identity": check_id}]},
+        "http://gatus.test",
+        None,
+        {check_id: display_name},
+    )
+
+    assert evidence[0].status == "healthy"
+    assert evidence[0].observed_at == "2026-08-21T00:00:00Z"
 
 
 def test_global_doctor_requires_declared_observation_inputs() -> None:
