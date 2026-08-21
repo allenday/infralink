@@ -89,4 +89,6 @@ def evaluate_host_readiness(
         self_deploy_reconcile_exit_timestamp_monotonic=(
             probe.self_deploy_reconcile_exit_timestamp_monotonic
         ),
+        controller_image=probe.controller_image,
+        controller_python_version=probe.controller_python_version,
     )

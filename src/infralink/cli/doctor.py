@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from ipaddress import ip_network
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 from urllib.error import HTTPError, URLError
@@ -39,6 +39,7 @@ from infralink.host_registry_state import HostManifestGitState, inspect_host_man
 from infralink.host_transport import SshReadinessTransport
 from infralink.observation.loader import load_observation_documents
 from infralink.observation.v2 import ObservationV2Document
+from infralink.operator_surface import DoctorBootstrapPlanRequest, doctor_host_bootstrap_plan
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
@@ -754,7 +755,9 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
                 readiness = evaluate_host_readiness(
                     host,
                     SshReadinessTransport(
-                        _declared_firewall_rules(ctx, str(host.uuid)), known_hosts
+                        _declared_firewall_rules(ctx, str(host.uuid)),
+                        known_hosts,
+                        _declared_controller_image(ctx, str(host.uuid)),
                     ),
                 )
             fingerprint_check = HostReadinessCheck(
@@ -780,7 +783,11 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
             )
     if fingerprint_check is None:
         readiness = evaluate_host_readiness(
-            host, SshReadinessTransport(_declared_firewall_rules(ctx, str(host.uuid)))
+            host,
+            SshReadinessTransport(
+                _declared_firewall_rules(ctx, str(host.uuid)),
+                controller_image=_declared_controller_image(ctx, str(host.uuid)),
+            ),
         )
     return (
         readiness
@@ -789,6 +796,20 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
             update={"ready": readiness.ready, "checks": [*readiness.checks, fingerprint_check]}
         )
     )
+
+
+def _declared_controller_image(ctx: Context, host_uuid: str) -> str | None:
+    if ctx.hosts_path is None:
+        return None
+    manifest_path = ctx.hosts_path / host_uuid / "manifest.yml"
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        host = manifest.get("hosts", {}).get(host_uuid, {})
+        bootstrap = host.get("controller_bootstrap", {}) if isinstance(host, dict) else {}
+        image = bootstrap.get("controller_image") if isinstance(bootstrap, dict) else None
+        return image if isinstance(image, str) and image else None
+    except (OSError, TypeError, yaml.YAMLError):
+        return None
 
 
 def _declared_firewall_rules(ctx: Context, host_uuid: str) -> tuple[str, ...]:
@@ -1099,11 +1120,32 @@ def _apply_host_v2_observation_contract(
 
 
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
+    host = ctx.registry.get(host_id)
+    address = getattr(host, "tailscale_ip", None) if host is not None else None
+    if not _is_tailnet_ipv4(address):
+        return action(
+            "declare-bootstrap-transport",
+            [*_root_source_argv(ctx), "host", "show", host_id],
+            "Declare the host Tailnet IPv4 before planning bootstrap",
+        )
+    assert isinstance(address, str)
+    operation = doctor_host_bootstrap_plan(
+        DoctorBootstrapPlanRequest(host_ref=host_id, ssh_host=address)
+    )
     return action(
         "bootstrap-plan",
-        [*_root_source_argv(ctx), "host", "bootstrap", host_id, "--plan"],
+        [*_root_source_argv(ctx), *operation.argv],
         "Plan the failed host bootstrap prerequisites",
     )
+
+
+def _is_tailnet_ipv4(address: object) -> bool:
+    if not isinstance(address, str):
+        return False
+    try:
+        return ip_address(address) in ip_network("100.64.0.0/10")
+    except ValueError:
+        return False
 
 
 def _verifier_action(ctx: Context, host_id: str) -> Any:

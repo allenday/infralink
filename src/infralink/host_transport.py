@@ -72,10 +72,14 @@ class SshReadinessTransport:
     """Collect the bootstrap baseline over root SSH without remote mutation."""
 
     def __init__(
-        self, expected_firewall_rules: tuple[str, ...] = (), known_hosts: Path | None = None
+        self,
+        expected_firewall_rules: tuple[str, ...] = (),
+        known_hosts: Path | None = None,
+        controller_image: str | None = None,
     ) -> None:
         self._expected_firewall_rules = expected_firewall_rules
         self._known_hosts = known_hosts
+        self._controller_image = controller_image
 
     @property
     def known_hosts(self) -> Path | None:
@@ -113,7 +117,11 @@ class SshReadinessTransport:
             )
             completed = subprocess.run(
                 command,
-                input=_REMOTE_PROBE + _firewall_probe(self._expected_firewall_rules),
+                input=(
+                    _REMOTE_PROBE
+                    + _controller_python_probe(self._controller_image)
+                    + _firewall_probe(self._expected_firewall_rules)
+                ),
                 text=True,
                 capture_output=True,
                 timeout=15,
@@ -162,7 +170,26 @@ class SshReadinessTransport:
             else (),
             tailscale_running=values.get("tailscale_running") == "1",
             tailscale_name=values.get("tailscale_name") or None,
+            controller_image=values.get("controller_image") or None,
+            controller_python_version=values.get("controller_python_version") or None,
         )
+
+
+def _controller_python_probe(controller_image: str | None) -> str:
+    if not controller_image:
+        return "printf 'controller_image=\\ncontroller_python_version=\\n'\n"
+    image = quote(controller_image)
+    return f"""printf 'controller_image=%s\\n' {image}
+if docker image inspect {image} >/dev/null 2>&1; then
+  controller_python="$(docker run --pull=never --rm --entrypoint python3 {image} --version 2>&1 || true)"
+  case "$controller_python" in
+    "Python "[0-9]*.[0-9]*.[0-9]*) printf 'controller_python_version=%s\\n' "${{controller_python#Python }}" ;;
+    *) printf 'controller_python_version=\\n' ;;
+  esac
+else
+  printf 'controller_python_version=\\n'
+fi
+"""
 
 
 def _firewall_probe(expected_rules: tuple[str, ...]) -> str:

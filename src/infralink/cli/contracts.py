@@ -669,6 +669,8 @@ class HostReadinessResult(ContractModel):
     self_deploy_reconcile_active_state: str | None = None
     self_deploy_reconcile_sub_state: str | None = None
     self_deploy_reconcile_exit_timestamp_monotonic: int | None = None
+    controller_image: str | None = None
+    controller_python_version: str | None = None
 
 
 class DoctorResult(ContractModel):
