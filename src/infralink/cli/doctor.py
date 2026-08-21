@@ -757,7 +757,6 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
                     SshReadinessTransport(
                         _declared_firewall_rules(ctx, str(host.uuid)),
                         known_hosts,
-                        _declared_controller_image(ctx, str(host.uuid)),
                     ),
                 )
             fingerprint_check = HostReadinessCheck(
@@ -786,7 +785,6 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
             host,
             SshReadinessTransport(
                 _declared_firewall_rules(ctx, str(host.uuid)),
-                controller_image=_declared_controller_image(ctx, str(host.uuid)),
             ),
         )
     return (
@@ -796,20 +794,6 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
             update={"ready": readiness.ready, "checks": [*readiness.checks, fingerprint_check]}
         )
     )
-
-
-def _declared_controller_image(ctx: Context, host_uuid: str) -> str | None:
-    if ctx.hosts_path is None:
-        return None
-    manifest_path = ctx.hosts_path / host_uuid / "manifest.yml"
-    try:
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        host = manifest.get("hosts", {}).get(host_uuid, {})
-        bootstrap = host.get("controller_bootstrap", {}) if isinstance(host, dict) else {}
-        image = bootstrap.get("controller_image") if isinstance(bootstrap, dict) else None
-        return image if isinstance(image, str) and image else None
-    except (OSError, TypeError, yaml.YAMLError):
-        return None
 
 
 def _declared_firewall_rules(ctx: Context, host_uuid: str) -> tuple[str, ...]:

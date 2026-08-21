@@ -75,11 +75,9 @@ class SshReadinessTransport:
         self,
         expected_firewall_rules: tuple[str, ...] = (),
         known_hosts: Path | None = None,
-        controller_image: str | None = None,
     ) -> None:
         self._expected_firewall_rules = expected_firewall_rules
         self._known_hosts = known_hosts
-        self._controller_image = controller_image
 
     @property
     def known_hosts(self) -> Path | None:
@@ -119,7 +117,7 @@ class SshReadinessTransport:
                 command,
                 input=(
                     _REMOTE_PROBE
-                    + _controller_python_probe(self._controller_image)
+                    + _controller_python_probe()
                     + _firewall_probe(self._expected_firewall_rules)
                 ),
                 text=True,
@@ -175,15 +173,19 @@ class SshReadinessTransport:
         )
 
 
-def _controller_python_probe(controller_image: str | None) -> str:
-    if not controller_image:
-        return "printf 'controller_image=\\ncontroller_python_version=\\n'\n"
-    image = quote(controller_image)
-    return f"""printf 'controller_image=%s\\n' {image}
-if docker image inspect {image} >/dev/null 2>&1; then
-  controller_python="$(docker run --pull=never --rm --entrypoint python3 {image} --version 2>&1 || true)"
+def _controller_python_probe() -> str:
+    return """controller_image=""
+if test -r /etc/infralink/host.env; then
+  set -a
+  . /etc/infralink/host.env
+  set +a
+  controller_image="${INFRALINK_CONTROLLER_IMAGE:-}"
+fi
+printf 'controller_image=%s\\n' "$controller_image"
+if test -n "$controller_image" && docker image inspect "$controller_image" >/dev/null 2>&1; then
+  controller_python="$(docker run --pull=never --rm --entrypoint python3 "$controller_image" --version 2>&1 || true)"
   case "$controller_python" in
-    "Python "[0-9]*.[0-9]*.[0-9]*) printf 'controller_python_version=%s\\n' "${{controller_python#Python }}" ;;
+    "Python "[0-9]*.[0-9]*.[0-9]*) printf 'controller_python_version=%s\\n' "${controller_python#Python }" ;;
     *) printf 'controller_python_version=\\n' ;;
   esac
 else
