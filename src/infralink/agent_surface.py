@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 from infralink import __version__
-from infralink.cli.contracts import CommandContext, Envelope, ErrorDetail
+from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
 
 if TYPE_CHECKING:
     from agent_surface import Invocation
@@ -20,8 +21,7 @@ class InfralinkEnvelopeRenderer:
     output_model = Envelope[Any]
 
     def render(self, invocation: Invocation) -> BaseModel:
-        if invocation.next_actions.returned:
-            raise ValueError("Infralink action projection is required before publishing actions")
+        next_actions = _project_actions(invocation.next_actions, invocation.request)
         command = _command_context(invocation)
         if invocation.error is not None:
             return Envelope[Any](
@@ -33,13 +33,13 @@ class InfralinkEnvelopeRenderer:
                     details=_error_details(invocation.error.details),
                 ),
                 fix=invocation.error.fix,
-                next_actions=[],
+                next_actions=next_actions,
             )
         return Envelope[Any](
             ok=True,
             command=command,
             result=invocation.result,
-            next_actions=[],
+            next_actions=next_actions,
         )
 
 
@@ -101,6 +101,92 @@ def _error_details(details: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     if len(details) == 1:
         return details[0]
     return {"items": list(details)}
+
+
+def _project_actions(actions: Any, request: Mapping[str, Any] | None) -> list[Action]:
+    """Project only concrete Agent Surface actions into the v1 action normal form."""
+    if actions.truncated:
+        raise ValueError("Infralink cannot publish a truncated action frontier")
+    projected: list[Action] = []
+    for action_value in actions.items:
+        if action_value.command is None:
+            raise ValueError("Infralink cannot publish an unresolved action template")
+        command = _inherit_declared_sources(list(action_value.command), request)
+        _validate_action_operation(action_value.operation, command)
+        argv = ["infralink", *_declared_source_argv(request), *command]
+        projected.append(
+            Action(
+                rel=action_value.rel,
+                argv=argv,
+                command=shlex.join(argv),
+                description=action_value.description,
+                safe=_action_is_read_only(action_value.operation),
+            )
+        )
+    return projected
+
+
+def _inherit_declared_sources(argv: list[str], request: Mapping[str, Any] | None) -> list[str]:
+    """Normalize an action to the invocation's one explicit topology authority."""
+    expected = {
+        f"--{name.replace('_', '-')}": str(value)
+        for name in ("registry", "edges")
+        if request is not None and (value := request.get(name)) is not None
+    }
+    normalized: list[str] = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        option, separator, inline_value = token.partition("=")
+        if option not in {"--registry", "--edges"}:
+            normalized.append(token)
+            index += 1
+            continue
+        if separator:
+            value = inline_value
+            index += 1
+        elif index + 1 < len(argv):
+            value = argv[index + 1]
+            index += 2
+        else:
+            raise ValueError(f"Infralink action source {option} is missing its value")
+        if expected.get(option) != value:
+            raise ValueError(f"Infralink action source conflicts with declared {option}")
+    if normalized and normalized[0] == "infralink":
+        normalized.pop(0)
+    return normalized
+
+
+def _declared_source_argv(request: Mapping[str, Any] | None) -> list[str]:
+    if request is None:
+        return []
+    argv: list[str] = []
+    for name in ("registry", "edges"):
+        value = request.get(name)
+        if value is not None:
+            argv.extend((f"--{name.replace('_', '-')}", str(value)))
+    return argv
+
+
+def _validate_action_operation(operation: str | None, argv: list[str]) -> None:
+    if operation is None:
+        return
+    expected = operation.split(".")
+    if argv[: len(expected)] != expected:
+        raise ValueError("Infralink action command does not match its registered operation")
+
+
+def _action_is_read_only(operation: str | None) -> bool:
+    if operation is None:
+        return False
+    from agent_surface.operations import UnknownOperationError
+
+    from infralink.operator_surface import operator_surface
+
+    try:
+        return bool(operator_surface.operations.describe(operation).read_only)
+    except UnknownOperationError:
+        return False
 
 
 __all__ = ["InfralinkEnvelopeRenderer"]

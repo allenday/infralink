@@ -15,6 +15,7 @@ from click.testing import CliRunner
 from mcp import Client
 
 from infralink.agent_surface import InfralinkEnvelopeRenderer
+from infralink.cli.contracts import HostListResult
 from infralink.operator_surface import operator_surface
 
 
@@ -65,27 +66,151 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert mcp_document["command"]["resolved"]["output"] == "json"
 
 
-def test_renderer_fails_closed_until_hateoas_actions_are_projected() -> None:
+def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() -> None:
     definition = operator_surface.operations.describe("host.list")
     renderer = InfralinkEnvelopeRenderer()
 
-    with pytest.raises(ValueError, match="action projection"):
-        renderer.render(
+    document = renderer.render(
+        Invocation(
+            operation=definition,
+            request={"registry": "/registry"},
+            result=HostListResult(items=[]),
+            error=None,
+            next_actions=ActionCollection(
+                items=(
+                    Action(
+                        rel="next",
+                        description="Inspect the next page",
+                        command=("host", "list"),
+                        operation="host.list",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            ),
+            budget=OutputBudget(),
+        )
+    )
+
+    assert [action.model_dump(mode="json") for action in document.next_actions] == [
+        {
+            "rel": "next",
+            "command": "infralink --registry /registry host list",
+            "description": "Inspect the next page",
+            "safe": True,
+        }
+    ]
+
+
+def test_renderer_fails_closed_for_unresolved_hateoas_action_templates() -> None:
+    definition = operator_surface.operations.describe("host.list")
+
+    with pytest.raises(ValueError, match="unresolved action template"):
+        InfralinkEnvelopeRenderer().render(
             Invocation(
                 operation=definition,
                 request={"registry": "/registry"},
-                result=None,
+                result=HostListResult(items=[]),
+                error=None,
+                next_actions=ActionCollection(
+                    items=(
+                        Action(
+                            rel="inspect",
+                            description="Inspect a host",
+                            command_template=("host", "show", "{host_id}"),
+                            operation="host.list",
+                            slots={"host_id": {"required": True}},
+                        ),
+                    ),
+                    total=1,
+                    returned=1,
+                ),
+                budget=OutputBudget(),
+            )
+        )
+
+
+def test_renderer_rejects_actions_whose_command_does_not_match_the_operation() -> None:
+    definition = operator_surface.operations.describe("host.list")
+
+    with pytest.raises(ValueError, match="does not match"):
+        InfralinkEnvelopeRenderer().render(
+            Invocation(
+                operation=definition,
+                request={"registry": "/registry"},
+                result=HostListResult(items=[]),
+                error=None,
+                next_actions=ActionCollection(
+                    items=(
+                        Action(
+                            rel="apply",
+                            description="Mutate a host",
+                            command=("host", "bootstrap", "host-1"),
+                            operation="host.list",
+                        ),
+                    ),
+                    total=1,
+                    returned=1,
+                ),
+                budget=OutputBudget(),
+            )
+        )
+
+
+def test_renderer_rejects_actions_with_conflicting_explicit_sources() -> None:
+    definition = operator_surface.operations.describe("host.list")
+
+    with pytest.raises(ValueError, match="source conflicts"):
+        InfralinkEnvelopeRenderer().render(
+            Invocation(
+                operation=definition,
+                request={"registry": "/registry"},
+                result=HostListResult(items=[]),
                 error=None,
                 next_actions=ActionCollection(
                     items=(
                         Action(
                             rel="next",
                             description="Inspect the next page",
-                            command=("infralink", "host", "list"),
+                            command=("host", "list", "--registry", "/other"),
+                            operation="host.list",
                         ),
                     ),
                     total=1,
                     returned=1,
+                ),
+                budget=OutputBudget(),
+            )
+        )
+
+
+def test_renderer_fails_closed_for_truncated_hateoas_action_frontiers() -> None:
+    definition = operator_surface.operations.describe("host.list")
+
+    with pytest.raises(ValueError, match="truncated action frontier"):
+        InfralinkEnvelopeRenderer().render(
+            Invocation(
+                operation=definition,
+                request={"registry": "/registry"},
+                result=HostListResult(items=[]),
+                error=None,
+                next_actions=ActionCollection(
+                    items=(
+                        Action(
+                            rel="next",
+                            description="Inspect the next page",
+                            command=("host", "list"),
+                            operation="host.list",
+                        ),
+                    ),
+                    total=2,
+                    returned=1,
+                    truncated=True,
+                    discover=Action(
+                        rel="discover",
+                        description="Discover remaining actions",
+                        command=("actions", "list"),
+                    ),
                 ),
                 budget=OutputBudget(),
             )
