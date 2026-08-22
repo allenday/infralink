@@ -63,8 +63,8 @@ class HostBootstrapRequest(SourceRequest):
 
     host_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
     ssh_host: str = Field(min_length=1)
-    plan_only: bool = False
-    apply_changes: bool = False
+    plan: bool = False
+    apply: bool = False
     bws_token: str | None = Field(
         default=None,
         min_length=1,
@@ -76,10 +76,10 @@ class HostBootstrapRequest(SourceRequest):
 
     @model_validator(mode="after")
     def validate_mode(self) -> HostBootstrapRequest:
-        if self.plan_only and self.apply_changes:
-            raise ValueError("pass at most one of plan_only or apply_changes")
-        if self.apply_changes and self.bws_token is None:
-            raise ValueError("apply_changes requires bws_token")
+        if self.plan and self.apply:
+            raise ValueError("pass at most one of plan or apply")
+        if self.apply and self.bws_token is None:
+            raise ValueError("apply requires bws_token")
         return self
 
 

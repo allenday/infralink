@@ -1945,8 +1945,8 @@ def host_bootstrap(
             edges=ctx.edges_path,
             host_id=host_id,
             ssh_host=ssh_host,
-            plan_only=plan_only,
-            apply_changes=apply_changes,
+            plan=plan_only,
+            apply=apply_changes,
             bws_token=token,
         )
     except ValidationError as error:

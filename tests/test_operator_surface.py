@@ -9,6 +9,7 @@ from agent_surface import OperationError
 from click.testing import CliRunner
 from mcp import Client
 
+from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostReadinessResult
 from infralink.cli.errors import CliFailure
 from infralink.cli.main import _bootstrap_tailnet_address, cli
 from infralink.mcp_server import create_server
@@ -25,7 +26,7 @@ def test_bootstrap_request_uses_released_sensitive_stdin_contract() -> None:
         registry=Path("/registry"),
         host_id="host-1",
         ssh_host="100.64.0.1",
-        apply_changes=True,
+        apply=True,
         bws_token="token",
     )
 
@@ -34,6 +35,72 @@ def test_bootstrap_request_uses_released_sensitive_stdin_contract() -> None:
         "sensitive": True,
         "cli": {"source": "stdin", "max_bytes": 8192},
     }
+
+
+def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The generated adapter is the public canonical bootstrap parser."""
+    from agent_surface.adapters.click import ClickAdapter
+
+    from infralink.operator_operations import host_bootstrap
+
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    tailscale_ip: 100.64.0.1\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_execute_bootstrap(context: object, request: HostBootstrapRequest) -> tuple[object, list[object], bool]:
+        observed["registry"] = context.registry_path  # type: ignore[attr-defined]
+        observed["request"] = request
+        return (
+            HostBootstrapPlanResult(
+                host=DoctorTarget(type="host", id=host_id, canonical_name="host-1"),
+                readiness=HostReadinessResult(
+                    transport="root_ssh", ready=False, checks=[], actions=[]
+                ),
+            ),
+            [],
+            False,
+        )
+
+    monkeypatch.setattr(host_bootstrap, "execute_bootstrap", fake_execute_bootstrap)
+    token = "never-render-this-token"
+    result = CliRunner().invoke(
+        ClickAdapter(operator_surface).command(),
+        [
+            "host",
+            "bootstrap",
+            host_id,
+            "--registry",
+            str(registry),
+            "--ssh-host",
+            "100.64.0.1",
+            "--apply",
+            "--bws-token-stdin",
+            "--format",
+            "json",
+        ],
+        input=f"{token}\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--plan-only" not in result.output
+    assert "--apply-changes" not in result.output
+    assert token not in result.output
+    payload = json.loads(result.output)
+    assert payload["command"]["parsed"]["path"] == ["host", "bootstrap"]
+    assert payload["command"]["parsed"]["flags"] == ["apply", "bws-token-stdin"]
+    request = observed["request"]
+    assert isinstance(request, HostBootstrapRequest)
+    assert request.apply is True
+    assert request.plan is False
+    assert request.bws_token == token
 
 
 def test_bootstrap_plan_operation_has_one_typed_tailnet_contract() -> None:

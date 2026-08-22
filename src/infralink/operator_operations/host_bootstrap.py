@@ -71,7 +71,7 @@ def execute_bootstrap(ctx: Any, request: Any) -> tuple[Any, list[Action], bool]:
         if request.bws_token is None:
             readiness = _readiness_with_bws_token_required(readiness)
         automated_actions = _bootstrap_executor_actions(readiness)
-        if request.apply_changes and automated_actions:
+        if request.apply and automated_actions:
             readiness = _apply_bootstrap_request(
                 ctx,
                 target,
@@ -90,7 +90,7 @@ def execute_bootstrap(ctx: Any, request: Any) -> tuple[Any, list[Action], bool]:
     actions = _bootstrap_plan_actions(
         ctx, target, address, readiness, bws_token_supplied=request.bws_token is not None
     )
-    return result, actions, readiness.ready or request.plan_only
+    return result, actions, readiness.ready or request.plan
 
 
 def _root_source_argv(ctx: Context) -> list[str]:
