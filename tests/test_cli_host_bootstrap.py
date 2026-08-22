@@ -120,7 +120,7 @@ def test_control_root_can_be_supplied_by_the_controller_runtime(
         [
             sys.executable,
             "-c",
-            "from infralink.cli.main import _CONTROL_ROOT; print(_CONTROL_ROOT)",
+            "from infralink.operator_operations.host_bootstrap import _CONTROL_ROOT; print(_CONTROL_ROOT)",
         ],
         text=True,
         capture_output=True,
@@ -159,8 +159,8 @@ def test_bootstrap_executor_uses_image_local_source_without_git(
         commands.append(args)
         raise AssertionError(f"bootstrap executor must not run subprocesses: {args}")
 
-    monkeypatch.setattr("infralink.cli.main._BOOTSTRAP_EXECUTOR_ROOT", executor_root)
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", fail_on_subprocess)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._BOOTSTRAP_EXECUTOR_ROOT", executor_root)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", fail_on_subprocess)
 
     with _bootstrap_executor_source(["bootstrap_infralink_controller"]) as (source, selected):
         assert source == executor_root
@@ -235,7 +235,7 @@ def _controller_clone_with_selected_revision_missing_from_main(
 def _configure_self_remote(monkeypatch: pytest.MonkeyPatch, repository: Path) -> str:
     remote = repository.as_uri()
     _git(repository, "remote", "add", "origin", remote)
-    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
     return remote
 
 
@@ -244,7 +244,7 @@ def test_host_bootstrap_rejects_missing_secure_connection_inputs_before_probe(
 ) -> None:
     """Bootstrap has no implicit transport or credential source."""
     monkeypatch.setattr(
-        "infralink.cli.main.evaluate_host_readiness",
+        "infralink.operator_operations.host_bootstrap.evaluate_host_readiness",
         lambda *_args: pytest.fail("bootstrap must validate inputs before SSH probing"),
     )
 
@@ -268,7 +268,7 @@ def test_host_bootstrap_apply_requires_stdin_token_before_any_probe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
-        "infralink.cli.main._bootstrap_pinned_transport",
+        "infralink.operator_operations.host_bootstrap._bootstrap_pinned_transport",
         lambda *_args: pytest.fail("apply without a token must not start SSH"),
     )
 
@@ -353,10 +353,10 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
     def transport(*_args: object):
         yield type("Transport", (), {"probe": lambda _self, _address: object()})()
 
-    monkeypatch.setattr("infralink.cli.main._bootstrap_pinned_transport", transport)
-    monkeypatch.setattr("infralink.cli.main._require_remote_tailnet_identity", lambda *_args: None)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._bootstrap_pinned_transport", transport)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._require_remote_tailnet_identity", lambda *_args: None)
     monkeypatch.setattr(
-        "infralink.cli.main._controller_bootstrap_state",
+        "infralink.operator_operations.host_bootstrap._controller_bootstrap_state",
         lambda *_args: HostControllerBootstrapState.model_validate(
             {
                 "controller_image": "ghcr.io/example/controller:main",
@@ -370,7 +370,7 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
         ),
     )
     monkeypatch.setattr(
-        "infralink.cli.main.evaluate_host_readiness",
+        "infralink.operator_operations.host_bootstrap.evaluate_host_readiness",
         lambda *_args, **_kwargs: HostReadinessResult(
             transport="root_ssh",
             ready=False,
@@ -749,11 +749,11 @@ def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
             "registry_ref": "main",
         }
     )
-    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control)
-    monkeypatch.setattr("infralink.cli.main._BOOTSTRAP_EXECUTOR_ROOT", executor_root)
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROL_ROOT", control)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._BOOTSTRAP_EXECUTOR_ROOT", executor_root)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", recording_run)
     monkeypatch.setattr(
-        "infralink.cli.main.evaluate_host_readiness",
+        "infralink.operator_operations.host_bootstrap.evaluate_host_readiness",
         lambda *_args, **_kwargs: HostReadinessResult(
             transport="root_ssh", ready=True, checks=[], actions=[]
         ),
@@ -817,7 +817,7 @@ def test_bootstrap_bws_validation_uses_only_environment_for_the_token(
         calls.append((args, kwargs))
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", fake_run)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", fake_run)
 
     _validate_bootstrap_bws_access(context, ("fleet",), token)
 
@@ -877,8 +877,8 @@ def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revi
         commands.append((args, kwargs))
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
-    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", recording_run)
 
     with _controller_refresh_source(control, revision) as source:
         assert _git(source, "rev-parse", "HEAD") == revision
@@ -950,8 +950,8 @@ def test_controller_refresh_does_not_fetch_a_raw_selected_revision(
             )
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
-    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", reject_raw_revision_fetch)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", reject_raw_revision_fetch)
 
     with _controller_refresh_source(control, revision) as source:
         assert _git(source, "rev-parse", "HEAD") == revision
@@ -973,8 +973,8 @@ def test_controller_refresh_rejects_selected_revision_missing_from_expected_main
         commands.append(args)
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
-    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", recording_run)
 
     with pytest.raises(CliFailure) as failed:
         with _controller_refresh_source(control, missing_revision):
@@ -1000,10 +1000,10 @@ def test_controller_refresh_rejects_wrong_remote_without_leaking_credentials(
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
     monkeypatch.setattr(
-        "infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE",
+        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE",
         "https://github.com/relax-dot-gg/infra-management.git",
     )
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", recording_run)
 
     with pytest.raises(CliFailure) as failed:
         with _controller_refresh_source(control, revision):
@@ -1031,8 +1031,8 @@ def test_controller_refresh_fetch_failure_does_not_materialize_or_leak_remote_ou
             return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr=secret)
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
-    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", failing_fetch)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", failing_fetch)
 
     with pytest.raises(CliFailure) as failed:
         with _controller_refresh_source(control, revision):
@@ -1059,13 +1059,13 @@ def test_controller_refresh_fetch_failure_does_not_start_ansible(
     context = Context()
     context.registry_path = tmp_path
     target = type("Target", (), {"uuid": HOST_ID})()
-    monkeypatch.setattr("infralink.cli.main._CONTROL_ROOT", control)
-    monkeypatch.setattr("infralink.cli.main._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROL_ROOT", control)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote)
     monkeypatch.setattr(
-        "infralink.cli.main._controller_refresh_extra_vars", lambda *_args: (revision, {})
+        "infralink.operator_operations.host_bootstrap._controller_refresh_extra_vars", lambda *_args: (revision, {})
     )
     monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: object())
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", recording_run)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", recording_run)
 
     with pytest.raises(CliFailure) as failed:
         _apply_controller_refresh(context, target, revision)
@@ -1104,7 +1104,7 @@ def test_controller_refresh_reports_failed_temporary_worktree_cleanup(
             )
         return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
 
-    monkeypatch.setattr("infralink.cli.main.subprocess.run", failing_cleanup)
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", failing_cleanup)
 
     with pytest.raises(CliFailure) as cleanup:
         with _controller_refresh_source(repository, revision):
@@ -1153,7 +1153,7 @@ def test_controller_refresh_prefers_the_explicit_host_runtime_over_global_lock(
     tmp_path: Path,
 ) -> None:
     """A host declaration may advance without changing the fleet-wide fallback."""
-    from infralink.cli.main import _controller_refresh_extra_vars
+    from infralink.operator_operations.host_bootstrap import _controller_refresh_extra_vars
 
     registry_root = tmp_path / "registry"
     registry = registry_root / "hosts"
