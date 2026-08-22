@@ -38,6 +38,7 @@ from infralink.cli.main import (
     cli,
 )
 from infralink.host_readiness import HostReadinessProbe
+from infralink.operator_operations.host_bootstrap import _bootstrap_pinned_transport
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST_ID = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
@@ -130,6 +131,37 @@ def test_control_root_can_be_supplied_by_the_controller_runtime(
 
     assert completed.returncode == 0
     assert completed.stdout.strip() == str(tmp_path)
+
+
+def test_bootstrap_requires_a_manifest_ssh_fingerprint_not_a_legacy_operations_contract(
+    tmp_path: Path,
+) -> None:
+    """A new host must get a precise bootstrap prerequisite, not a phantom contract path."""
+    hosts = tmp_path / HOST_ID
+    hosts.mkdir()
+    (hosts / "manifest.yml").write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.0.1\n"
+        "    controller_bootstrap: {}\n",
+        encoding="utf-8",
+    )
+    context = type("Context", (), {"hosts_path": tmp_path})()
+    target = type(
+        "Target",
+        (),
+        {"uuid": HOST_ID, "canonical_name": HOST_NAME, "tailscale_ip": "100.64.0.1"},
+    )()
+
+    with pytest.raises(CliFailure) as raised:
+        with _bootstrap_pinned_transport(context, target, "100.64.0.1"):
+            pass
+
+    failure = raised.value
+    assert failure.code is ErrorCode.CONFIGURATION_REQUIRED
+    assert failure.message == "Bootstrap requires ssh.host_key_fingerprint"
+    assert failure.details == {"host": HOST_ID}
 
 
 def test_bootstrap_executor_uses_image_local_source_without_git(

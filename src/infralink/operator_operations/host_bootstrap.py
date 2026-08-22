@@ -440,6 +440,7 @@ def _bootstrap_pinned_transport(
             fix="Use the selected registry hosts directory",
             details={"host": target.uuid},
         )
+    _require_bootstrap_ssh_fingerprint(ctx.hosts_path, target)
     request = resolve_apply_request(ctx.hosts_path, target)
     if request.address != address:
         raise CliFailure(
@@ -451,6 +452,33 @@ def _bootstrap_pinned_transport(
         )
     with _pinned_known_hosts(request) as known_hosts:
         yield SshReadinessTransport(known_hosts=known_hosts)
+
+
+def _require_bootstrap_ssh_fingerprint(hosts_path: Path, target: Any) -> None:
+    """Reject missing initial SSH trust explicitly, before generic apply resolution."""
+    manifest_path = hosts_path / target.uuid / "manifest.yml"
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        manifest = None
+    host = (
+        manifest.get("hosts", {}).get(target.uuid)
+        if isinstance(manifest, dict) and isinstance(manifest.get("hosts"), dict)
+        else None
+    )
+    ssh = host.get("ssh") if isinstance(host, dict) else None
+    from infralink.cli.operations import _normalize_manifest_fingerprint
+
+    if not isinstance(ssh, dict) or _normalize_manifest_fingerprint(
+        ssh.get("host_key_fingerprint")
+    ) is None:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Bootstrap requires ssh.host_key_fingerprint",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare the host SSH key fingerprint before bootstrap",
+            details={"host": target.uuid},
+        )
 
 
 def _require_remote_tailnet_identity(target: Any, probe: HostReadinessProbe, address: str) -> None:

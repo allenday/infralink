@@ -1772,6 +1772,24 @@ def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
                 "Provide --registry pointing to a registry checkout root",
                 {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
             )
+        from infralink.cli.registry_authoring import _managed_runtime_registry_root
+
+        managed_root = _managed_runtime_registry_root().resolve()
+        selected_root = ctx.hosts_path.resolve()
+        if selected_root == managed_root or managed_root in selected_root.parents:
+            raise CliFailure(
+                code=ErrorCode.AUTHORING_CHECKOUT_REQUIRED,
+                message="Host create --write requires an operator registry working tree",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix=(
+                    "Use a writable authoring checkout, commit the generated manifest, "
+                    "and let normal self-deploy fetch the merged registry revision"
+                ),
+                details={"registry": str(ctx.hosts_path)},
+                next_actions=[
+                    action("help", ["infralink", "help", "host", "create"], "Show host create help")
+                ],
+            )
         registry = ctx.registry
         if registry.get_by_name(name) is not None:
             raise _host_create_failure(
