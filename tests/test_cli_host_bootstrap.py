@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 from click.testing import CliRunner
+from pydantic import ValidationError
 
 from infralink.cli.contracts import (
     HostBootstrapAction,
@@ -409,6 +410,7 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
                 },
                 "registry_repo_url": "https://example.invalid/registry.git",
                 "registry_ref": "main",
+                "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
             }
         ),
     )
@@ -661,6 +663,7 @@ def test_bootstrap_executor_carries_missing_prerequisites_and_one_controller_act
                 },
                 "registry_repo_url": "https://example.invalid/registry.git",
                 "registry_ref": "main",
+                "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
             }
         ),
     )
@@ -681,6 +684,56 @@ def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation(
     assert raised.value.fix == (
         "Provide the registry checkout root with --registry and rerun host bootstrap"
     )
+
+
+def test_controller_bootstrap_requires_declared_registry_known_hosts(tmp_path: Path) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    deployment = registry / HOST_ID / "operations" / "deployment.yml"
+    deployment.parent.mkdir(parents=True)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    controller_bootstrap:\n"
+        "      registry_read_identity_secret:\n"
+        "        project: fleet\n"
+        "        id: 11111111-1111-4111-8111-111111111111\n"
+        "      registry_repo_url: ssh://git@example.invalid:2222/registry.git\n"
+        "      registry_ref: main\n",
+        encoding="utf-8",
+    )
+    deployment.write_text(
+        "controller:\n  image:\n    repository: ghcr.io/example/controller\n    tag: main\n",
+        encoding="utf-8",
+    )
+    target = type("Target", (), {"uuid": HOST_ID})()
+
+    with pytest.raises(CliFailure) as raised:
+        _controller_bootstrap_state(registry, target)
+
+    assert raised.value.code is ErrorCode.CONFIGURATION_REQUIRED
+    assert raised.value.details["required_manifest_fields"][-1] == (
+        "controller_bootstrap.registry_known_hosts"
+    )
+
+
+@pytest.mark.parametrize("known_hosts", ["", "git.example.invalid ssh-ed25519 not-base64"])
+def test_controller_bootstrap_rejects_invalid_registry_known_hosts(known_hosts: str) -> None:
+    with pytest.raises(ValidationError, match="registry_known_hosts"):
+        HostControllerBootstrapState.model_validate(
+            {
+                "controller_image": "ghcr.io/example/controller:main",
+                "registry_read_identity_secret": {
+                    "project": "fleet",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                },
+                "registry_repo_url": "ssh://git@example.invalid:2222/registry.git",
+                "registry_ref": "main",
+                "registry_known_hosts": known_hosts,
+            }
+        )
 
 
 def test_bootstrap_reports_missing_controller_declaration_with_inspection_action(
@@ -718,6 +771,7 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
                 "controller_bootstrap.registry_read_identity_secret.id",
                 "controller_bootstrap.registry_repo_url",
                 "controller_bootstrap.registry_ref",
+                "controller_bootstrap.registry_known_hosts",
             ],
             "required_deployment_fields": [
                 "controller.image.repository",
@@ -790,6 +844,7 @@ def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
             },
             "registry_repo_url": "https://example.invalid/registry.git",
             "registry_ref": "main",
+            "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
         }
     )
     monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROL_ROOT", control)
@@ -819,6 +874,10 @@ def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
     assert any(command[0] == "ansible-playbook" for command in commands)
     assert ["ansible-playbook", "-vv"] in [command[:2] for command in commands]
     assert ansible_cwds == [executor_root]
+    executor_vars = json.loads(
+        next(command[-1] for command in commands if command[0] == "ansible-playbook")
+    )
+    assert executor_vars["registry_known_hosts"] == controller.registry_known_hosts
     assert not any(command[:2] == ["git", "-C"] for command in commands)
 
 

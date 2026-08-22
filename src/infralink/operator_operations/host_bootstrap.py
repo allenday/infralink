@@ -754,6 +754,7 @@ def _controller_bootstrap_state(
                 "registry_read_identity_secret": bootstrap["registry_read_identity_secret"],
                 "registry_repo_url": bootstrap["registry_repo_url"],
                 "registry_ref": bootstrap["registry_ref"],
+                "registry_known_hosts": bootstrap["registry_known_hosts"],
             }
         )
     except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError):
@@ -761,7 +762,7 @@ def _controller_bootstrap_state(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Selected host declaration lacks canonical controller bootstrap state",
             exit_code=ExitCode.INPUT_ERROR,
-            fix="Declare controller_bootstrap with registry key reference, repository, and ref",
+            fix="Declare controller_bootstrap with registry key reference, repository, ref, and SSH host keys",
             details={
                 "host": target.uuid,
                 "manifest_path": str(manifest_path),
@@ -771,6 +772,7 @@ def _controller_bootstrap_state(
                     "controller_bootstrap.registry_read_identity_secret.id",
                     "controller_bootstrap.registry_repo_url",
                     "controller_bootstrap.registry_ref",
+                    "controller_bootstrap.registry_known_hosts",
                 ],
                 "required_deployment_fields": [
                     "controller.image.repository",
