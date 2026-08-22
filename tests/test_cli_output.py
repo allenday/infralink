@@ -51,6 +51,7 @@ class OpaqueCredential:
 def test_error_codes_are_stable_strings() -> None:
     assert {code.name: code.value for code in ErrorCode} == {
         "USAGE_ERROR": "usage_error",
+        "AUTHORING_CHECKOUT_REQUIRED": "authoring_checkout_required",
         "CONFIGURATION_REQUIRED": "configuration_required",
         "INPUT_LOAD_FAILED": "input_load_failed",
         "ENTITY_NOT_FOUND": "entity_not_found",

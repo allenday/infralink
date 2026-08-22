@@ -131,7 +131,7 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
         ),
     )
     monkeypatch.setattr(
-        "infralink.cli.main.SshReadinessTransport.probe",
+        "infralink.operator_operations.host_bootstrap.SshReadinessTransport.probe",
         lambda self, address: HostReadinessProbe(
             reachable=False,
             hostname=None,
