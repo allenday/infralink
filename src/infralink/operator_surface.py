@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
     EdgeListResult,
+    HostBootstrapPlanResult,
     HostListResult,
     InfoResult,
     InfoSources,
@@ -82,6 +83,26 @@ class HostBootstrapRequest(SourceRequest):
         return self
 
 
+class HostBootstrapOperationResult(_OperationModel):
+    result: HostBootstrapPlanResult
+    succeeded: bool
+
+
+@operator_surface.operation("host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True)  # type: ignore[untyped-decorator]
+def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOperationResult:
+    """Execute bootstrap from an explicit source, without a Click parse context."""
+    from infralink.cli.main import Context
+    from infralink.operator_operations.host_bootstrap import execute_bootstrap
+
+    sources = load_registry(request)
+    context = Context()
+    context.registry_path = sources.registry_path
+    context.edges_path = request.edges
+    context._registry = sources.registry
+    result, _actions, succeeded = execute_bootstrap(context, request)
+    return HostBootstrapOperationResult(result=result, succeeded=succeeded)
+
+
 @operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
 def host_list(request: HostListRequest) -> HostListResult:
     """Return the registry host list without a Click context."""
@@ -113,6 +134,8 @@ def info(request: InfoRequest) -> InfoResult:
             edge_count=len(sources.edges),
         ),
     )
+
+
 
 
 @operator_surface.operation(
