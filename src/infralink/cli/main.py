@@ -30,7 +30,6 @@ from infralink.cli.contracts import (
     HelpNavigationAction,
     HelpResult,
     HelpSubcommand,
-    HostBootstrapPlanResult,
     InfoResult,
     InfoSources,
     InfoSummary,
@@ -1952,46 +1951,7 @@ def host_bootstrap(
         )
     except ValidationError as error:
         raise click.UsageError(error.errors(include_url=False)[0]["msg"]) from None
-    target = ctx.registry.get(host_id)
-    if target is None:
-        raise entity_not_found("host", host_id)
-    address = bootstrap_operations._bootstrap_tailnet_address(target, request.ssh_host)
-    projects = bootstrap_operations._bootstrap_declared_bws_projects(ctx, target)
-    controller_state = bootstrap_operations._controller_bootstrap_state(ctx.hosts_path, target)
-    if token is not None:
-        bootstrap_operations._validate_bootstrap_bws_access(
-            ctx, projects, token, controller_secret=controller_state.registry_read_identity_secret
-        )
-    with bootstrap_operations._bootstrap_pinned_transport(ctx, target, address) as transport:
-        probe = transport.probe(address)
-        bootstrap_operations._require_remote_tailnet_identity(target, probe, address)
-        readiness = bootstrap_operations.evaluate_bootstrap_readiness(
-            target, probe, address=address
-        )
-        if token is None:
-            readiness = bootstrap_operations._readiness_with_bws_token_required(readiness)
-        automated_actions = bootstrap_operations._bootstrap_executor_actions(readiness)
-        if apply_changes and automated_actions:
-            readiness = bootstrap_operations._apply_bootstrap_request(
-                ctx,
-                target,
-                address,
-                automated_actions,
-                controller_state,
-                token,
-                transport.known_hosts,
-            )
-    actions = bootstrap_operations._bootstrap_plan_actions(
-        ctx,
-        target,
-        address,
-        readiness,
-        bws_token_supplied=token is not None,
-    )
-    result = HostBootstrapPlanResult(
-        host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
-        readiness=readiness,
-    )
+    result, actions, succeeded = bootstrap_operations.execute_bootstrap(ctx, request)
     _emit(
         ok_envelope(
             _context_for(path=["host", "bootstrap"]),
@@ -1999,7 +1959,7 @@ def host_bootstrap(
             actions,
         )
     )
-    return 0 if readiness.ready or request.plan_only else 1
+    return 0 if succeeded else 1
 
 
 @host.command(name="verifier")

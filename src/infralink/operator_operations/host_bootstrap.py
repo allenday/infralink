@@ -47,6 +47,52 @@ _CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.y
 _CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
 
 
+def execute_bootstrap(ctx: Any, request: Any) -> tuple[Any, list[Action], bool]:
+    """Run one typed bootstrap request; transports only adapt input and output."""
+    target = ctx.registry.get(request.host_id)
+    if target is None:
+        from infralink.cli.queries import entity_not_found
+
+        raise entity_not_found("host", request.host_id)
+    address = _bootstrap_tailnet_address(target, request.ssh_host)
+    projects = _bootstrap_declared_bws_projects(ctx, target)
+    controller_state = _controller_bootstrap_state(ctx.hosts_path, target)
+    if request.bws_token is not None:
+        _validate_bootstrap_bws_access(
+            ctx,
+            projects,
+            request.bws_token,
+            controller_secret=controller_state.registry_read_identity_secret,
+        )
+    with _bootstrap_pinned_transport(ctx, target, address) as transport:
+        probe = transport.probe(address)
+        _require_remote_tailnet_identity(target, probe, address)
+        readiness = evaluate_bootstrap_readiness(target, probe, address=address)
+        if request.bws_token is None:
+            readiness = _readiness_with_bws_token_required(readiness)
+        automated_actions = _bootstrap_executor_actions(readiness)
+        if request.apply_changes and automated_actions:
+            readiness = _apply_bootstrap_request(
+                ctx,
+                target,
+                address,
+                automated_actions,
+                controller_state,
+                request.bws_token,
+                transport.known_hosts,
+            )
+    from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult
+
+    result = HostBootstrapPlanResult(
+        host=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        readiness=readiness,
+    )
+    actions = _bootstrap_plan_actions(
+        ctx, target, address, readiness, bws_token_supplied=request.bws_token is not None
+    )
+    return result, actions, readiness.ready or request.plan_only
+
+
 def _root_source_argv(ctx: Context) -> list[str]:
     argv = ["infralink"]
     if ctx.output_explicit:
