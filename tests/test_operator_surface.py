@@ -55,7 +55,9 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     )
     observed: dict[str, object] = {}
 
-    def fake_execute_bootstrap(context: object, request: HostBootstrapRequest) -> tuple[object, list[object], bool]:
+    def fake_execute_bootstrap(
+        context: object, request: HostBootstrapRequest
+    ) -> tuple[object, list[object], bool]:
         observed["registry"] = context.registry_path  # type: ignore[attr-defined]
         observed["request"] = request
         return (

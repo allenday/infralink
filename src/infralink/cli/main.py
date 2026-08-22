@@ -112,6 +112,8 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+
+
 def _operator_config_path() -> Path:
     configured = os.environ.get(CONFIG_ENVVAR)
     if configured:

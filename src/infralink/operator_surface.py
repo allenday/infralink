@@ -88,7 +88,9 @@ class HostBootstrapOperationResult(_OperationModel):
     succeeded: bool
 
 
-@operator_surface.operation("host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation(
+    "host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True
+)  # type: ignore[untyped-decorator]
 def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOperationResult:
     """Execute bootstrap from an explicit source, without a Click parse context."""
     from infralink.cli.main import Context
@@ -134,8 +136,6 @@ def info(request: InfoRequest) -> InfoResult:
             edge_count=len(sources.edges),
         ),
     )
-
-
 
 
 @operator_surface.operation(

@@ -151,6 +151,7 @@ def _controller_remote_identity(remote: str) -> str:
         host = f"{host}:{parsed.port}"
     return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
+
 def _bootstrap_plan_actions(
     ctx: Context,
     target: Any,
@@ -469,9 +470,10 @@ def _require_bootstrap_ssh_fingerprint(hosts_path: Path, target: Any) -> None:
     ssh = host.get("ssh") if isinstance(host, dict) else None
     from infralink.cli.operations import _normalize_manifest_fingerprint
 
-    if not isinstance(ssh, dict) or _normalize_manifest_fingerprint(
-        ssh.get("host_key_fingerprint")
-    ) is None:
+    if (
+        not isinstance(ssh, dict)
+        or _normalize_manifest_fingerprint(ssh.get("host_key_fingerprint")) is None
+    ):
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Bootstrap requires ssh.host_key_fingerprint",
