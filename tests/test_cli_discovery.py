@@ -8,6 +8,7 @@ import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
+import infralink
 import infralink.cli.main as cli_main
 from infralink.cli.actions import action
 from infralink.cli.errors import CliFailure, ErrorCode
@@ -35,7 +36,7 @@ def assert_schema(payload: dict, name: str) -> None:
 
 def test_root_discovers_canonical_commands_as_json() -> None:
     payload = payload_for()
-    assert payload["result"]["version"] == "0.6.6"
+    assert payload["result"]["version"] == infralink.__version__
     assert {"help", "version", "host", "service", "edge"} <= {
         item["name"] for item in payload["result"]["commands"]
     }
@@ -111,14 +112,14 @@ def test_host_detail_help_is_live_and_command_is_registered() -> None:
 def test_version_is_json() -> None:
     payload = payload_for("version")
     assert payload["result"] == {
-        "version": "0.6.6",
+        "version": infralink.__version__,
         "cli_schema_version": "infralink.cli/v1",
     }
 
 
 def test_click_version_alias_is_json() -> None:
     payload = payload_for("--version")
-    assert payload["result"]["version"] == "0.6.6"
+    assert payload["result"]["version"] == infralink.__version__
     assert payload["command"]["raw"] == "infralink --output json --version"
 
 
@@ -406,7 +407,7 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
 
     following = invoke("--version")
     assert following.exit_code == 0
-    assert json.loads(following.output)["result"]["version"] == "0.6.6"
+    assert json.loads(following.output)["result"]["version"] == infralink.__version__
 
 
 def raise_system_exit(code: object) -> None:
