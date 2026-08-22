@@ -1,15 +1,27 @@
-"""Typed operator operations shared by future Click and MCP projections.
+"""Typed operator operations projected through Infralink's public adapters.
 
-The existing CLI envelope remains public API.  New operator transitions enter
-through this registry so Click and MCP do not acquire independent schemas.
+Every public transport consumes these Pydantic contracts; transport code must
+not introduce an independent validation path.
 """
 
 from __future__ import annotations
 
 from ipaddress import ip_address, ip_network
 
-from agent_surface import App, OperationError  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field
+from agent_surface import App, OperationError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from infralink.cli.contracts import (
+    EdgeListResult,
+    HostBootstrapPlanResult,
+    HostListResult,
+    InfoResult,
+    InfoSources,
+    InfoSummary,
+    ServiceListResult,
+)
+from infralink.cli.queries import list_edges, list_hosts, list_services
+from infralink.operator_sources import SourceRequest, load_registry, load_sources
 
 
 class _OperationModel(BaseModel):
@@ -28,6 +40,102 @@ class DoctorBootstrapPlanResult(_OperationModel):
 
 
 operator_surface = App("infralink")
+
+
+class HostListRequest(SourceRequest):
+    """List hosts from one explicit registry source."""
+
+
+class ServiceListRequest(SourceRequest):
+    """List logical services from one explicit registry source."""
+
+
+class EdgeListRequest(SourceRequest):
+    """List declared edges from one explicit registry source."""
+
+
+class InfoRequest(SourceRequest):
+    """Summarize one explicit registry source."""
+
+
+class HostBootstrapRequest(SourceRequest):
+    """Transport-neutral input for one declared host bootstrap attempt."""
+
+    host_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+    ssh_host: str = Field(min_length=1)
+    plan: bool = False
+    apply: bool = False
+    bws_token: str | None = Field(
+        default=None,
+        min_length=1,
+        json_schema_extra={
+            "sensitive": True,
+            "cli": {"source": "stdin", "max_bytes": 8192},
+        },
+    )
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> HostBootstrapRequest:
+        if self.plan and self.apply:
+            raise ValueError("pass at most one of plan or apply")
+        if self.apply and self.bws_token is None:
+            raise ValueError("apply requires bws_token")
+        return self
+
+
+class HostBootstrapOperationResult(_OperationModel):
+    result: HostBootstrapPlanResult
+    succeeded: bool
+
+
+@operator_surface.operation(
+    "host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True
+)  # type: ignore[untyped-decorator]
+def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOperationResult:
+    """Execute bootstrap from an explicit source, without a Click parse context."""
+    from infralink.cli.main import Context
+    from infralink.operator_operations.host_bootstrap import execute_bootstrap
+
+    sources = load_registry(request)
+    context = Context()
+    context.registry_path = sources.registry_path
+    context.edges_path = request.edges
+    context._registry = sources.registry
+    result, _actions, succeeded = execute_bootstrap(context, request)
+    return HostBootstrapOperationResult(result=result, succeeded=succeeded)
+
+
+@operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
+def host_list(request: HostListRequest) -> HostListResult:
+    """Return the registry host list without a Click context."""
+    return list_hosts(load_registry(request).registry)
+
+
+@operator_surface.operation("service.list", summary="List declared services", read_only=True)  # type: ignore[untyped-decorator]
+def service_list(request: ServiceListRequest) -> ServiceListResult:
+    """Return the registry service list without a Click context."""
+    sources = load_sources(request)
+    return list_services(sources.registry, sources.edges)
+
+
+@operator_surface.operation("edge.list", summary="List declared edges", read_only=True)  # type: ignore[untyped-decorator]
+def edge_list(request: EdgeListRequest) -> EdgeListResult:
+    """Return the selected registry edge list without a Click context."""
+    return list_edges(load_sources(request).edges)
+
+
+@operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[untyped-decorator]
+def info(request: InfoRequest) -> InfoResult:
+    """Return topology counts and the exact resolved declaration sources."""
+    sources = load_sources(request)
+    return InfoResult(
+        sources=InfoSources(registry=str(sources.registry_path), edges=str(sources.edges_path)),
+        summary=InfoSummary(
+            host_count=len(sources.registry),
+            service_count=len(list_services(sources.registry, sources.edges).items),
+            edge_count=len(sources.edges),
+        ),
+    )
 
 
 @operator_surface.operation(

@@ -39,7 +39,7 @@ dependencies = [
     "jinja2>=3.0",
     "pydantic>=2.11,<3",
     "mcp>=2,<3",
-    "agent-surface[mcp]==0.1.3",
+    "agent-surface[mcp]==0.1.4",
 ]
 
 [project.optional-dependencies]
@@ -129,6 +129,10 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["agent_surface", "agent_surface.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
