@@ -194,6 +194,7 @@ class ApplyRequest:
     user: str
     host_key_fingerprint: str
     unit: str
+    host_key_algorithm: Literal["rsa", "ed25519"] | None = None
     verifier_layout: VerifierLayout | None = None
     verifier_source: Literal["legacy", "unavailable"] = "unavailable"
 
@@ -518,10 +519,20 @@ def _manifest_request(
             raise _registry_failure(
                 "Controller bootstrap Tailnet address is outside the tailnet range", path
             )
-        fingerprint = _normalize_manifest_fingerprint(ssh.get("host_key_fingerprint"))
-        if fingerprint is None:
+        host_key = _manifest_host_key(ssh.get("host_key_fingerprint"))
+        if host_key is None:
             raise _registry_failure("Controller bootstrap SSH fingerprint is invalid", path)
-        return ApplyRequest(host_uuid, canonical_name, address, 22, "root", fingerprint, _UNIT)
+        fingerprint, algorithm = host_key
+        return ApplyRequest(
+            host_uuid,
+            canonical_name,
+            address,
+            22,
+            "root",
+            fingerprint,
+            _UNIT,
+            host_key_algorithm=algorithm,
+        )
     if _MANIFEST_V2_APPLY_FIELDS.isdisjoint(data):
         return None
     if data.get("self_deploy_v2_reconcile_enabled") is not True:
@@ -546,20 +557,30 @@ def _manifest_request(
         raise _registry_failure(
             "Host apply manifest Tailscale address is outside the tailnet range", path
         )
-    fingerprint = _normalize_manifest_fingerprint(
+    host_key = _manifest_host_key(
         data.get(
             "self_deploy_v2_target_ssh_host_fingerprint",
             data.get("self_deploy_v2_promotion_host_fingerprint"),
         )
     )
-    if fingerprint is None:
+    if host_key is None:
         raise _registry_failure("Host apply manifest SSH fingerprint is invalid", path)
+    fingerprint, algorithm = host_key
     reconcile = data.get("reconcile")
     if reconcile is not None and (
         not isinstance(reconcile, dict) or reconcile.get("unit") != _UNIT
     ):
         raise _registry_failure("Host apply manifest reconcile unit is invalid", path)
-    return ApplyRequest(host_uuid, canonical_name, address, 22, "root", fingerprint, _UNIT)
+    return ApplyRequest(
+        host_uuid,
+        canonical_name,
+        address,
+        22,
+        "root",
+        fingerprint,
+        _UNIT,
+        host_key_algorithm=algorithm,
+    )
 
 
 def _contract_request(registry_path: Path, host: Any) -> ApplyRequest:
@@ -602,7 +623,7 @@ def _contract_request(registry_path: Path, host: Any) -> ApplyRequest:
     return ApplyRequest(host.uuid, host.canonical_name, address, port, user, fingerprint, _UNIT)
 
 
-def _normalize_manifest_fingerprint(value: object) -> str | None:
+def _manifest_host_key(value: object) -> tuple[str, Literal["rsa", "ed25519"]] | None:
     if not isinstance(value, str):
         return None
     parts = value.split()
@@ -612,7 +633,14 @@ def _normalize_manifest_fingerprint(value: object) -> str | None:
         or _FINGERPRINT.fullmatch(parts[1]) is None
     ):
         return None
-    return parts[1]
+    algorithm: Literal["rsa", "ed25519"] = "ed25519" if parts[0] == "ssh-ed25519" else "rsa"
+    return parts[1], algorithm
+
+
+def _normalize_manifest_fingerprint(value: object) -> str | None:
+    """Keep existing callers on the digest-only public helper."""
+    host_key = _manifest_host_key(value)
+    return host_key[0] if host_key is not None else None
 
 
 def _with_legacy_verifier_layout(
@@ -996,8 +1024,12 @@ def _diagnostic_status(value: object) -> int:
 def _pinned_known_hosts(request: ApplyRequest) -> Iterator[Path]:
     """Use only a scanned key whose declared SHA256 fingerprint matches."""
     try:
+        scan_command = ["ssh-keyscan", "-T", "10"]
+        if request.host_key_algorithm is not None:
+            scan_command.extend(["-t", request.host_key_algorithm])
+        scan_command.extend(["-p", str(request.port), request.address])
         scanned = subprocess.run(
-            ["ssh-keyscan", "-T", "10", "-p", str(request.port), request.address],
+            scan_command,
             text=True,
             capture_output=True,
             timeout=15,

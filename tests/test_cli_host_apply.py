@@ -337,6 +337,63 @@ def test_host_apply_reports_only_normalized_observed_fingerprints_on_key_mismatc
     assert [call[0] for call in calls] == ["ssh-keyscan", "ssh-keygen", "ssh-keygen", "ssh-keygen"]
 
 
+def test_host_apply_scans_the_declared_ed25519_key_type_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest key type selects the matching pinned host-key algorithm."""
+    registry = tmp_path / "registry"
+    host = registry / "hosts" / HOST_ID
+    host.mkdir(parents=True)
+    (host / "manifest.yml").write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    controller_bootstrap: {}\n"
+        f"    ssh:\n      host_key_fingerprint: ssh-ed25519 {FINGERPRINT}\n",
+        encoding="utf-8",
+    )
+    _git(registry, "init", "--quiet")
+    _git(registry, "config", "user.email", "test@example.invalid")
+    _git(registry, "config", "user.name", "Test")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "registry")
+    calls: list[list[str]] = []
+    original_run = subprocess.run
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[0] == "git":
+            return original_run(args, **kwargs)  # type: ignore[arg-type,return-value]
+        if args[0] == "ssh-keyscan":
+            assert args == [
+                "ssh-keyscan",
+                "-T",
+                "10",
+                "-t",
+                "ed25519",
+                "-p",
+                "22",
+                "100.64.68.83",
+            ]
+            return _completed("100.64.68.83 ssh-ed25519 opaque-ed25519-key\n")
+        if args[0] == "ssh-keygen":
+            assert kwargs["input"] == "100.64.68.83 ssh-ed25519 opaque-ed25519-key\n"
+            return _completed(f"256 {FINGERPRINT} scanned-host (ED25519)\n")
+        raise AssertionError("host apply must not open SSH during an identity dry run")
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    response = CliRunner().invoke(
+        cli,
+        ["--registry", str(registry / "hosts"), "host", "apply", HOST_ID, "--dry-run"],
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert payload["ok"] is True
+    assert [call[0] for call in calls if call[0] != "git"] == ["ssh-keyscan", "ssh-keygen"]
+
+
 def test_host_apply_rejects_a_nonzero_fingerprint_scan_even_when_stdout_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
