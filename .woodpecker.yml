@@ -12,6 +12,9 @@ steps:
       - apt-get update
       - apt-get install --yes --no-install-recommends git
       - python -m pip install --disable-pip-version-check -e ".[dev]"
+      - >-
+        python -m pip install --disable-pip-version-check --force-reinstall --no-deps
+        "agent-surface[mcp] @ git+https://github.com/allenday/agent-surface.git@df2407510dc58f25173807f03c97d978cf9f8235"
       - python -m ruff format --check src tests scripts
       - python -m ruff check src tests scripts
       - python -m mypy src scripts
