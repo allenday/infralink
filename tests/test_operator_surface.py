@@ -14,9 +14,26 @@ from infralink.cli.main import _bootstrap_tailnet_address, cli
 from infralink.mcp_server import create_server
 from infralink.operator_surface import (
     DoctorBootstrapPlanRequest,
+    HostBootstrapRequest,
     doctor_host_bootstrap_plan,
     operator_surface,
 )
+
+
+def test_bootstrap_request_uses_released_sensitive_stdin_contract() -> None:
+    request = HostBootstrapRequest(
+        registry=Path("/registry"),
+        host_id="host-1",
+        ssh_host="100.64.0.1",
+        apply_changes=True,
+        bws_token="token",
+    )
+
+    assert request.bws_token == "token"
+    assert HostBootstrapRequest.model_fields["bws_token"].json_schema_extra == {
+        "sensitive": True,
+        "cli": {"source": "stdin", "max_bytes": 8192},
+    }
 
 
 def test_bootstrap_plan_operation_has_one_typed_tailnet_contract() -> None:

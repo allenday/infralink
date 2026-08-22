@@ -1934,22 +1934,36 @@ def host_bootstrap(
     apply_changes: bool,
 ) -> int:
     """Plan required bootstrap actions or refresh a failed V2 controller."""
-    target = ctx.registry.get(host_id)
-    if target is None:
-        raise entity_not_found("host", host_id)
-    if plan_only and apply_changes:
-        raise click.UsageError("pass at most one of --plan or --apply")
-    address = _bootstrap_tailnet_address(target, ssh_host)
-    if apply_changes and not bws_token_stdin:
+    from pydantic import ValidationError
+
+    from infralink.operator_surface import HostBootstrapRequest
+
+    token = _read_bootstrap_bws_token() if bws_token_stdin else None
+    if apply_changes and token is None:
         raise CliFailure(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Host bootstrap apply requires a BWS token on standard input",
             exit_code=ExitCode.INPUT_ERROR,
             fix="Pipe the host machine token to infralink host bootstrap --bws-token-stdin --apply",
-            details={"host": target.uuid, "requirement": "bws_token_stdin"},
+            details={"host": host_id, "requirement": "bws_token_stdin"},
         )
+    try:
+        request = HostBootstrapRequest(
+            registry=ctx.registry_path,
+            edges=ctx.edges_path,
+            host_id=host_id,
+            ssh_host=ssh_host,
+            plan_only=plan_only,
+            apply_changes=apply_changes,
+            bws_token=token,
+        )
+    except ValidationError as error:
+        raise click.UsageError(error.errors(include_url=False)[0]["msg"]) from None
+    target = ctx.registry.get(host_id)
+    if target is None:
+        raise entity_not_found("host", host_id)
+    address = _bootstrap_tailnet_address(target, request.ssh_host)
     projects = _bootstrap_declared_bws_projects(ctx, target)
-    token = _read_bootstrap_bws_token() if bws_token_stdin else None
     controller_state = _controller_bootstrap_state(ctx.hosts_path, target)
     if token is not None:
         _validate_bootstrap_bws_access(
@@ -1992,7 +2006,7 @@ def host_bootstrap(
             actions,
         )
     )
-    return 0 if readiness.ready or plan_only else 1
+    return 0 if readiness.ready or request.plan_only else 1
 
 
 def _bootstrap_plan_actions(

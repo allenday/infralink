@@ -9,7 +9,7 @@ from __future__ import annotations
 from ipaddress import ip_address, ip_network
 
 from agent_surface import App, OperationError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
     EdgeListResult,
@@ -55,6 +55,31 @@ class EdgeListRequest(SourceRequest):
 
 class InfoRequest(SourceRequest):
     """Summarize one explicit registry source."""
+
+
+class HostBootstrapRequest(SourceRequest):
+    """Transport-neutral input for one declared host bootstrap attempt."""
+
+    host_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+    ssh_host: str = Field(min_length=1)
+    plan_only: bool = False
+    apply_changes: bool = False
+    bws_token: str | None = Field(
+        default=None,
+        min_length=1,
+        json_schema_extra={
+            "sensitive": True,
+            "cli": {"source": "stdin", "max_bytes": 8192},
+        },
+    )
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> HostBootstrapRequest:
+        if self.plan_only and self.apply_changes:
+            raise ValueError("pass at most one of plan_only or apply_changes")
+        if self.apply_changes and self.bws_token is None:
+            raise ValueError("apply_changes requires bws_token")
+        return self
 
 
 @operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
