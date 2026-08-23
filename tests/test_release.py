@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -122,3 +123,28 @@ def test_release_contract_derives_tag_and_assets_from_version() -> None:
         "infralink-0.4.0-py3-none-any.whl",
         "infralink-0.4.0.tar.gz",
     )
+
+
+def write_wheel_metadata(wheel: Path, version: str) -> None:
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            f"infralink-{version}.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: infralink\nVersion: {version}\n",
+        )
+
+
+def test_validate_distribution_version_rejects_wheel_metadata_mismatch(tmp_path: Path) -> None:
+    module = load_module()
+    wheel = tmp_path / "infralink-0.6.10-py3-none-any.whl"
+    write_wheel_metadata(wheel, "0.6.9")
+
+    with pytest.raises(module.ReleaseError, match="wheel metadata version"):
+        module.validate_distribution_version(dist=tmp_path, version="0.6.10")
+
+
+def test_validate_distribution_version_accepts_matching_wheel_metadata(tmp_path: Path) -> None:
+    module = load_module()
+    wheel = tmp_path / "infralink-0.6.10-py3-none-any.whl"
+    write_wheel_metadata(wheel, "0.6.10")
+
+    module.validate_distribution_version(dist=tmp_path, version="0.6.10")

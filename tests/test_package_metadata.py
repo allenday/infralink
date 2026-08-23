@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from packaging.version import Version
+
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -28,8 +30,8 @@ def load_pyproject() -> dict[str, object]:
         return tomllib.load(pyproject_file)
 
 
-def test_package_version_is_0_6_9() -> None:
-    assert infralink.__version__ == "0.6.9"
+def test_package_version_is_valid_pep440() -> None:
+    assert str(Version(infralink.__version__)) == infralink.__version__
 
 
 def test_project_uses_dynamic_version() -> None:
