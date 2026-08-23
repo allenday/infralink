@@ -707,31 +707,60 @@ def test_host_status_reads_target_timer_and_last_reconcile_evidence(
     assert_schema(payload, "host-status")
 
 
-def test_host_apply_reports_healthy_target_timer_when_direct_dispatch_is_unavailable(
+def test_host_status_reports_failed_target_health_as_typed_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            "timer_active=active\n"
+            "timer_next=2026-08-13T17:00:00Z\n"
+            "unit_active=inactive\n"
+            "unit_result=exit-code\n"
+            "unit_status=1\n"
+            "registry_sha=" + "c" * 40 + "\n"
+            "finished_at=2026-08-13T16:00:00Z\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
 
-    class UnavailableProvider:
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "status", HOST_ID])
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert_schema(payload, "host-status")
+    assert payload["ok"] is True
+    assert payload["result"]["last_reconcile"]["status"] == "failed"
+
+
+@pytest.mark.parametrize("dispatch_status", ["unavailable", "rejected"])
+def test_host_apply_reports_failed_target_timer_when_direct_dispatch_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatch_status: str
+) -> None:
+    registry = _registry_checkout(tmp_path)
+
+    class FallbackProvider:
         def submit(self, request: object) -> OperationRecord:
             raise CliFailure(
                 code=ErrorCode.PROVIDER_UNAVAILABLE,
                 message="Declared host SSH reconcile operation is unavailable",
                 exit_code=ExitCode.PROVIDER_ERROR,
                 fix="Retry",
-                details={"dispatch": "unavailable"},
+                details={"dispatch": dispatch_status},
             )
 
-    monkeypatch.setattr(
-        "infralink.cli.operations.operation_provider", lambda: UnavailableProvider()
-    )
+    monkeypatch.setattr("infralink.cli.operations.operation_provider", lambda: FallbackProvider())
     monkeypatch.setattr(
         "infralink.cli.operations.inspect_target_status",
         lambda request: {
             "timer_active": "active",
             "timer_next": "2026-08-13T17:00:00Z",
             "unit_active": "inactive",
-            "unit_result": "success",
+            "unit_result": "exit-code",
             "registry_sha": "b" * 40,
             "finished_at": "2026-08-13T16:00:00Z",
         },
@@ -746,13 +775,13 @@ def test_host_apply_reports_healthy_target_timer_when_direct_dispatch_is_unavail
     assert_schema(payload, "host-apply")
     assert payload["result"] == {
         "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
-        "dispatch": {"provider": "ssh", "status": "unavailable"},
+        "dispatch": {"provider": "ssh", "status": dispatch_status},
         "target_status": {
             "reconcile_mode": "timer",
             "timer": {"active": True, "next_scheduled_at": "2026-08-13T17:00:00Z"},
             "in_progress": False,
             "last_reconcile": {
-                "status": "success",
+                "status": "failed",
                 "registry_sha": "b" * 40,
                 "finished_at": "2026-08-13T16:00:00Z",
             },
@@ -1008,8 +1037,9 @@ def test_host_apply_wait_projects_the_same_canonical_failure_diagnostic(
     )
 
     payload = yaml.safe_load(response.output)
-    assert response.exit_code == 1
+    assert response.exit_code == 0
     assert_schema(payload, "host-apply")
+    assert payload["result"]["operation"]["state"] == "failed"
     assert payload["result"]["failure"]["journal"] == [
         "code: reconcile_launcher_process_failed",
         "stage: apply",

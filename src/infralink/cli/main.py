@@ -2117,7 +2117,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
             ),
         ]
         _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
-        return 0 if target_status.last_reconcile.status == "success" else 1
+        return 0
     if wait:
         record = wait_for_terminal(provider, record.id, request, timeout_seconds=timeout)
     result = HostApplyResult(
@@ -2148,7 +2148,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
             )
         )
     _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
-    return 0 if record.state == "converged" or not wait else 1
+    return 0
 
 
 def _target_reconcile_status(values: dict[str, str]) -> TargetReconcileStatus:
@@ -2210,7 +2210,7 @@ def host_status(ctx: Context, host_ref: str) -> int:
             ],
         )
     )
-    return 0 if target_status.last_reconcile.status == "success" else 1
+    return 0
 
 
 @host.command(name="logs")
