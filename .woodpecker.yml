@@ -85,6 +85,7 @@ steps:
       - rm -rf dist
       - python -m build
       - python -m twine check dist/*
+      - python scripts/release.py distribution-version --dist dist --version "$${RELEASE_VERSION}"
       - python scripts/release.py checksums --version "$${RELEASE_VERSION}" --dist dist
       - COSIGN_PASSWORD= cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
       - >-
