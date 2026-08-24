@@ -738,10 +738,10 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
         manifest = (
             yaml.safe_load(manifest_path.read_text(encoding="utf-8")) if manifest_path else {}
         )
-        declared_v2 = bool(
-            manifest.get("hosts", {})
-            .get(str(host.uuid), {})
-            .get("self_deploy_v2_target_ssh_host_fingerprint")
+        manifest_host = manifest.get("hosts", {}).get(str(host.uuid), {})
+        declared_v2 = isinstance(manifest_host, dict) and (
+            "controller_bootstrap" in manifest_host
+            or isinstance(manifest_host.get("self_deploy_v2_target_ssh_host_fingerprint"), str)
         )
     except (OSError, TypeError, yaml.YAMLError):
         declared_v2 = False

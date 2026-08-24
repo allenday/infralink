@@ -1201,6 +1201,142 @@ def test_doctor_host_includes_fail_closed_live_bootstrap_readiness(
     assert plan_action["safe"] is True
 
 
+def test_doctor_uses_canonical_bootstrap_ssh_trust_for_live_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from infralink.cli.contracts import HostReadinessResult
+    from infralink.cli.doctor import _host_readiness
+
+    host = SimpleNamespace(uuid=HOST_ID, canonical_name="database.example.com")
+    manifest = tmp_path / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir()
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        "    controller_bootstrap: {}\n"
+        "    ssh:\n"
+        "      host_key_fingerprint: ssh-ed25519 "
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+        encoding="utf-8",
+    )
+    context = SimpleNamespace(
+        registry=SimpleNamespace(get=lambda target: host if target == HOST_ID else None),
+        hosts_path=tmp_path,
+    )
+    request = SimpleNamespace()
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        "infralink.cli.operations.resolve_apply_request",
+        lambda hosts_path, target: calls.append((hosts_path, target)) or request,
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.pinned_target_ssh_identity",
+        lambda target: __import__("contextlib").nullcontext(tmp_path / "known_hosts"),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.doctor.evaluate_host_readiness",
+        lambda target, transport: HostReadinessResult(
+            transport="root_ssh", ready=True, checks=[], actions=[]
+        ),
+    )
+
+    readiness = _host_readiness(context, HOST_ID, declaration_only=False)
+
+    assert calls == [(tmp_path, host)]
+    assert readiness.checks[-1].id == "ssh_host_fingerprint"
+    assert readiness.checks[-1].passed is True
+
+
+@pytest.mark.parametrize("ssh", [None, {}, {"host_key_fingerprint": 7}])
+def test_doctor_fails_closed_for_malformed_canonical_bootstrap_ssh_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ssh: object
+) -> None:
+    from infralink.cli.doctor import _host_readiness
+
+    host = SimpleNamespace(uuid=HOST_ID, canonical_name="database.example.com")
+    manifest = tmp_path / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir()
+    manifest.write_text(
+        yaml.safe_dump(
+            {"hosts": {HOST_ID: {"controller_bootstrap": {}, "ssh": ssh}}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    context = SimpleNamespace(
+        registry=SimpleNamespace(get=lambda target: host if target == HOST_ID else None),
+        hosts_path=tmp_path,
+    )
+
+    monkeypatch.setattr(
+        "infralink.cli.operations.resolve_apply_request",
+        lambda hosts_path, target: (_ for _ in ()).throw(ValueError("invalid SSH trust")),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.doctor.evaluate_host_readiness",
+        lambda target, transport: (_ for _ in ()).throw(
+            AssertionError("must not use unpinned SSH")
+        ),
+    )
+
+    readiness = _host_readiness(context, HOST_ID, declaration_only=False)
+
+    assert readiness.ready is False
+    assert readiness.checks[0].id == "ssh_host_fingerprint"
+    assert readiness.checks[0].passed is False
+    assert readiness.checks[0].detail == "ssh_host_fingerprint_mismatch"
+
+
+@pytest.mark.parametrize("bootstrap", [None, [], "invalid"])
+def test_doctor_fails_closed_for_non_mapping_canonical_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bootstrap: object
+) -> None:
+    from infralink.cli.doctor import _host_readiness
+
+    host = SimpleNamespace(uuid=HOST_ID, canonical_name="database.example.com")
+    manifest = tmp_path / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir()
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "hosts": {
+                    HOST_ID: {
+                        "controller_bootstrap": bootstrap,
+                        "ssh": {
+                            "host_key_fingerprint": "ssh-ed25519 "
+                            "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                        },
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    context = SimpleNamespace(
+        registry=SimpleNamespace(get=lambda target: host if target == HOST_ID else None),
+        hosts_path=tmp_path,
+    )
+
+    monkeypatch.setattr(
+        "infralink.cli.operations.resolve_apply_request",
+        lambda hosts_path, target: (_ for _ in ()).throw(ValueError("invalid bootstrap")),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.doctor.evaluate_host_readiness",
+        lambda target, transport: (_ for _ in ()).throw(
+            AssertionError("must not use unpinned SSH")
+        ),
+    )
+
+    readiness = _host_readiness(context, HOST_ID, declaration_only=False)
+
+    assert readiness.ready is False
+    assert readiness.checks[0].id == "ssh_host_fingerprint"
+    assert readiness.checks[0].passed is False
+
+
 def test_bootstrap_plan_action_requires_declared_tailnet_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

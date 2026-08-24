@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".woodpecker.yml"
 EXPECTED_COMMANDS = [
     "cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality",
+    "sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources",
     "apt-get update",
     "apt-get install --yes --no-install-recommends git",
     'python -m pip install --disable-pip-version-check -e ".[dev]"',
