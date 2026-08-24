@@ -24,7 +24,7 @@ def _probe(**overrides: object) -> HostReadinessProbe:
     return HostReadinessProbe(**values)
 
 
-def test_readiness_is_fail_closed_and_derives_only_failed_baseline_actions() -> None:
+def test_readiness_is_fail_closed_and_derives_only_required_failed_baseline_actions() -> None:
     readiness = HostReadinessEvaluator().evaluate(
         canonical_name="relaxgg-db-es1",
         probe=_probe(),
@@ -43,8 +43,6 @@ def test_readiness_is_fail_closed_and_derives_only_failed_baseline_actions() -> 
         "self_deploy_timer",
     ]
     assert [action.check_id for action in readiness.actions] == [
-        "devops_account",
-        "devops_authorized_access",
         "docker",
         "jq",
         "bws_cli",
@@ -53,6 +51,44 @@ def test_readiness_is_fail_closed_and_derives_only_failed_baseline_actions() -> 
         "self_deploy_runtime",
         "self_deploy_timer",
     ]
+
+
+def test_missing_devops_access_is_advisory_without_a_declared_key_policy() -> None:
+    readiness = HostReadinessEvaluator().evaluate(
+        canonical_name="relaxgg-db-es1",
+        probe=_probe(
+            commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+            bws_config=True,
+            self_deploy_dependencies=True,
+            self_deploy_runtime=True,
+            self_deploy_mode="v2_reconcile",
+            self_deploy_timer_enabled=True,
+            self_deploy_timer_active=True,
+            self_deploy_reconcile_result="success",
+            self_deploy_reconcile_exit_status=0,
+            self_deploy_reconcile_active_state="inactive",
+            self_deploy_reconcile_sub_state="dead",
+            self_deploy_reconcile_exit_timestamp_monotonic=123,
+            controller_image="ghcr.io/example/controller:main",
+            controller_python_version="3.12.0",
+            requires_controller_reconcile=True,
+        ),
+    )
+
+    assert readiness.ready is True
+    advisory_checks = [
+        check
+        for check in readiness.checks
+        if check.id in {"devops_account", "devops_authorized_access"}
+    ]
+    assert [(check.required, check.passed, check.detail) for check in advisory_checks] == [
+        (False, False, "devops_account_missing"),
+        (False, False, "devops_authorized_access_missing"),
+    ]
+    assert not any(
+        action.check_id in {"devops_account", "devops_authorized_access"}
+        for action in readiness.actions
+    )
 
 
 def test_legacy_registry_layout_remains_healthy_without_declared_migration_policy() -> None:

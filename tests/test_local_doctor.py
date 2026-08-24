@@ -187,6 +187,38 @@ def test_collector_emits_a_stable_secret_free_result_from_readiness(
     assert "machine-id" not in json.dumps(payload)
 
 
+def test_collector_reports_missing_undeclared_devops_access_as_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, trust_root = _signed_firewall_inputs(tmp_path)
+    monkeypatch.setattr("infralink.local_doctor._verify_ssh_signature", lambda *args: True)
+    result = LocalDoctorCollector(clock=lambda: NOW, freshness_seconds=60).collect(
+        canonical_name="node-1",
+        probe=replace(
+            _probe(),
+            devops_account=False,
+            devops_authorized_access=False,
+            registry_layout="v2_managed",
+        ),
+        firewall_declaration_path=path,
+        firewall_trust_root=trust_root,
+        firewall_evaluator=NftablesFirewallEvaluator(
+            command_runner=lambda argv: json.dumps(_nft_ruleset())
+        ),
+        require_reconcile=False,
+    )
+
+    assert result.status == "healthy"
+    assert [
+        (check.id, check.required, check.passed, check.severity)
+        for check in result.checks
+        if check.id in {"devops_account", "devops_authorized_access"}
+    ] == [
+        ("devops_account", False, False, "warning"),
+        ("devops_authorized_access", False, False, "warning"),
+    ]
+
+
 def test_latest_result_store_replaces_the_previous_result_atomically(tmp_path: Path) -> None:
     path = tmp_path / "doctor" / "latest.json"
     store = LatestResultStore(path)
