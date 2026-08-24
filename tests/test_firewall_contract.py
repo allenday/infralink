@@ -44,6 +44,69 @@ def test_policy_accepts_declared_default_deny_ingress_and_snat() -> None:
     assert policy.egress_snat[0].to_source == "198.51.100.10"
 
 
+def test_policy_accepts_declared_container_egress() -> None:
+    policy = FirewallPolicy.model_validate(
+        {
+            "backend": "nftables",
+            "mode": "default-deny",
+            "management_ssh": {
+                "port": 22,
+                "interface": "eth0",
+                "sources": ["0.0.0.0/0"],
+            },
+            "container_egress": [
+                {
+                    "service": "woodpecker-agent",
+                    "protocol": "tcp",
+                    "ports": [443],
+                    "destinations": ["0.0.0.0/0"],
+                }
+            ],
+        }
+    )
+
+    assert policy.container_egress[0].service == "woodpecker-agent"
+
+
+def test_policy_accepts_all_interface_management_ssh() -> None:
+    policy = FirewallPolicy.model_validate(
+        {
+            "backend": "nftables",
+            "mode": "default-deny",
+            "management_ssh": {
+                "port": 22,
+                "interface": "any",
+                "sources": ["0.0.0.0/0", "::/0"],
+            },
+        }
+    )
+
+    assert policy.management_ssh.interface == "any"
+
+
+def test_policy_rejects_duplicate_container_egress_destinations() -> None:
+    with pytest.raises(ValidationError, match="destinations must be unique"):
+        FirewallPolicy.model_validate(
+            {
+                "backend": "nftables",
+                "mode": "default-deny",
+                "management_ssh": {
+                    "port": 22,
+                    "interface": "eth0",
+                    "sources": ["0.0.0.0/0"],
+                },
+                "container_egress": [
+                    {
+                        "service": "woodpecker-agent",
+                        "protocol": "tcp",
+                        "ports": [443],
+                        "destinations": ["0.0.0.0/0", "0.0.0.0/0"],
+                    }
+                ],
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

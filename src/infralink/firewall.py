@@ -122,6 +122,33 @@ class HostBridgeIngress(StrictModel):
         return _unique_ports(value)
 
 
+class ContainerEgressRule(StrictModel):
+    """Allow one bridge-mode service to reach declared external sockets."""
+
+    service: str
+    protocol: Literal["tcp", "udp"]
+    ports: list[Port] = Field(min_length=1, max_length=64)
+    destinations: list[str] = Field(min_length=1, max_length=64)
+
+    @field_validator("service")
+    @classmethod
+    def valid_service(cls, value: str) -> str:
+        return _service(value)
+
+    @field_validator("ports")
+    @classmethod
+    def unique_ports(cls, value: list[int]) -> list[int]:
+        return _unique_ports(value)
+
+    @field_validator("destinations")
+    @classmethod
+    def canonical_destinations(cls, value: list[str]) -> list[str]:
+        normalized = [_canonical_network(item, specific=False) for item in value]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("destinations must be unique")
+        return normalized
+
+
 class EgressSnatRule(StrictModel):
     """Pin selected container egress to one explicit IPv4 source address."""
 
@@ -163,7 +190,11 @@ class EgressSnatRule(StrictModel):
 
 
 class ManagementSsh(StrictModel):
-    """The explicitly declared management SSH listener."""
+    """The explicitly declared management SSH listener.
+
+    ``interface: any`` intentionally covers every host interface, including
+    IPv4, IPv6, and Tailnet paths.  Other values name one concrete interface.
+    """
 
     port: Port
     interface: str
@@ -172,6 +203,8 @@ class ManagementSsh(StrictModel):
     @field_validator("interface")
     @classmethod
     def valid_interface(cls, value: str) -> str:
+        if value == "any":
+            return value
         return _interface(value)
 
     @field_validator("sources")
@@ -191,6 +224,7 @@ class FirewallPolicy(StrictModel):
     management_ssh: ManagementSsh
     ingress: list[IngressRule] = Field(default_factory=list, max_length=128)
     host_bridge_ingress: list[HostBridgeIngress] = Field(default_factory=list, max_length=128)
+    container_egress: list[ContainerEgressRule] = Field(default_factory=list, max_length=128)
     egress_snat: list[EgressSnatRule] = Field(default_factory=list, max_length=128)
 
     @model_validator(mode="after")
@@ -209,6 +243,19 @@ class FirewallPolicy(StrictModel):
                 if bridge_socket in bridge_sockets:
                     raise ValueError("each bridge port needs one service owner")
                 bridge_sockets.add(bridge_socket)
+        egress_sockets: set[tuple[str, str, int, str]] = set()
+        for egress_rule in self.container_egress:
+            for port in egress_rule.ports:
+                for destination in egress_rule.destinations:
+                    egress_socket = (
+                        egress_rule.service,
+                        egress_rule.protocol,
+                        port,
+                        destination,
+                    )
+                    if egress_socket in egress_sockets:
+                        raise ValueError("each container egress socket needs one service owner")
+                    egress_sockets.add(egress_socket)
         snat_sockets: set[tuple[str, str, int]] = set()
         for snat_rule in self.egress_snat:
             for port in snat_rule.ports:
