@@ -11,6 +11,7 @@ class BaselineRequirement:
     description: str
     action_id: str
     action_description: str
+    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -99,12 +100,14 @@ BASELINE_REQUIREMENTS: tuple[BaselineRequirement, ...] = (
         "The devops account exists.",
         "create_devops_account",
         "Create the devops account.",
+        required=False,
     ),
     BaselineRequirement(
         "devops_authorized_access",
         "The devops account has authorized SSH access.",
         "configure_devops_authorized_access",
         "Install authorized SSH access for devops.",
+        required=False,
     ),
     BaselineRequirement("git", "Git CLI is installed.", "install_git", "Install Git."),
     BaselineRequirement("docker", "Docker CLI is installed.", "install_docker", "Install Docker."),
@@ -231,9 +234,12 @@ class HostReadinessEvaluator:
         checks = [
             ReadinessCheck(
                 id=requirement.id,
-                required=require_reconcile
-                or requirement.id
-                not in {"self_deploy_timer", "self_deploy_reconcile", "controller_python"},
+                required=requirement.required
+                and (
+                    require_reconcile
+                    or requirement.id
+                    not in {"self_deploy_timer", "self_deploy_reconcile", "controller_python"}
+                ),
                 passed=outcomes[requirement.id][0]
                 if require_reconcile
                 or requirement.id
