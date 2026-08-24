@@ -1275,7 +1275,9 @@ def test_doctor_fails_closed_for_malformed_canonical_bootstrap_ssh_trust(
     )
     monkeypatch.setattr(
         "infralink.cli.doctor.evaluate_host_readiness",
-        lambda target, transport: (_ for _ in ()).throw(AssertionError("must not use unpinned SSH")),
+        lambda target, transport: (_ for _ in ()).throw(
+            AssertionError("must not use unpinned SSH")
+        ),
     )
 
     readiness = _host_readiness(context, HOST_ID, declaration_only=False)
@@ -1323,7 +1325,9 @@ def test_doctor_fails_closed_for_non_mapping_canonical_bootstrap(
     )
     monkeypatch.setattr(
         "infralink.cli.doctor.evaluate_host_readiness",
-        lambda target, transport: (_ for _ in ()).throw(AssertionError("must not use unpinned SSH")),
+        lambda target, transport: (_ for _ in ()).throw(
+            AssertionError("must not use unpinned SSH")
+        ),
     )
 
     readiness = _host_readiness(context, HOST_ID, declaration_only=False)
