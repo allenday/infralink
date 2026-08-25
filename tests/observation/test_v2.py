@@ -16,6 +16,7 @@ from infralink.observation.v2 import (
     V2ResourceValidationError,
     V2TopologyValidationError,
     parse_v2_document,
+    plan_v2_configuration_bindings,
     plan_v2_metric_contracts,
     validate_v2_documents,
 )
@@ -286,6 +287,229 @@ def test_component_resource_slots_bind_typed_inputs_without_secret_values() -> N
         "storage",
         "external-service",
     ]
+
+
+def test_profile_configuration_slots_resolve_typed_component_bindings() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "irc-stack",
+                    "components": [{"id": "inspircd", "endpoints": []}],
+                    "configuration_slots": [
+                        {
+                            "id": "tenant-stacks",
+                            "component_id": "inspircd",
+                            "kind": "record-list",
+                            "identity_field": "id",
+                            "purpose": "Declare IRC tenant stack identity and hostnames.",
+                            "fields": [
+                                {"id": "id", "kind": "string"},
+                                {"id": "redis-database", "kind": "integer"},
+                                {"id": "irc-hosts", "kind": "string-list"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "staging",
+                    "host_id": HOST_ID,
+                    "profile_id": "irc-stack",
+                    "components": [{"slot_id": "inspircd"}],
+                    "configuration_bindings": [
+                        {
+                            "slot_id": "tenant-stacks",
+                            "value": [
+                                {
+                                    "id": "platform",
+                                    "redis-database": 1,
+                                    "irc-hosts": ["irc.example.test"],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    binding = document.service_instances[0].configuration_bindings[0]
+    assert binding.slot_id == "tenant-stacks"
+    assert binding.value == [
+        {
+            "id": "platform",
+            "redis-database": 1,
+            "irc-hosts": ["irc.example.test"],
+        }
+    ]
+
+    resolved = plan_v2_configuration_bindings((document,))
+    assert [(item.component_id, item.slot_id, item.value) for item in resolved] == [
+        (
+            "inspircd",
+            "tenant-stacks",
+            [
+                {
+                    "id": "platform",
+                    "redis-database": 1,
+                    "irc-hosts": ["irc.example.test"],
+                }
+            ],
+        )
+    ]
+
+
+def test_profile_wide_configuration_slot_has_no_component_owner() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "observability",
+                    "components": [{"id": "grafana", "endpoints": []}],
+                    "configuration_slots": [
+                        {
+                            "id": "datasource",
+                            "kind": "record",
+                            "purpose": "Bind the datasource materialization contract.",
+                            "fields": [{"id": "artifact", "kind": "string"}],
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "observability",
+                    "host_id": HOST_ID,
+                    "profile_id": "observability",
+                    "components": [{"slot_id": "grafana"}],
+                    "configuration_bindings": [
+                        {"slot_id": "datasource", "value": {"artifact": "datasource.yaml"}}
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert plan_v2_configuration_bindings((document,))[0].component_id is None
+
+
+def test_record_list_configuration_accepts_typed_hostname_list_maps_and_rejects_duplicates() -> (
+    None
+):
+    source = {
+        "schema_version": "infralink.observation/v2",
+        "service_profiles": [
+            {
+                "id": "irc-stack",
+                "components": [{"id": "inspircd", "endpoints": []}],
+                "configuration_slots": [
+                    {
+                        "id": "tenant-stacks",
+                        "kind": "record-list",
+                        "identity_field": "id",
+                        "purpose": "Declare IRC tenant stack identity and hostnames.",
+                        "fields": [
+                            {"id": "id", "kind": "string"},
+                            {"id": "hosts", "kind": "string-list-map"},
+                        ],
+                    }
+                ],
+            }
+        ],
+        "service_instances": [
+            {
+                "id": "staging",
+                "host_id": HOST_ID,
+                "profile_id": "irc-stack",
+                "components": [{"slot_id": "inspircd"}],
+                "configuration_bindings": [
+                    {
+                        "slot_id": "tenant-stacks",
+                        "value": [{"id": "platform", "hosts": {"irc": ["irc.example.test"]}}],
+                    }
+                ],
+            }
+        ],
+    }
+
+    parsed = parse_v2_document(source)
+    assert parsed.service_instances[0].configuration_bindings[0].value == [
+        {"id": "platform", "hosts": {"irc": ["irc.example.test"]}}
+    ]
+
+    source["service_instances"][0]["configuration_bindings"][0]["value"].append(
+        {"id": "platform", "hosts": {"irc": ["other.example.test"]}}
+    )
+    with pytest.raises(ValueError, match="duplicate identity"):
+        parse_v2_document(source)
+
+
+def test_configuration_binding_schema_rejects_untyped_object_value() -> None:
+    schema_path = Path(__file__).parents[2] / "src/infralink/schemas/observation/v2/document.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    binding_schema = schema["$defs"]["ConfigurationBinding"]
+
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(binding_schema).validate(
+            {"slot_id": "datasource", "value": {"nested": {"untyped": "object"}}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("configuration_bindings", "message"),
+    [
+        ([{"slot_id": "unknown", "value": "value"}], "unknown configuration slot"),
+        ([{"slot_id": "tenant-stacks", "value": [{"id": "platform"}]}], "required"),
+        (
+            [
+                {"slot_id": "tenant-stacks", "value": []},
+                {"slot_id": "tenant-stacks", "value": []},
+            ],
+            "duplicate configuration binding",
+        ),
+    ],
+)
+def test_profile_configuration_slots_reject_invalid_instance_bindings(
+    configuration_bindings: list[dict[str, object]], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "irc-stack",
+                        "components": [{"id": "inspircd", "endpoints": []}],
+                        "configuration_slots": [
+                            {
+                                "id": "tenant-stacks",
+                                "component_id": "inspircd",
+                                "kind": "record-list",
+                                "identity_field": "id",
+                                "purpose": "Declare IRC tenant stack identity and hostnames.",
+                                "fields": [
+                                    {"id": "id", "kind": "string"},
+                                    {"id": "redis-database", "kind": "integer"},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "staging",
+                        "host_id": HOST_ID,
+                        "profile_id": "irc-stack",
+                        "components": [{"slot_id": "inspircd"}],
+                        "configuration_bindings": configuration_bindings,
+                    }
+                ],
+            }
+        )
 
 
 def test_component_resource_slots_reject_missing_required_binding() -> None:

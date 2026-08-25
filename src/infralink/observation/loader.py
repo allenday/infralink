@@ -19,6 +19,7 @@ from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.v2 import (
     ObservationV2Document,
+    V2ConfigurationValidationError,
     V2InstanceTopologyValidationError,
     V2MetricValidationError,
     V2ResourceValidationError,
@@ -423,6 +424,22 @@ def _validate_v2_source_set(
             identity=f"service_instances/{error.host_id}/{error.instance_id}/{error.component_id}",
             next_actions=next_actions,
         )
+    except V2ConfigurationValidationError as error:
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 service instance configuration binding is invalid.",
+            location=_v2_configuration_binding_location(
+                v2_documents,
+                error.host_id,
+                error.instance_id,
+                error.configuration_slot_id,
+            ),
+            identity=f"service_instances/{error.host_id}/{error.instance_id}",
+            next_actions=(
+                "Bind each required profile configuration slot exactly once with its declared type.",
+            ),
+        )
     except ValueError:
         diagnostic = Diagnostic(
             code="v2-component-topology-invalid",
@@ -615,6 +632,37 @@ def _v2_resource_error_location(
     return _v2_service_instance_location(
         documents, error.host_id, error.instance_id, error.component_id
     )
+
+
+def _v2_configuration_binding_location(
+    documents: list[ObservationDocument], host_id: str, instance_id: str, slot_id: str
+) -> SourceLocation:
+    for document in documents:
+        instances = document.data.get("service_instances", ())
+        if not isinstance(instances, tuple):
+            continue
+        for instance_index, instance in enumerate(instances):
+            if (
+                not isinstance(instance, Mapping)
+                or instance.get("host_id") != host_id
+                or instance.get("id") != instance_id
+            ):
+                continue
+            bindings = instance.get("configuration_bindings", ())
+            if isinstance(bindings, tuple):
+                for binding_index, binding in enumerate(bindings):
+                    if isinstance(binding, Mapping) and binding.get("slot_id") == slot_id:
+                        return SourceLocation(
+                            document.source_path,
+                            f"/service_instances/{instance_index}/configuration_bindings/{binding_index}/slot_id",
+                            document.document_index,
+                        )
+            return SourceLocation(
+                document.source_path,
+                f"/service_instances/{instance_index}/configuration_bindings",
+                document.document_index,
+            )
+    return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
 
 
 def _v2_profile_resource_slot_location(

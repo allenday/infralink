@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import Field, model_validator
 
 from infralink.observation.models import Endpoint, EndpointProtocol, ProviderAlias, StrictModel
 from infralink.observation.models_v2 import (
     ComponentEdge,
+    ConfigurationFieldKind,
+    ConfigurationRecordValue,
+    ConfigurationSlot,
+    ConfigurationValue,
+    ConfigurationValueKind,
     ExternalServiceContract,
     MetricContract,
     ResourceKind,
@@ -126,6 +131,95 @@ class V2ResourceValidationError(ValueError):
         super().__init__(message)
 
 
+class V2ConfigurationValidationError(ValueError):
+    """One stable, source-addressable v2 configuration binding failure."""
+
+    def __init__(
+        self,
+        code: str,
+        host_id: str,
+        instance_id: str,
+        configuration_slot_id: str,
+        message: str,
+    ) -> None:
+        self.code, self.host_id, self.instance_id = code, host_id, instance_id
+        self.configuration_slot_id = configuration_slot_id
+        super().__init__(message)
+
+
+def _validate_configuration_field_value(kind: ConfigurationFieldKind, value: object) -> bool:
+    if kind is ConfigurationFieldKind.STRING:
+        return isinstance(value, str)
+    if kind is ConfigurationFieldKind.INTEGER:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind is ConfigurationFieldKind.BOOLEAN:
+        return isinstance(value, bool)
+    if kind is ConfigurationFieldKind.STRING_LIST:
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    return isinstance(value, dict) and all(
+        isinstance(key, str)
+        and isinstance(hostnames, list)
+        and all(isinstance(hostname, str) for hostname in hostnames)
+        for key, hostnames in value.items()
+    )
+
+
+def _validate_configuration_record(slot: ConfigurationSlot, value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    fields = {field.id: field for field in slot.fields}
+    unknown_fields = set(value) - set(fields)
+    if unknown_fields:
+        raise ValueError("record configuration value has an unknown field")
+    for field in slot.fields:
+        if field.required and field.id not in value:
+            raise ValueError("record configuration value is missing a required field")
+        if field.id in value and not _validate_configuration_field_value(
+            field.kind, value[field.id]
+        ):
+            raise ValueError("record configuration value has an incompatible field type")
+    return True
+
+
+def _validate_configuration_value(slot: ConfigurationSlot, value: ConfigurationValue) -> None:
+    """Reject non-secret values that do not match a profile's finite slot shape."""
+
+    if slot.kind is ConfigurationValueKind.STRING:
+        valid = isinstance(value, str)
+    elif slot.kind is ConfigurationValueKind.INTEGER:
+        valid = isinstance(value, int) and not isinstance(value, bool)
+    elif slot.kind is ConfigurationValueKind.BOOLEAN:
+        valid = isinstance(value, bool)
+    elif slot.kind is ConfigurationValueKind.STRING_LIST:
+        valid = isinstance(value, list) and all(isinstance(item, str) for item in value)
+    elif slot.kind is ConfigurationValueKind.STRING_LIST_MAP:
+        valid = isinstance(value, dict) and all(
+            isinstance(key, str)
+            and isinstance(hostnames, list)
+            and all(isinstance(hostname, str) for hostname in hostnames)
+            for key, hostnames in value.items()
+        )
+    elif slot.kind is ConfigurationValueKind.RECORD:
+        valid = _validate_configuration_record(slot, value)
+    else:
+        valid = isinstance(value, list) and all(
+            _validate_configuration_record(slot, item) for item in value
+        )
+        if valid:
+            assert slot.identity_field is not None
+            records = cast(list[ConfigurationRecordValue], value)
+            identities: list[str | int | bool] = []
+            for record in records:
+                identity = record[slot.identity_field]
+                if not isinstance(identity, (str, int, bool)):
+                    raise ValueError("record-list configuration identity has an incompatible type")
+                identities.append(identity)
+            if len(identities) != len(set(identities)):
+                raise ValueError("record-list configuration value has a duplicate identity")
+    if not valid:
+        raise ValueError(f"configuration value must match declared {slot.kind.value} type")
+
+
 class PrometheusMetricProjection(StrictModel):
     endpoint_id: str
     protocol: EndpointProtocol
@@ -166,6 +260,18 @@ class PlannedMetricContract(StrictModel):
     doctor: DoctorMetricProjection
 
 
+class PlannedConfigurationBinding(StrictModel):
+    """One generic renderer input resolved from a profile configuration contract."""
+
+    host_id: str
+    service_instance_id: str
+    profile_id: str
+    component_id: str | None
+    slot_id: str
+    slot: ConfigurationSlot
+    value: ConfigurationValue
+
+
 def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[str, Endpoint]:
     """Resolve v2 topology across the complete source set."""
 
@@ -199,6 +305,42 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                     "unknown service profile",
                 )
             slots = {slot.id: slot for slot in profile.components}
+            configuration_slots = {slot.id: slot for slot in profile.configuration_slots}
+            configuration_bindings = {
+                binding.slot_id: binding for binding in instance.configuration_bindings
+            }
+            for configuration_slot_id, configuration_binding in configuration_bindings.items():
+                configuration_slot = configuration_slots.get(configuration_slot_id)
+                if configuration_slot is None:
+                    raise V2ConfigurationValidationError(
+                        "service-instance-unknown-configuration-slot",
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot_id,
+                        "configuration binding references an unknown configuration slot",
+                    )
+                try:
+                    _validate_configuration_value(configuration_slot, configuration_binding.value)
+                except ValueError as error:
+                    raise V2ConfigurationValidationError(
+                        "service-instance-configuration-value-invalid",
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot_id,
+                        str(error),
+                    ) from error
+            for configuration_slot in profile.configuration_slots:
+                if (
+                    configuration_slot.required
+                    and configuration_slot.id not in configuration_bindings
+                ):
+                    raise V2ConfigurationValidationError(
+                        "service-instance-required-configuration-unbound",
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot.id,
+                        "required configuration slot is unbound",
+                    )
             for component in instance.components:
                 slot = slots.get(component.slot_id)
                 if slot is None:
@@ -455,6 +597,47 @@ def plan_v2_metric_contracts(
                         )
                     )
     return tuple(sorted(projections, key=lambda projection: projection.id))
+
+
+def plan_v2_configuration_bindings(
+    documents: Iterable[ObservationV2Document],
+) -> tuple[PlannedConfigurationBinding, ...]:
+    """Resolve declared non-secret configuration for generic renderers and materializers."""
+
+    document_list = tuple(documents)
+    validate_v2_documents(document_list)
+    profiles = {
+        profile.id: profile for document in document_list for profile in document.service_profiles
+    }
+    resolved: list[PlannedConfigurationBinding] = []
+    for document in document_list:
+        for instance in document.service_instances:
+            profile = profiles[instance.profile_id]
+            slots = {slot.id: slot for slot in profile.configuration_slots}
+            for binding in instance.configuration_bindings:
+                slot = slots[binding.slot_id]
+                resolved.append(
+                    PlannedConfigurationBinding(
+                        host_id=instance.host_id,
+                        service_instance_id=instance.id,
+                        profile_id=profile.id,
+                        component_id=slot.component_id,
+                        slot_id=slot.id,
+                        slot=slot,
+                        value=binding.value,
+                    )
+                )
+    return tuple(
+        sorted(
+            resolved,
+            key=lambda binding: (
+                binding.host_id,
+                binding.service_instance_id,
+                binding.component_id or "",
+                binding.slot_id,
+            ),
+        )
+    )
 
 
 def _project_metric_contract(

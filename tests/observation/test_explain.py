@@ -55,6 +55,7 @@ def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
                     "V2InstanceTopologyValidationError",
                     "V2MetricValidationError",
                     "V2ResourceValidationError",
+                    "V2ConfigurationValidationError",
                 }
                 and len(node.args) >= 2
             ):
@@ -67,6 +68,7 @@ def test_literal_emitted_codes_cannot_drift_from_explanation_catalog() -> None:
                         "V2InstanceTopologyValidationError",
                         "V2MetricValidationError",
                         "V2ResourceValidationError",
+                        "V2ConfigurationValidationError",
                     }
                     else node.args[1]
                 )

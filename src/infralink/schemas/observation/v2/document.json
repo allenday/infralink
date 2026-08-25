@@ -172,6 +172,242 @@
       "title": "ComponentSlot",
       "type": "object"
     },
+    "ConfigurationBinding": {
+      "additionalProperties": false,
+      "description": "One value bound to a declared profile configuration slot.",
+      "properties": {
+        "slot_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "patternProperties": {
+                "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "patternProperties": {
+                "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "patternProperties": {
+                        "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            },
+            {
+              "items": {
+                "patternProperties": {
+                  "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "patternProperties": {
+                          "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "slot_id",
+        "value"
+      ],
+      "title": "ConfigurationBinding",
+      "type": "object"
+    },
+    "ConfigurationField": {
+      "additionalProperties": false,
+      "description": "One named non-recursive field of a declared structured configuration value.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConfigurationFieldKind"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "ConfigurationField",
+      "type": "object"
+    },
+    "ConfigurationFieldKind": {
+      "description": "The non-recursive values permitted inside declared structured configuration.",
+      "enum": [
+        "string",
+        "integer",
+        "boolean",
+        "string-list",
+        "string-list-map"
+      ],
+      "title": "ConfigurationFieldKind",
+      "type": "string"
+    },
+    "ConfigurationSlot": {
+      "additionalProperties": false,
+      "description": "A profile-owned non-secret configuration contract, optionally component-scoped.",
+      "properties": {
+        "component_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Component Id"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/ConfigurationField"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "identity_field": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identity Field"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConfigurationValueKind"
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "purpose"
+      ],
+      "title": "ConfigurationSlot",
+      "type": "object"
+    },
+    "ConfigurationValueKind": {
+      "description": "The finite set of non-secret values a profile may request.",
+      "enum": [
+        "string",
+        "integer",
+        "boolean",
+        "string-list",
+        "string-list-map",
+        "record",
+        "record-list"
+      ],
+      "title": "ConfigurationValueKind",
+      "type": "string"
+    },
     "Endpoint": {
       "additionalProperties": false,
       "description": "A generic named network endpoint exposed by a service.",
@@ -601,6 +837,13 @@
           "title": "Components",
           "type": "array"
         },
+        "configuration_bindings": {
+          "items": {
+            "$ref": "#/$defs/ConfigurationBinding"
+          },
+          "title": "Configuration Bindings",
+          "type": "array"
+        },
         "host_id": {
           "title": "Host Id",
           "type": "string"
@@ -635,6 +878,13 @@
           },
           "minItems": 1,
           "title": "Components",
+          "type": "array"
+        },
+        "configuration_slots": {
+          "items": {
+            "$ref": "#/$defs/ConfigurationSlot"
+          },
+          "title": "Configuration Slots",
           "type": "array"
         },
         "id": {

@@ -131,6 +131,42 @@ service_instances:
     assert [source.path for source in result.sources] == ["instances.yml", "profiles.yml"]
 
 
+def test_public_api_projects_v2_configuration_bindings_with_their_contract(
+    tmp_path: Path,
+) -> None:
+    from infralink.observation import project_v2_configuration_bindings
+
+    source = tmp_path / "configuration.yml"
+    source.write_text(
+        """schema_version: infralink.observation/v2
+service_profiles:
+  - id: nginx
+    components: [{id: nginx, endpoints: []}]
+    configuration_slots:
+      - id: virtual-hosts
+        kind: string-list
+        purpose: Declare virtual host names.
+service_instances:
+  - id: nginx
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: nginx
+    components: [{slot_id: nginx}]
+    configuration_bindings:
+      - slot_id: virtual-hosts
+        value: [www.example.test]
+""",
+        encoding="ascii",
+    )
+
+    result = project_v2_configuration_bindings([source])
+
+    assert len(result.configuration_bindings) == 1
+    binding = result.configuration_bindings[0]
+    assert binding.profile_id == "nginx"
+    assert binding.slot.id == "virtual-hosts"
+    assert binding.value == ["www.example.test"]
+
+
 def test_public_api_rejects_non_v2_metric_source(tmp_path: Path) -> None:
     from infralink.observation import ProjectValidationError, project_v2_metric_contracts
 
