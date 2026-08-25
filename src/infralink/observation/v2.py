@@ -10,6 +10,10 @@ from pydantic import Field, model_validator
 
 from infralink.observation.models import Endpoint, EndpointProtocol, ProviderAlias, StrictModel
 from infralink.observation.models_v2 import (
+    ArtifactBinding,
+    ArtifactKind,
+    ArtifactSlot,
+    ArtifactSource,
     ComponentEdge,
     ConfigurationFieldKind,
     ConfigurationRecordValue,
@@ -147,6 +151,22 @@ class V2ConfigurationValidationError(ValueError):
         super().__init__(message)
 
 
+class V2ArtifactValidationError(ValueError):
+    """One stable, source-addressable v2 artifact binding failure."""
+
+    def __init__(
+        self,
+        code: str,
+        host_id: str,
+        instance_id: str,
+        artifact_slot_id: str,
+        message: str,
+    ) -> None:
+        self.code, self.host_id, self.instance_id = code, host_id, instance_id
+        self.artifact_slot_id = artifact_slot_id
+        super().__init__(message)
+
+
 def _validate_configuration_field_value(kind: ConfigurationFieldKind, value: object) -> bool:
     if kind is ConfigurationFieldKind.STRING:
         return isinstance(value, str)
@@ -272,6 +292,32 @@ class PlannedConfigurationBinding(StrictModel):
     value: ConfigurationValue
 
 
+class PlannedArtifactBinding(StrictModel):
+    """One generic materializer input resolved from a profile artifact contract."""
+
+    host_id: str
+    service_instance_id: str
+    profile_id: str
+    component_id: str | None
+    slot_id: str
+    slot: ArtifactSlot
+    sources: list[ArtifactSource]
+
+
+def _validate_artifact_binding(slot: ArtifactSlot, binding: ArtifactBinding) -> None:
+    if slot.kind is ArtifactKind.FILE:
+        if len(binding.sources) != 1:
+            raise ValueError("file artifact binding requires exactly one source")
+        if binding.sources[0].relative_target is not None:
+            raise ValueError("file artifact source must not declare relative_target")
+        return
+    if any(source.relative_target is None for source in binding.sources):
+        raise ValueError("tree artifact sources require relative_target")
+    targets = [source.relative_target for source in binding.sources]
+    if len(targets) != len(set(targets)):
+        raise ValueError("tree artifact binding has duplicate relative_target")
+
+
 def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[str, Endpoint]:
     """Resolve v2 topology across the complete source set."""
 
@@ -340,6 +386,37 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                         instance.id,
                         configuration_slot.id,
                         "required configuration slot is unbound",
+                    )
+            artifact_slots = {slot.id: slot for slot in profile.artifact_slots}
+            artifact_bindings = {binding.slot_id: binding for binding in instance.artifact_bindings}
+            for artifact_slot_id, artifact_binding in artifact_bindings.items():
+                artifact_slot = artifact_slots.get(artifact_slot_id)
+                if artifact_slot is None:
+                    raise V2ArtifactValidationError(
+                        "service-instance-unknown-artifact-slot",
+                        instance.host_id,
+                        instance.id,
+                        artifact_slot_id,
+                        "artifact binding references an unknown artifact slot",
+                    )
+                try:
+                    _validate_artifact_binding(artifact_slot, artifact_binding)
+                except ValueError as error:
+                    raise V2ArtifactValidationError(
+                        "service-instance-artifact-value-invalid",
+                        instance.host_id,
+                        instance.id,
+                        artifact_slot_id,
+                        str(error),
+                    ) from error
+            for artifact_slot in profile.artifact_slots:
+                if artifact_slot.required and artifact_slot.id not in artifact_bindings:
+                    raise V2ArtifactValidationError(
+                        "service-instance-required-artifact-unbound",
+                        instance.host_id,
+                        instance.id,
+                        artifact_slot.id,
+                        "required artifact slot is unbound",
                     )
             for component in instance.components:
                 slot = slots.get(component.slot_id)
@@ -625,6 +702,47 @@ def plan_v2_configuration_bindings(
                         slot_id=slot.id,
                         slot=slot,
                         value=binding.value,
+                    )
+                )
+    return tuple(
+        sorted(
+            resolved,
+            key=lambda binding: (
+                binding.host_id,
+                binding.service_instance_id,
+                binding.component_id or "",
+                binding.slot_id,
+            ),
+        )
+    )
+
+
+def plan_v2_artifact_bindings(
+    documents: Iterable[ObservationV2Document],
+) -> tuple[PlannedArtifactBinding, ...]:
+    """Resolve integrity-bound artifact sources for generic materializers."""
+
+    document_list = tuple(documents)
+    validate_v2_documents(document_list)
+    profiles = {
+        profile.id: profile for document in document_list for profile in document.service_profiles
+    }
+    resolved: list[PlannedArtifactBinding] = []
+    for document in document_list:
+        for instance in document.service_instances:
+            profile = profiles[instance.profile_id]
+            slots = {slot.id: slot for slot in profile.artifact_slots}
+            for binding in instance.artifact_bindings:
+                slot = slots[binding.slot_id]
+                resolved.append(
+                    PlannedArtifactBinding(
+                        host_id=instance.host_id,
+                        service_instance_id=instance.id,
+                        profile_id=profile.id,
+                        component_id=slot.component_id,
+                        slot_id=slot.id,
+                        slot=slot,
+                        sources=binding.sources,
                     )
                 )
     return tuple(

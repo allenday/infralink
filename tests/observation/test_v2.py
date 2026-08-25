@@ -11,11 +11,13 @@ from pydantic import ValidationError
 from infralink.observation.models import EndpointExposure
 from infralink.observation.models_v2 import EdgeScope
 from infralink.observation.v2 import (
+    V2ArtifactValidationError,
     V2InstanceTopologyValidationError,
     V2MetricValidationError,
     V2ResourceValidationError,
     V2TopologyValidationError,
     parse_v2_document,
+    plan_v2_artifact_bindings,
     plan_v2_configuration_bindings,
     plan_v2_metric_contracts,
     validate_v2_documents,
@@ -395,6 +397,163 @@ def test_profile_wide_configuration_slot_has_no_component_owner() -> None:
     )
 
     assert plan_v2_configuration_bindings((document,))[0].component_id is None
+
+
+def test_profile_artifact_slot_resolves_integrity_bound_file_delivery() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "observability",
+                    "components": [{"id": "grafana", "endpoints": []}],
+                    "artifact_slots": [
+                        {
+                            "id": "datasource-provisioning",
+                            "component_id": "grafana",
+                            "kind": "file",
+                            "target": "grafana/provisioning/datasources.yml",
+                            "mode": 416,
+                            "owner_uid": 472,
+                            "owner_gid": 472,
+                            "consumer_id": "grafana",
+                            "lifecycle": "compose-recreate",
+                            "purpose": "Provision Grafana's declared datasource.",
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "observability",
+                    "host_id": HOST_ID,
+                    "profile_id": "observability",
+                    "components": [{"slot_id": "grafana"}],
+                    "artifact_bindings": [
+                        {
+                            "slot_id": "datasource-provisioning",
+                            "sources": [
+                                {
+                                    "path": "operations/observation/rendered/grafana/datasources.yml",
+                                    "sha256": "cfdd3d870458d66f175c68f09f6e0c8df1c717963348d995f58017762773b63b",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    resolved = plan_v2_artifact_bindings((document,))
+
+    assert [
+        (
+            item.host_id,
+            item.service_instance_id,
+            item.component_id,
+            item.slot.target,
+            item.sources[0].path,
+            item.sources[0].sha256,
+        )
+        for item in resolved
+    ] == [
+        (
+            HOST_ID,
+            "observability",
+            "grafana",
+            "grafana/provisioning/datasources.yml",
+            "operations/observation/rendered/grafana/datasources.yml",
+            "cfdd3d870458d66f175c68f09f6e0c8df1c717963348d995f58017762773b63b",
+        )
+    ]
+
+
+def test_tree_artifact_requires_each_selected_source_to_have_a_relative_target() -> None:
+    with pytest.raises(V2ArtifactValidationError, match="require relative_target"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "observability",
+                        "components": [{"id": "grafana", "endpoints": []}],
+                        "artifact_slots": [
+                            {
+                                "id": "dashboards",
+                                "component_id": "grafana",
+                                "kind": "tree",
+                                "target": "grafana/dashboards",
+                                "mode": 420,
+                                "owner_uid": 472,
+                                "owner_gid": 472,
+                                "consumer_id": "grafana",
+                                "lifecycle": "compose-recreate",
+                                "purpose": "Provision selected Grafana dashboards.",
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": "observability",
+                        "host_id": HOST_ID,
+                        "profile_id": "observability",
+                        "components": [{"slot_id": "grafana"}],
+                        "artifact_bindings": [
+                            {
+                                "slot_id": "dashboards",
+                                "sources": [
+                                    {
+                                        "path": "catalog/grafana/host-metrics.json",
+                                        "sha256": "a" * 64,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_profile_artifact_slots_reject_overlapping_logical_targets() -> None:
+    with pytest.raises(ValueError, match="artifact slot targets must not overlap"):
+        parse_v2_document(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "observability",
+                        "components": [{"id": "grafana", "endpoints": []}],
+                        "artifact_slots": [
+                            {
+                                "id": "provisioning",
+                                "kind": "file",
+                                "target": "grafana/provisioning",
+                                "mode": 420,
+                                "owner_uid": 472,
+                                "owner_gid": 472,
+                                "consumer_id": "grafana",
+                                "lifecycle": "compose-recreate",
+                                "purpose": "Install provisioning configuration.",
+                            },
+                            {
+                                "id": "datasource",
+                                "kind": "file",
+                                "target": "grafana/provisioning/datasources.yml",
+                                "mode": 420,
+                                "owner_uid": 472,
+                                "owner_gid": 472,
+                                "consumer_id": "grafana",
+                                "lifecycle": "compose-recreate",
+                                "purpose": "Install datasource configuration.",
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
 
 
 def test_record_list_configuration_accepts_typed_hostname_list_maps_and_rejects_duplicates() -> (

@@ -1,5 +1,158 @@
 {
   "$defs": {
+    "ArtifactBinding": {
+      "additionalProperties": false,
+      "description": "Instance-selected, integrity-bound Registry sources for one artifact slot.",
+      "properties": {
+        "slot_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSource"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "slot_id",
+        "sources"
+      ],
+      "title": "ArtifactBinding",
+      "type": "object"
+    },
+    "ArtifactKind": {
+      "description": "The finite artifact shapes materialized by generic Operations code.",
+      "enum": [
+        "file",
+        "tree"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "ArtifactLifecycle": {
+      "description": "The bounded consumer action after a declared artifact changes.",
+      "enum": [
+        "compose-recreate",
+        "provider-poll"
+      ],
+      "title": "ArtifactLifecycle",
+      "type": "string"
+    },
+    "ArtifactSlot": {
+      "additionalProperties": false,
+      "description": "A profile-owned, non-secret contract for one materialized artifact.",
+      "properties": {
+        "component_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Component Id"
+        },
+        "consumer_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Consumer Id",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ArtifactLifecycle"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "integer"
+        },
+        "owner_gid": {
+          "title": "Owner Gid",
+          "type": "integer"
+        },
+        "owner_uid": {
+          "title": "Owner Uid",
+          "type": "integer"
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "target": {
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "target",
+        "mode",
+        "owner_uid",
+        "owner_gid",
+        "consumer_id",
+        "lifecycle",
+        "purpose"
+      ],
+      "title": "ArtifactSlot",
+      "type": "object"
+    },
+    "ArtifactSource": {
+      "additionalProperties": false,
+      "description": "One exact registry source selected by an instance binding.",
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "relative_target": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Target"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "ArtifactSource",
+      "type": "object"
+    },
     "ComparisonOperator": {
       "enum": [
         "gt",
@@ -829,6 +982,13 @@
       "additionalProperties": false,
       "description": "A host-local instantiation of a v2 service profile.",
       "properties": {
+        "artifact_bindings": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBinding"
+          },
+          "title": "Artifact Bindings",
+          "type": "array"
+        },
         "components": {
           "items": {
             "$ref": "#/$defs/ComponentInstance"
@@ -872,6 +1032,13 @@
       "additionalProperties": false,
       "description": "A reusable service profile composed from component slots.",
       "properties": {
+        "artifact_slots": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSlot"
+          },
+          "title": "Artifact Slots",
+          "type": "array"
+        },
         "components": {
           "items": {
             "$ref": "#/$defs/ComponentSlot"
