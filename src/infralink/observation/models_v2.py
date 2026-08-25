@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Annotated
 
 from pydantic import (
@@ -74,6 +75,20 @@ class ConfigurationFieldKind(str, Enum):
     STRING_LIST_MAP = "string-list-map"
 
 
+class ArtifactKind(str, Enum):
+    """The finite artifact shapes materialized by generic Operations code."""
+
+    FILE = "file"
+    TREE = "tree"
+
+
+class ArtifactLifecycle(str, Enum):
+    """The bounded consumer action after a declared artifact changes."""
+
+    COMPOSE_RECREATE = "compose-recreate"
+    PROVIDER_POLL = "provider-poll"
+
+
 ConfigurationScalarValue = StrictStr | StrictInt | StrictBool
 ConfigurationStringListMap = dict[CanonicalId, list[StrictStr]]
 ConfigurationRecordValue = dict[
@@ -141,6 +156,85 @@ class ConfigurationBinding(StrictModel):
 
     slot_id: CanonicalId
     value: ConfigurationValue
+
+
+def _relative_artifact_path(value: str, *, field: str) -> str:
+    path = PurePosixPath(value)
+    if not value or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"artifact {field} must be a non-empty relative path")
+    return path.as_posix()
+
+
+def _artifact_targets_overlap(left: str, right: str) -> bool:
+    left_parts = PurePosixPath(left).parts
+    right_parts = PurePosixPath(right).parts
+    return (
+        left_parts == right_parts[: len(left_parts)]
+        or right_parts == left_parts[: len(right_parts)]
+    )
+
+
+class ArtifactSlot(StrictModel):
+    """A profile-owned, non-secret contract for one materialized artifact."""
+
+    id: CanonicalId
+    component_id: CanonicalId | None = None
+    kind: ArtifactKind
+    target: Annotated[str, Field(min_length=1)]
+    mode: StrictInt
+    owner_uid: StrictInt
+    owner_gid: StrictInt
+    consumer_id: CanonicalId
+    lifecycle: ArtifactLifecycle
+    required: bool = True
+    purpose: Annotated[str, Field(min_length=1)]
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, value: str) -> str:
+        return _relative_artifact_path(value, field="target")
+
+    @model_validator(mode="after")
+    def validate_metadata(self) -> ArtifactSlot:
+        if self.mode < 0 or self.mode > 0o777:
+            raise ValueError("artifact mode must be between 0 and 0777")
+        if self.owner_uid < 0 or self.owner_gid < 0:
+            raise ValueError("artifact ownership must be non-negative")
+        return self
+
+
+class ArtifactSource(StrictModel):
+    """One exact registry source selected by an instance binding."""
+
+    path: Annotated[str, Field(min_length=1)]
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    relative_target: Annotated[str, Field(min_length=1)] | None = None
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _relative_artifact_path(value, field="source path")
+
+    @field_validator("relative_target")
+    @classmethod
+    def validate_relative_target(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _relative_artifact_path(value, field="source relative_target")
+
+
+class ArtifactBinding(StrictModel):
+    """Instance-selected, integrity-bound Registry sources for one artifact slot."""
+
+    slot_id: CanonicalId
+    sources: list[ArtifactSource] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def reject_duplicate_sources(self) -> ArtifactBinding:
+        identities = [(source.path, source.relative_target) for source in self.sources]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate artifact source binding")
+        return self
 
 
 class ResourceSlot(StrictModel):
@@ -352,6 +446,7 @@ class ServiceProfileV2(StrictModel):
     id: CanonicalId
     components: list[ComponentSlot] = Field(min_length=1)
     configuration_slots: list[ConfigurationSlot] = Field(default_factory=list)
+    artifact_slots: list[ArtifactSlot] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_component_ids(self) -> ServiceProfileV2:
@@ -361,11 +456,26 @@ class ServiceProfileV2(StrictModel):
         configuration_slot_ids = [slot.id for slot in self.configuration_slots]
         if len(configuration_slot_ids) != len(set(configuration_slot_ids)):
             raise ValueError("duplicate profile configuration slot")
+        artifact_slot_ids = [slot.id for slot in self.artifact_slots]
+        if len(artifact_slot_ids) != len(set(artifact_slot_ids)):
+            raise ValueError("duplicate profile artifact slot")
+        artifact_targets = [slot.target for slot in self.artifact_slots]
+        if any(
+            _artifact_targets_overlap(left, right)
+            for index, left in enumerate(artifact_targets)
+            for right in artifact_targets[index + 1 :]
+        ):
+            raise ValueError("artifact slot targets must not overlap")
         if any(
             slot.component_id is not None and slot.component_id not in component_ids
             for slot in self.configuration_slots
         ):
             raise ValueError("configuration slot references an unknown profile component")
+        if any(
+            slot.component_id is not None and slot.component_id not in component_ids
+            for slot in self.artifact_slots
+        ):
+            raise ValueError("artifact slot references an unknown profile component")
         return self
 
 
@@ -377,6 +487,7 @@ class ServiceInstanceV2(StrictModel):
     profile_id: CanonicalId
     components: list[ComponentInstance] = Field(min_length=1)
     configuration_bindings: list[ConfigurationBinding] = Field(default_factory=list)
+    artifact_bindings: list[ArtifactBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_slot_bindings(self) -> ServiceInstanceV2:
@@ -386,6 +497,9 @@ class ServiceInstanceV2(StrictModel):
         configuration_slot_ids = [binding.slot_id for binding in self.configuration_bindings]
         if len(configuration_slot_ids) != len(set(configuration_slot_ids)):
             raise ValueError("duplicate configuration binding")
+        artifact_slot_ids = [binding.slot_id for binding in self.artifact_bindings]
+        if len(artifact_slot_ids) != len(set(artifact_slot_ids)):
+            raise ValueError("duplicate artifact binding")
         return self
 
 

@@ -15,8 +15,10 @@ from infralink.observation.loader import ObservationDocument, load_observation_d
 from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
 from infralink.observation.v2 import (
     ObservationV2Document,
+    PlannedArtifactBinding,
     PlannedConfigurationBinding,
     PlannedMetricContract,
+    plan_v2_artifact_bindings,
     plan_v2_configuration_bindings,
     plan_v2_metric_contracts,
 )
@@ -89,6 +91,22 @@ class V2ConfigurationProjectResult:
         return {
             "configuration_bindings": [
                 binding.model_dump(mode="json") for binding in self.configuration_bindings
+            ],
+            "sources": [asdict(source) for source in self.sources],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class V2ArtifactProjectResult:
+    """One typed V2 artifact projection with source provenance."""
+
+    artifact_bindings: tuple[PlannedArtifactBinding, ...]
+    sources: tuple[SourceProvenance, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "artifact_bindings": [
+                binding.model_dump(mode="json") for binding in self.artifact_bindings
             ],
             "sources": [asdict(source) for source in self.sources],
         }
@@ -329,6 +347,58 @@ def project_v2_configuration_bindings(
         raise ProjectValidationError(ValidationReport(combined, loaded.attempted_document_count))
     return V2ConfigurationProjectResult(
         configuration_bindings=plan_v2_configuration_bindings(documents),
+        sources=_source_provenance(tuple(provenance)),
+    )
+
+
+def project_v2_artifact_bindings(
+    paths: Sequence[Path], *, limit: int = 50
+) -> V2ArtifactProjectResult:
+    """Load explicit V2 sources and produce only normalized artifact bindings."""
+
+    loaded = load_observation_documents(paths, diagnostic_limit=limit)
+    version_findings: list[Diagnostic] = []
+    documents: list[ObservationV2Document] = []
+    provenance: list[ObservationDocument] = []
+    for document in loaded.documents:
+        if document.schema_version != "infralink.observation/v2":
+            version_findings.append(
+                Diagnostic(
+                    code="v2-artifact-source-version-invalid",
+                    severity="error",
+                    message="V2 artifact projection accepts only infralink.observation/v2 sources.",
+                    location=SourceLocation(
+                        document.source_path,
+                        "/schema_version",
+                        document.document_index,
+                    ),
+                    identity=document.schema_version,
+                    next_actions=("Supply only infralink.observation/v2 source documents.",),
+                )
+            )
+            continue
+        documents.append(ObservationV2Document.model_validate_json(json.dumps(document.to_dict())))
+        provenance.append(document)
+    if not documents and not version_findings and not loaded.diagnostics.error_count:
+        version_findings.append(
+            _argument_diagnostic(
+                "no-usable-v2-artifact-document",
+                "/sources",
+                "sources",
+                "Supply at least one infralink.observation/v2 source document.",
+            )
+        )
+    combined = _combine_diagnostics(
+        [
+            loaded.diagnostics,
+            DiagnosticSet.from_diagnostics(version_findings, limit=limit),
+        ],
+        limit=limit,
+    )
+    if combined.error_count:
+        raise ProjectValidationError(ValidationReport(combined, loaded.attempted_document_count))
+    return V2ArtifactProjectResult(
+        artifact_bindings=plan_v2_artifact_bindings(documents),
         sources=_source_provenance(tuple(provenance)),
     )
 
