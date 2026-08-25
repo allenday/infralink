@@ -100,6 +100,38 @@ component_edges:
     assert report.diagnostics[0].next_actions
 
 
+def test_loader_reports_configuration_binding_errors_at_the_binding(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "v2.yml",
+        """\
+schema_version: infralink.observation/v2
+service_profiles:
+  - id: proxy
+    components: [{id: nginx, endpoints: []}]
+    configuration_slots:
+      - id: virtual-hosts
+        kind: string-list
+        purpose: Declare virtual host names.
+service_instances:
+  - id: proxy
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: proxy
+    components: [{slot_id: nginx}]
+    configuration_bindings:
+      - slot_id: unknown-slot
+        value: [www.example.test]
+""",
+    )
+
+    report = load_observation_documents(tmp_path)
+
+    assert report.diagnostics[0].code == "service-instance-unknown-configuration-slot"
+    assert (
+        report.diagnostics[0].location.pointer
+        == "/service_instances/0/configuration_bindings/0/slot_id"
+    )
+
+
 def test_loader_rejects_v2_metric_binding_label_outside_contract(tmp_path: Path) -> None:
     _write(
         tmp_path / "v2.yml",

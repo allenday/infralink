@@ -156,6 +156,17 @@ be validated against packaged schemas under
 `src/infralink/schemas/observation/v1` and
 `src/infralink/schemas/observation/v2`.
 
+In v2, a service profile may declare `configuration_slots` for non-secret
+render or materialization inputs. A slot is profile-wide by default and may
+optionally name a component owner. Instances supply exactly one typed
+`configuration_binding` for each required slot. Supported values are strings,
+integers, booleans, string lists, records, and record lists with explicitly
+declared fields; record fields are limited to scalars and string lists. The
+cross-document loader validates the binding against the profile contract, and
+`plan_v2_configuration_bindings()` returns the normalized, deterministically
+ordered renderer input. Secrets continue to use `resource_slots` and secret
+references rather than configuration bindings.
+
 ## Exit Codes
 
 | Code | Meaning |

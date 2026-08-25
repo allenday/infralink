@@ -8,6 +8,9 @@ from typing import Annotated
 from pydantic import (
     ConfigDict,
     Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
     StringConstraints,
     TypeAdapter,
     field_validator,
@@ -47,6 +50,97 @@ class ResourceKind(str, Enum):
     SECRET = "secret"
     STORAGE = "storage"
     EXTERNAL_SERVICE = "external-service"
+
+
+class ConfigurationValueKind(str, Enum):
+    """The finite set of non-secret values a profile may request."""
+
+    STRING = "string"
+    INTEGER = "integer"
+    BOOLEAN = "boolean"
+    STRING_LIST = "string-list"
+    STRING_LIST_MAP = "string-list-map"
+    RECORD = "record"
+    RECORD_LIST = "record-list"
+
+
+class ConfigurationFieldKind(str, Enum):
+    """The non-recursive values permitted inside declared structured configuration."""
+
+    STRING = "string"
+    INTEGER = "integer"
+    BOOLEAN = "boolean"
+    STRING_LIST = "string-list"
+    STRING_LIST_MAP = "string-list-map"
+
+
+ConfigurationScalarValue = StrictStr | StrictInt | StrictBool
+ConfigurationStringListMap = dict[CanonicalId, list[StrictStr]]
+ConfigurationRecordValue = dict[
+    CanonicalId, ConfigurationScalarValue | list[StrictStr] | ConfigurationStringListMap
+]
+ConfigurationValue = (
+    ConfigurationScalarValue
+    | list[StrictStr]
+    | ConfigurationStringListMap
+    | ConfigurationRecordValue
+    | list[ConfigurationRecordValue]
+)
+
+
+class ConfigurationField(StrictModel):
+    """One named non-recursive field of a declared structured configuration value."""
+
+    id: CanonicalId
+    kind: ConfigurationFieldKind
+    required: bool = True
+
+
+class ConfigurationSlot(StrictModel):
+    """A profile-owned non-secret configuration contract, optionally component-scoped."""
+
+    id: CanonicalId
+    component_id: CanonicalId | None = None
+    kind: ConfigurationValueKind
+    identity_field: CanonicalId | None = None
+    required: bool = True
+    purpose: Annotated[str, Field(min_length=1)]
+    fields: list[ConfigurationField] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_record_shape(self) -> ConfigurationSlot:
+        field_ids = [field.id for field in self.fields]
+        if len(field_ids) != len(set(field_ids)):
+            raise ValueError("duplicate configuration record field")
+        structured_kinds = {ConfigurationValueKind.RECORD, ConfigurationValueKind.RECORD_LIST}
+        if self.kind in structured_kinds and not self.fields:
+            raise ValueError("record configuration slot requires fields")
+        if self.kind not in structured_kinds and self.fields:
+            raise ValueError("configuration fields are only valid for record configuration slots")
+        if self.kind is ConfigurationValueKind.RECORD_LIST:
+            if self.identity_field is None:
+                raise ValueError("record-list configuration slot requires identity_field")
+            if self.identity_field not in field_ids:
+                raise ValueError("record-list identity_field must name a declared field")
+            identity_kind = next(
+                field.kind for field in self.fields if field.id == self.identity_field
+            )
+            if identity_kind not in {
+                ConfigurationFieldKind.STRING,
+                ConfigurationFieldKind.INTEGER,
+                ConfigurationFieldKind.BOOLEAN,
+            }:
+                raise ValueError("record-list identity_field must have a scalar type")
+        elif self.identity_field is not None:
+            raise ValueError("identity_field is only valid for record-list configuration slots")
+        return self
+
+
+class ConfigurationBinding(StrictModel):
+    """One value bound to a declared profile configuration slot."""
+
+    slot_id: CanonicalId
+    value: ConfigurationValue
 
 
 class ResourceSlot(StrictModel):
@@ -257,12 +351,21 @@ class ServiceProfileV2(StrictModel):
 
     id: CanonicalId
     components: list[ComponentSlot] = Field(min_length=1)
+    configuration_slots: list[ConfigurationSlot] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_component_ids(self) -> ServiceProfileV2:
         component_ids = [component.id for component in self.components]
         if len(component_ids) != len(set(component_ids)):
             raise ValueError("duplicate component slot id")
+        configuration_slot_ids = [slot.id for slot in self.configuration_slots]
+        if len(configuration_slot_ids) != len(set(configuration_slot_ids)):
+            raise ValueError("duplicate profile configuration slot")
+        if any(
+            slot.component_id is not None and slot.component_id not in component_ids
+            for slot in self.configuration_slots
+        ):
+            raise ValueError("configuration slot references an unknown profile component")
         return self
 
 
@@ -273,12 +376,16 @@ class ServiceInstanceV2(StrictModel):
     host_id: HostId
     profile_id: CanonicalId
     components: list[ComponentInstance] = Field(min_length=1)
+    configuration_bindings: list[ConfigurationBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def reject_duplicate_slot_bindings(self) -> ServiceInstanceV2:
         slot_ids = [component.slot_id for component in self.components]
         if len(slot_ids) != len(set(slot_ids)):
             raise ValueError("duplicate component slot binding")
+        configuration_slot_ids = [binding.slot_id for binding in self.configuration_bindings]
+        if len(configuration_slot_ids) != len(set(configuration_slot_ids)):
+            raise ValueError("duplicate configuration binding")
         return self
 
 
