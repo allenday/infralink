@@ -377,9 +377,7 @@ def project_v2_artifact_bindings_from_bytes(
     )
 
 
-def _project_v2_artifact_bindings(
-    loaded: LoadReport, *, limit: int
-) -> V2ArtifactProjectResult:
+def _project_v2_artifact_bindings(loaded: LoadReport, *, limit: int) -> V2ArtifactProjectResult:
     version_findings: list[Diagnostic] = []
     documents: list[ObservationV2Document] = []
     provenance: list[ObservationDocument] = []
