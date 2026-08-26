@@ -10,6 +10,7 @@ from infralink.observation.api import (
     ValidationReport,
     project,
     project_v2_artifact_bindings,
+    project_v2_artifact_bindings_from_bytes,
     project_v2_configuration_bindings,
     project_v2_metric_contracts,
     validate,
@@ -22,7 +23,13 @@ from infralink.observation.explain import (
     DiagnosticExplanation,
     explain,
 )
-from infralink.observation.loader import LoadReport, ObservationDocument, load_observation_documents
+from infralink.observation.loader import (
+    LoadReport,
+    ObservationDocument,
+    ObservationSource,
+    load_observation_documents,
+    load_observation_documents_from_bytes,
+)
 from infralink.observation.models import (
     Application,
     BackendKind,
@@ -131,6 +138,7 @@ __all__ = [
     "MetricContract",
     "ObservationBackend",
     "ObservationDocument",
+    "ObservationSource",
     "ObservationV2Document",
     "OperationsView",
     "OperationsViewSection",
@@ -183,7 +191,9 @@ __all__ = [
     "project",
     "project_v2_configuration_bindings",
     "project_v2_artifact_bindings",
+    "project_v2_artifact_bindings_from_bytes",
     "project_v2_metric_contracts",
+    "load_observation_documents_from_bytes",
     "parse_v2_document",
     "plan_v2_metric_contracts",
     "plan_v2_artifact_bindings",

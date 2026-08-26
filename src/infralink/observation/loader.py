@@ -76,6 +76,14 @@ class ObservationDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservationSource:
+    """One already-read observation source with caller-provided provenance."""
+
+    path: str
+    body: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class LoadReport:
     """The usable documents and all diagnostics produced while loading them."""
 
@@ -107,6 +115,51 @@ def load_observation_documents(
     for path in discovered:
         source_path = path.relative_to(base).as_posix()
         loaded, load_findings, attempted = _load_file(path, source_path)
+        documents.extend(loaded)
+        findings.extend(load_findings)
+        attempted_document_count += attempted
+
+    findings.extend(_duplicate_id_diagnostics(documents))
+    documents, topology_findings = _validate_v2_source_set(documents)
+    findings.extend(topology_findings)
+    return LoadReport(
+        documents=tuple(documents),
+        diagnostics=DiagnosticSet.from_diagnostics(findings, limit=diagnostic_limit),
+        attempted_document_count=attempted_document_count,
+    )
+
+
+def load_observation_documents_from_bytes(
+    sources: Iterable[ObservationSource],
+    *,
+    diagnostic_limit: int = DEFAULT_DIAGNOSTIC_LIMIT,
+) -> LoadReport:
+    """Load already-read source bytes through the same bounded YAML contract."""
+
+    documents: list[ObservationDocument] = []
+    findings: list[Diagnostic] = []
+    attempted_document_count = 0
+    for source in sources:
+        if (
+            not isinstance(source, ObservationSource)
+            or not isinstance(source.path, str)
+            or not source.path
+            or type(source.body) is not bytes
+        ):
+            raise TypeError("observation source must provide a non-empty path and bytes body")
+        if Path(source.path).suffix not in {".yml", ".yaml"}:
+            findings.append(
+                Diagnostic(
+                    code="unsupported-source-extension",
+                    severity="error",
+                    message="Observation source files must use .yml or .yaml.",
+                    location=SourceLocation(Path(source.path).name),
+                    next_actions=("Supply a .yml or .yaml observation source file.",),
+                )
+            )
+            attempted_document_count += 1
+            continue
+        loaded, load_findings, attempted = _load_bytes(source.body, source.path)
         documents.extend(loaded)
         findings.extend(load_findings)
         attempted_document_count += attempted
@@ -183,7 +236,12 @@ def _common_path(paths: list[str]) -> str:
 def _load_file(
     path: Path, source_path: str
 ) -> tuple[list[ObservationDocument], list[Diagnostic], int]:
-    raw = path.read_bytes()
+    return _load_bytes(path.read_bytes(), source_path)
+
+
+def _load_bytes(
+    raw: bytes, source_path: str
+) -> tuple[list[ObservationDocument], list[Diagnostic], int]:
     raw_sha256 = hashlib.sha256(raw).hexdigest()
     if len(raw) > MAX_SOURCE_BYTES:
         return (
