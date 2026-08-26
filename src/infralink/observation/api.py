@@ -11,7 +11,13 @@ from pathlib import Path
 from infralink.observation.canonical import canonical_digest
 from infralink.observation.codes import V2_DIAGNOSTIC_CODES
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
-from infralink.observation.loader import ObservationDocument, load_observation_documents
+from infralink.observation.loader import (
+    LoadReport,
+    ObservationDocument,
+    ObservationSource,
+    load_observation_documents,
+    load_observation_documents_from_bytes,
+)
 from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
 from infralink.observation.v2 import (
     ObservationV2Document,
@@ -356,7 +362,22 @@ def project_v2_artifact_bindings(
 ) -> V2ArtifactProjectResult:
     """Load explicit V2 sources and produce only normalized artifact bindings."""
 
-    loaded = load_observation_documents(paths, diagnostic_limit=limit)
+    return _project_v2_artifact_bindings(
+        load_observation_documents(paths, diagnostic_limit=limit), limit=limit
+    )
+
+
+def project_v2_artifact_bindings_from_bytes(
+    sources: Sequence[ObservationSource], *, limit: int = 50
+) -> V2ArtifactProjectResult:
+    """Project V2 artifacts from already-read, bounded Registry source bytes."""
+
+    return _project_v2_artifact_bindings(
+        load_observation_documents_from_bytes(sources, diagnostic_limit=limit), limit=limit
+    )
+
+
+def _project_v2_artifact_bindings(loaded: LoadReport, *, limit: int) -> V2ArtifactProjectResult:
     version_findings: list[Diagnostic] = []
     documents: list[ObservationV2Document] = []
     provenance: list[ObservationDocument] = []
