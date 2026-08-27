@@ -11,8 +11,8 @@ def load_woodpecker() -> dict[str, object]:
     return yaml.safe_load(WOODPECKER.read_text(encoding="utf-8"))
 
 
-def test_github_actions_workflows_are_absent() -> None:
-    assert not WORKFLOWS.exists() or list(WORKFLOWS.iterdir()) == []
+def test_github_actions_only_projects_released_distributions_to_package_indexes() -> None:
+    assert sorted(path.name for path in WORKFLOWS.iterdir()) == ["publish-pypi.yml"]
 
 
 def test_woodpecker_python_312_quality_gate_is_authoritative() -> None:
