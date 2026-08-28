@@ -427,9 +427,12 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
         "examples": ["infralink host status relaxgg-db-es1"],
     },
     ("host", "logs"): {
-        "description": "Read bounded sanitized evidence from the target's latest reconcile run.",
+        "description": "Read target reconcile evidence, or an explicit private diagnostic for the latest run.",
         "arguments": [{"name": "host_ref", "type": "string", "required": True}],
-        "options": [{"name": "last_run", "type": "boolean", "required": True}],
+        "options": [
+            {"name": "last_run", "type": "boolean", "required": True},
+            {"name": "diagnostic", "type": "boolean", "required": False},
+        ],
         "examples": ["infralink host logs relaxgg-db-es1 --last-run"],
     },
     ("registry",): {
@@ -2221,16 +2224,27 @@ def host_status(ctx: Context, host_ref: str) -> int:
     required=True,
     help="Show bounded evidence from the latest reconcile run.",
 )
+@click.option(
+    "--diagnostic",
+    is_flag=True,
+    help="Read the bounded private adapter diagnostic from the target. This output is not fleet evidence.",
+)
 @pass_context
-def host_logs(ctx: Context, host_ref: str, last_run: bool) -> int:
+def host_logs(ctx: Context, host_ref: str, last_run: bool, diagnostic: bool) -> int:
     """Read bounded sanitized evidence from the declared host's latest reconcile run."""
-    from infralink.cli.operations import inspect_target_logs, resolve_apply_request
+    from infralink.cli.operations import (
+        inspect_target_diagnostic,
+        inspect_target_logs,
+        resolve_apply_request,
+    )
 
     target = ctx.registry.get(host_ref)
     if target is None:
         raise entity_not_found("host", host_ref)
     if ctx.hosts_path is None:
         raise configuration_required("registry")
+    request = resolve_apply_request(ctx.hosts_path, target)
+    lines = inspect_target_diagnostic(request) if diagnostic else inspect_target_logs(request)
     _emit(
         ok_envelope(
             _context_for(path=["host", "logs"]),
@@ -2238,7 +2252,7 @@ def host_logs(ctx: Context, host_ref: str, last_run: bool) -> int:
                 target=DoctorTarget(
                     type="host", id=target.uuid, canonical_name=target.canonical_name
                 ),
-                lines=inspect_target_logs(resolve_apply_request(ctx.hosts_path, target)),
+                lines=lines,
             ),
             [
                 action(
