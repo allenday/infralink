@@ -10,6 +10,7 @@ from agent_surface.adapters.click import ClickAdapter
 from click.testing import CliRunner
 from pydantic import ValidationError
 
+from infralink.agent_surface import operation_error_exit_code
 from infralink.cli.main import cli
 from infralink.operator_operations.topology import HostShowRequest, show_declared_host
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
@@ -64,6 +65,22 @@ def test_load_registry_requires_config_or_explicit_checkout(
         load_registry(SourceRequest())
 
     assert error.value.code == "configuration_required"
+
+
+def test_generated_click_preserves_configuration_error_exit_taxonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INFRALINK_CONFIG", str(tmp_path / "absent.yml"))
+
+    result = CliRunner().invoke(
+        ClickAdapter(
+            operator_surface, operation_error_exit_code=operation_error_exit_code
+        ).command(),
+        ["host", "list", "--format", "json"],
+    )
+
+    assert result.exit_code == 3
+    assert json.loads(result.output)["error"]["code"] == "configuration_required"
 
 
 def test_load_sources_reports_a_missing_edge_declaration(tmp_path: Path) -> None:
