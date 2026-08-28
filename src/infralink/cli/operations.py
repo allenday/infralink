@@ -381,6 +381,7 @@ class SshOperationProvider:
                         "LogLevel=ERROR",
                         "-o",
                         "StrictHostKeyChecking=yes",
+                        "-o",
                         f"UserKnownHostsFile={known_hosts}",
                         "-p",
                         str(request.port),
