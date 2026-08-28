@@ -4,10 +4,13 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from agent_surface import OperationError
 from agent_surface.adapters.click import ClickAdapter
 from click.testing import CliRunner
+from pydantic import ValidationError
 
+from infralink.cli.main import cli
 from infralink.operator_operations.topology import HostShowRequest, show_declared_host
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
 from infralink.operator_surface import operator_surface
@@ -143,10 +146,6 @@ def test_topology_reads_are_registered_once_and_preserve_bounded_host_continuati
         "      beta: {}\n",
         encoding="utf-8",
     )
-    edges = tmp_path / "network/main-dev/edges"
-    edges.mkdir(parents=True)
-    (edges / "edges.yml").write_text("edges: []\n", encoding="utf-8")
-
     registered = {item.name for item in operator_surface.operations.list()}
     assert {
         "host.show",
@@ -169,3 +168,66 @@ def test_topology_reads_are_registered_once_and_preserve_bounded_host_continuati
         )
     )
     assert second.services.items == ["beta"]
+
+
+def test_topology_host_cursor_remains_compatible_with_the_legacy_cli(
+    tmp_path: Path,
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    manifest = tmp_path / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n"
+        "    canonical_name: host-1\n"
+        "    services: {alpha: {}, beta: {}}\n",
+        encoding="utf-8",
+    )
+    legacy = CliRunner().invoke(
+        cli,
+        ["--registry", str(tmp_path), "host", "show", host_id, "--limit", "1"],
+    )
+    assert legacy.exit_code == 0, legacy.output
+    cursor = yaml.safe_load(legacy.output)["result"]["services"]["page"]["next_cursor"]
+
+    typed = show_declared_host(
+        HostShowRequest(
+            registry=tmp_path,
+            host_id=host_id,
+            limit=1,
+            cursor=cursor,
+            collection="services",
+        )
+    )
+
+    assert typed.services.items == ["beta"]
+
+
+def test_topology_host_cursor_is_bound_to_its_checkout_path(tmp_path: Path) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    for name in ("first", "second"):
+        manifest = tmp_path / name / "hosts" / host_id / "manifest.yml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            f"hosts:\n  {host_id}:\n"
+            "    canonical_name: host-1\n"
+            "    services: {alpha: {}, beta: {}}\n",
+            encoding="utf-8",
+        )
+    first = show_declared_host(
+        HostShowRequest(registry=tmp_path / "first", host_id=host_id, limit=1)
+    )
+    with pytest.raises(OperationError, match="Cursor is invalid"):
+        show_declared_host(
+            HostShowRequest(
+                registry=tmp_path / "second",
+                host_id=host_id,
+                limit=1,
+                cursor=first.services.page.next_cursor,
+                collection="services",
+            )
+        )
+
+
+def test_topology_paging_rejects_boolean_limits(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        HostShowRequest(registry=tmp_path, host_id="host-1", limit=True)
