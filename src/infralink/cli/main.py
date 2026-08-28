@@ -46,6 +46,12 @@ from infralink.cli.output import (
     error_envelope,
     ok_envelope,
 )
+from infralink.operator_config import (
+    OperatorConfigError,
+)
+from infralink.operator_config import (
+    configured_registry as _configured_registry_value,
+)
 from infralink.operator_operations import host_bootstrap as bootstrap_operations
 from infralink.operator_operations.host_bootstrap import (
     _apply_bootstrap_request,
@@ -95,7 +101,6 @@ __all__ = [
 # never an implicit operational fallback.
 REGISTRY_ENVVAR = "INFRALINK_REGISTRY"
 EDGES_ENVVAR = "INFRALINK_EDGES"
-CONFIG_ENVVAR = "INFRALINK_CONFIG"
 _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
     "infralink_invocation_args", default=None
 )
@@ -104,27 +109,12 @@ _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", defau
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
 
 
-def _operator_config_path() -> Path:
-    configured = os.environ.get(CONFIG_ENVVAR)
-    if configured:
-        return Path(configured).expanduser()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return config_home / "infralink" / "config.yml"
-
-
 def _configured_registry() -> Path | None:
     """Read a local checkout selector; it is not desired-state input."""
-    path = _operator_config_path()
-    if not path.is_file():
-        return None
     try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        raise input_load_failed("operator config", str(path)) from None
-    if not isinstance(value, dict) or not isinstance(value.get("registry"), str):
-        raise input_load_failed("operator config", str(path))
-    selected = Path(value["registry"]).expanduser()
-    return selected if selected.is_absolute() else path.parent / selected
+        return _configured_registry_value()
+    except OperatorConfigError as error:
+        raise input_load_failed("operator config", str(error)) from None
 
 
 def registry_checkout_root(path: Path | None) -> Path | None:

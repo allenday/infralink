@@ -32,6 +32,36 @@ def test_load_sources_resolves_registry_root_and_default_edge_companion(tmp_path
     assert len(loaded.edges) == 0
 
 
+def test_load_registry_uses_the_configured_checkout_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hosts = tmp_path / "registry" / "hosts" / "11111111-1111-4111-8111-111111111111"
+    hosts.mkdir(parents=True)
+    (hosts / "manifest.yml").write_text(
+        "hosts:\n  11111111-1111-4111-8111-111111111111:\n"
+        "    canonical_name: host-1\n    status: provisioning\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "config.yml"
+    config.write_text(f"registry: {tmp_path / 'registry'}\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_CONFIG", str(config))
+
+    loaded = load_registry(SourceRequest())
+
+    assert loaded.registry_path == (tmp_path / "registry").resolve()
+
+
+def test_load_registry_requires_config_or_explicit_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INFRALINK_CONFIG", str(tmp_path / "absent.yml"))
+
+    with pytest.raises(OperationError) as error:
+        load_registry(SourceRequest())
+
+    assert error.value.code == "configuration_required"
+
+
 def test_load_sources_reports_a_missing_edge_declaration(tmp_path: Path) -> None:
     (tmp_path / "hosts").mkdir()
 

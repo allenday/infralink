@@ -86,7 +86,8 @@ def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
     diagnostic = schema["properties"]["diagnostic"]
     assert diagnostic["default"] is False
     assert diagnostic["type"] == "boolean"
-    assert set(schema["required"]) == {"registry", "host_ref", "last_run"}
+    assert set(schema["required"]) == {"host_ref", "last_run"}
+    assert schema["properties"]["registry"]["default"] is None
 
 
 def test_host_control_operations_are_all_declared_by_the_agent_surface() -> None:
