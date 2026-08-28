@@ -7,12 +7,11 @@ import ipaddress
 import json
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 from uuid import uuid4
 
 import click
@@ -39,17 +38,8 @@ from infralink.cli.contracts import (
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.operation_contracts import (
-    HostApplyPlan,
-    HostApplyResult,
-    HostDispatch,
-    HostLogsResult,
-    HostStatusResult,
-    HostTimer,
-    HostVerifierResult,
-    LastReconcile,
     OperationStatusResult,
     OperationSummary,
-    TargetReconcileStatus,
 )
 from infralink.cli.output import (
     command_context,
@@ -682,6 +672,36 @@ def configuration_required(source: str) -> CliFailure:
             )
         ],
     )
+
+
+def _raise_cli_operation_error(error: Exception) -> NoReturn:
+    """Translate the typed operation boundary back to the legacy CLI envelope."""
+    from agent_surface import OperationError
+
+    if not isinstance(error, OperationError):
+        raise error
+    details = dict(error.details[0]) if len(error.details) == 1 else {"items": list(error.details)}
+    try:
+        code = ErrorCode(error.code)
+    except ValueError:
+        code = (
+            ErrorCode.INPUT_LOAD_FAILED
+            if error.code in {"source_not_found", "source_invalid"}
+            else ErrorCode.INTERNAL_ERROR
+        )
+    raise CliFailure(
+        code=code,
+        message=error.message,
+        exit_code=(
+            ExitCode.PROVIDER_ERROR
+            if code.value.startswith("provider_")
+            else ExitCode.INTERNAL_ERROR
+            if code is ErrorCode.INTERNAL_ERROR
+            else ExitCode.INPUT_ERROR
+        ),
+        fix=error.fix or "Correct the declared host operation and retry",
+        details=details,
+    ) from None
 
 
 def _source_value(path: Path | None) -> str | None:
@@ -1950,8 +1970,10 @@ def host_bootstrap(
 
     from infralink.operator_surface import HostBootstrapRequest
 
-    registry_path = ctx.registry_path
+    registry_path = registry_checkout_root(ctx.registry_path)
     if registry_path is None:
+        if ctx.registry_path is not None:
+            raise input_load_failed("registry", str(ctx.registry_path))
         raise configuration_required("registry")
     token = bootstrap_operations._read_bootstrap_bws_token() if bws_token_stdin else None
     if apply_changes and token is None:
@@ -1990,29 +2012,37 @@ def host_bootstrap(
 @pass_context
 def host_verifier(ctx: Context, host_ref: str) -> int:
     """Inspect the declared host's public V2 Git signature verifier facts."""
-    from infralink.cli.operations import inspect_verifier, resolve_apply_request
+    from infralink.operator_surface import HostTargetRequest, host_verifier_operation
 
-    target = ctx.registry.get(host_ref)
-    if target is None:
-        raise entity_not_found("host", host_ref)
-    if ctx.hosts_path is None:
-        raise configuration_required("registry")
-    verifier = inspect_verifier(resolve_apply_request(ctx.hosts_path, target))
-    doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
+    registry_root = registry_checkout_root(ctx.registry_path)
+    if registry_root is None:
+        if ctx.registry_path is None:
+            raise configuration_required("registry")
+        raise input_load_failed("registry", str(ctx.registry_path))
+    try:
+        result = host_verifier_operation(
+            HostTargetRequest(registry=registry_root, edges=ctx.edges_path, host_ref=host_ref)
+        )
+    except Exception as error:
+        _raise_cli_operation_error(error)
     _emit(
         ok_envelope(
             _context_for(path=["host", "verifier"]),
-            HostVerifierResult(target=doctor_target, verifier=verifier),
+            result,
             [
                 action(
                     "doctor",
-                    [*_root_source_argv(ctx), "doctor", "host", target.uuid],
+                    [*_root_source_argv(ctx), "doctor", "host", result.target.id],
                     "Reinspect the host convergence result",
                 )
             ],
         )
     )
-    return 0 if verifier.signature_verification == "passed" and not verifier.unavailable else 1
+    return (
+        0
+        if result.verifier.signature_verification == "passed" and not result.verifier.unavailable
+        else 1
+    )
 
 
 @host.command(name="apply")
@@ -2029,156 +2059,67 @@ def host_verifier(ctx: Context, host_ref: str) -> int:
 @pass_context
 def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: int) -> int:
     """Start the declared host-local reconcile unit through SSH."""
-    from infralink.cli.operations import (
-        operation_provider,
-        resolve_apply_request,
-        validate_target_ssh_identity,
-        wait_for_terminal,
-    )
+    from infralink.operator_surface import HostApplyRequest, host_apply_operation
 
-    target = ctx.registry.get(host_ref)
-    if target is None:
-        raise entity_not_found("host", host_ref)
-    if ctx.hosts_path is None:
-        raise configuration_required("registry")
-    request = resolve_apply_request(ctx.hosts_path, target)
-    doctor_target = DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name)
-    if dry_run:
-        completed = subprocess.run(
-            ["git", "-C", str(ctx.registry_path), "rev-parse", "HEAD"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        revision = completed.stdout.strip()
-        if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-            raise CliFailure(
-                code=ErrorCode.INPUT_LOAD_FAILED,
-                message="Selected registry revision could not be resolved",
-                exit_code=ExitCode.INPUT_ERROR,
-                fix="Use a Git checkout containing the selected registry revision",
-                details={"registry": str(ctx.registry_path)},
-            )
-        validate_target_ssh_identity(request)
-        _emit(
-            ok_envelope(
-                _context_for(path=["host", "apply"]),
-                HostApplyResult(
-                    target=doctor_target,
-                    dry_run=True,
-                    plan=HostApplyPlan(
-                        registry_revision=revision,
-                        dispatch_provider="ssh",
-                        reconcile_mode="timer",
-                        action_categories=["registry_checkout", "render", "reconcile"],
-                    ),
-                    ssh_host_identity="passed",
-                ),
-                [
-                    action(
-                        "apply",
-                        [*_root_source_argv(ctx), "host", "apply", target.uuid],
-                        "Submit this host apply",
-                        safe=False,
-                    )
-                ],
-            )
-        )
-        return 0
-
-    provider = operation_provider()
+    registry_root = registry_checkout_root(ctx.registry_path)
+    if registry_root is None:
+        if ctx.registry_path is None:
+            raise configuration_required("registry")
+        raise input_load_failed("registry", str(ctx.registry_path))
     try:
-        record = provider.submit(request)
-    except CliFailure as failure:
-        dispatch_status = failure.details.get("dispatch")
-        if failure.code != ErrorCode.PROVIDER_UNAVAILABLE or dispatch_status not in {
-            "rejected",
-            "unavailable",
-        }:
-            raise
-        from infralink.cli.operations import inspect_target_status
-
-        target_status = _target_reconcile_status(inspect_target_status(request))
-        result = HostApplyResult(
-            target=doctor_target,
-            dispatch=HostDispatch(
-                provider="ssh",
-                status=cast(Literal["rejected", "unavailable"], dispatch_status),
-            ),
-            target_status=target_status,
+        result = host_apply_operation(
+            HostApplyRequest(
+                registry=registry_root,
+                edges=ctx.edges_path,
+                host_ref=host_ref,
+                dry_run=dry_run,
+                wait=wait,
+                timeout=timeout,
+            )
         )
+    except Exception as error:
+        _raise_cli_operation_error(error)
+    actions: list[Action] = []
+    if result.dry_run:
+        actions = [
+            action(
+                "apply",
+                [*_root_source_argv(ctx), "host", "apply", result.target.id],
+                "Submit this host apply",
+                safe=False,
+            )
+        ]
+    elif result.dispatch is not None and result.dispatch.status != "accepted":
         actions = [
             action(
                 "status",
-                [*_root_source_argv(ctx), "host", "status", target.uuid],
+                [*_root_source_argv(ctx), "host", "status", result.target.id],
                 "Inspect the target timer and latest reconcile result",
             ),
             action(
                 "logs",
-                [*_root_source_argv(ctx), "host", "logs", target.uuid, "--last-run"],
+                [*_root_source_argv(ctx), "host", "logs", result.target.id, "--last-run"],
                 "Inspect bounded evidence from the target's latest reconcile run",
             ),
         ]
-        _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
-        return 0
-    if wait:
-        record = wait_for_terminal(provider, record.id, request, timeout_seconds=timeout)
-    result = HostApplyResult(
-        operation=OperationSummary(
-            id=record.id,
-            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
-        ),
-        target=doctor_target,
-        dispatch=HostDispatch(provider="ssh", status="accepted"),
-        ssh_host_identity="passed",
-        failure=record.failure,
-    )
-    actions = []
-    if record.state in {"queued", "applying"}:
+    elif result.operation is not None and result.operation.state in {"queued", "applying"}:
         actions.append(
             action(
                 "status",
-                [*_root_action_prefix(ctx), "operation", "status", record.id],
+                [*_root_action_prefix(ctx), "operation", "status", result.operation.id],
                 "Check host apply progress",
             )
         )
     else:
-        actions.append(
+        actions = [
             action(
                 "doctor",
-                [*_root_source_argv(ctx), "doctor", "host", target.uuid],
+                [*_root_source_argv(ctx), "doctor", "host", result.target.id],
                 "Inspect the host convergence result",
             )
-        )
+        ]
     _emit(ok_envelope(_context_for(path=["host", "apply"]), result, actions))
     return 0
-
-
-def _target_reconcile_status(values: dict[str, str]) -> TargetReconcileStatus:
-    result_value = values.get("unit_result")
-    status = "success" if result_value == "success" else "failed" if result_value else "unknown"
-    sha = values.get("registry_sha")
-    active = values.get("unit_active") in {"active", "activating", "reloading"}
-    return TargetReconcileStatus(
-        reconcile_mode="timer",
-        timer=HostTimer(
-            active=values.get("timer_active") == "active",
-            next_scheduled_at=values.get("timer_next") or None,
-        ),
-        in_progress=active,
-        last_reconcile=LastReconcile(
-            status=cast(Literal["success", "failed", "unknown"], status),
-            registry_sha=sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else None,
-            finished_at=(
-                values["finished_at"]
-                if re.fullmatch(
-                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
-                    values.get("finished_at", ""),
-                )
-                else None
-            ),
-        ),
-    )
 
 
 @host.command(name="status")
@@ -2186,28 +2127,27 @@ def _target_reconcile_status(values: dict[str, str]) -> TargetReconcileStatus:
 @pass_context
 def host_status(ctx: Context, host_ref: str) -> int:
     """Read the declared host's timer and latest reconcile evidence."""
-    from infralink.cli.operations import inspect_target_status, resolve_apply_request
+    from infralink.operator_surface import HostTargetRequest, host_status_operation
 
-    target = ctx.registry.get(host_ref)
-    if target is None:
-        raise entity_not_found("host", host_ref)
-    if ctx.hosts_path is None:
-        raise configuration_required("registry")
-    values = inspect_target_status(resolve_apply_request(ctx.hosts_path, target))
-    target_status = _target_reconcile_status(values)
+    registry_root = registry_checkout_root(ctx.registry_path)
+    if registry_root is None:
+        if ctx.registry_path is None:
+            raise configuration_required("registry")
+        raise input_load_failed("registry", str(ctx.registry_path))
+    try:
+        result = host_status_operation(
+            HostTargetRequest(registry=registry_root, edges=ctx.edges_path, host_ref=host_ref)
+        )
+    except Exception as error:
+        _raise_cli_operation_error(error)
     _emit(
         ok_envelope(
             _context_for(path=["host", "status"]),
-            HostStatusResult(
-                target=DoctorTarget(
-                    type="host", id=target.uuid, canonical_name=target.canonical_name
-                ),
-                **target_status.model_dump(),
-            ),
+            result,
             [
                 action(
                     "logs",
-                    [*_root_source_argv(ctx), "host", "logs", target.uuid, "--last-run"],
+                    [*_root_source_argv(ctx), "host", "logs", result.target.id, "--last-run"],
                     "Inspect bounded evidence from the target's latest reconcile run",
                 )
             ],
@@ -2232,32 +2172,33 @@ def host_status(ctx: Context, host_ref: str) -> int:
 @pass_context
 def host_logs(ctx: Context, host_ref: str, last_run: bool, diagnostic: bool) -> int:
     """Read bounded sanitized evidence from the declared host's latest reconcile run."""
-    from infralink.cli.operations import (
-        inspect_target_diagnostic,
-        inspect_target_logs,
-        resolve_apply_request,
-    )
+    from infralink.operator_surface import HostLogsRequest, host_logs_operation
 
-    target = ctx.registry.get(host_ref)
-    if target is None:
-        raise entity_not_found("host", host_ref)
-    if ctx.hosts_path is None:
-        raise configuration_required("registry")
-    request = resolve_apply_request(ctx.hosts_path, target)
-    lines = inspect_target_diagnostic(request) if diagnostic else inspect_target_logs(request)
+    registry_root = registry_checkout_root(ctx.registry_path)
+    if registry_root is None:
+        if ctx.registry_path is None:
+            raise configuration_required("registry")
+        raise input_load_failed("registry", str(ctx.registry_path))
+    try:
+        result = host_logs_operation(
+            HostLogsRequest(
+                registry=registry_root,
+                edges=ctx.edges_path,
+                host_ref=host_ref,
+                last_run=last_run,
+                diagnostic=diagnostic,
+            )
+        )
+    except Exception as error:
+        _raise_cli_operation_error(error)
     _emit(
         ok_envelope(
             _context_for(path=["host", "logs"]),
-            HostLogsResult(
-                target=DoctorTarget(
-                    type="host", id=target.uuid, canonical_name=target.canonical_name
-                ),
-                lines=lines,
-            ),
+            result,
             [
                 action(
                     "status",
-                    [*_root_source_argv(ctx), "host", "status", target.uuid],
+                    [*_root_source_argv(ctx), "host", "status", result.target.id],
                     "Inspect target reconcile status",
                 )
             ],

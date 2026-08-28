@@ -11,7 +11,7 @@ from mcp import Client
 
 from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostReadinessResult
 from infralink.cli.errors import CliFailure
-from infralink.cli.main import _bootstrap_tailnet_address, cli
+from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_error, cli
 from infralink.mcp_server import create_server
 from infralink.operator_surface import (
     DoctorBootstrapPlanRequest,
@@ -19,6 +19,27 @@ from infralink.operator_surface import (
     doctor_host_bootstrap_plan,
     operator_surface,
 )
+
+
+@pytest.mark.parametrize(
+    ("operation_code", "expected_code", "expected_exit"),
+    [
+        ("provider_timeout", "provider_timeout", 4),
+        ("provider_authentication_failed", "provider_authentication_failed", 4),
+        ("source_not_found", "input_load_failed", 3),
+        ("source_invalid", "input_load_failed", 3),
+        ("internal_error", "internal_error", 70),
+        ("unrecognized_operation_error", "internal_error", 70),
+    ],
+)
+def test_cli_operation_error_bridge_preserves_provider_and_source_taxonomy(
+    operation_code: str, expected_code: str, expected_exit: int
+) -> None:
+    with pytest.raises(CliFailure) as captured:
+        _raise_cli_operation_error(OperationError(operation_code, "expected failure"))
+
+    assert captured.value.code.value == expected_code
+    assert captured.value.exit_code == expected_exit
 
 
 def test_bootstrap_request_uses_released_sensitive_stdin_contract() -> None:
