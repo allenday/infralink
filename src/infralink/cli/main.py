@@ -109,12 +109,6 @@ _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", defau
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
 
 
-def _operator_config_path() -> Path:
-    from infralink.operator_config import operator_config_path
-
-    return operator_config_path()
-
-
 def _configured_registry() -> Path | None:
     """Read a local checkout selector; it is not desired-state input."""
     try:
