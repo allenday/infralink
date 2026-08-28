@@ -16,7 +16,6 @@ from agent_surface import App, OperationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
-    Action,
     DoctorTarget,
     EdgeListResult,
     HostBootstrapPlanResult,
@@ -137,7 +136,6 @@ class HostApplyRequest(HostTargetRequest):
 
 class HostBootstrapOperationResult(_OperationModel):
     result: HostBootstrapPlanResult
-    actions: tuple[Action, ...] = Field(default=(), exclude=True)
     succeeded: bool
 
 
@@ -154,8 +152,8 @@ def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOper
     context.registry_path = sources.registry_path
     context.edges_path = request.edges
     context._registry = sources.registry
-    result, actions, succeeded = execute_bootstrap(context, request)
-    return HostBootstrapOperationResult(result=result, actions=tuple(actions), succeeded=succeeded)
+    result, _actions, succeeded = execute_bootstrap(context, request)
+    return HostBootstrapOperationResult(result=result, succeeded=succeeded)
 
 
 @operator_surface.operation(
