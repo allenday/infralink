@@ -17,6 +17,7 @@ from infralink.operator_surface import (
     DoctorBootstrapPlanRequest,
     HostBootstrapRequest,
     doctor_host_bootstrap_plan,
+    operator_click_adapter,
     operator_surface,
 )
 
@@ -62,8 +63,6 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The generated adapter is the public canonical bootstrap parser."""
-    from agent_surface.adapters.click import ClickAdapter
-
     from infralink.operator_operations import host_bootstrap
 
     host_id = "11111111-1111-4111-8111-111111111111"
@@ -95,7 +94,7 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     monkeypatch.setattr(host_bootstrap, "execute_bootstrap", fake_execute_bootstrap)
     token = "never-render-this-token"
     result = CliRunner().invoke(
-        ClickAdapter(operator_surface).command(),
+        operator_click_adapter().command(),
         [
             "--registry",
             str(registry),
@@ -118,7 +117,13 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     assert token not in result.output
     payload = json.loads(result.output)
     assert payload["command"]["parsed"]["path"] == ["host", "bootstrap"]
-    assert payload["command"]["parsed"]["flags"] == ["apply", "bws-token-stdin"]
+    assert payload["command"]["parsed"]["flags"] == [
+        "--registry",
+        "--ssh-host",
+        "--apply",
+        "--bws-token-stdin",
+        "--format",
+    ]
     request = observed["request"]
     assert isinstance(request, HostBootstrapRequest)
     assert request.apply is True

@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 import yaml
 from agent_surface import OperationError
-from agent_surface.adapters.click import ClickAdapter
 from click.testing import CliRunner
 from pydantic import ValidationError
 
 from infralink.agent_surface import operation_error_exit_code
+from infralink.cli.errors import ExitCode
 from infralink.cli.main import cli
 from infralink.operator_operations.topology import HostShowRequest, show_declared_host
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
-from infralink.operator_surface import operator_surface
+from infralink.operator_surface import operator_click_adapter, operator_surface
 
 
 def test_load_sources_resolves_registry_root_and_default_edge_companion(tmp_path: Path) -> None:
@@ -73,14 +73,30 @@ def test_generated_click_preserves_configuration_error_exit_taxonomy(
     monkeypatch.setenv("INFRALINK_CONFIG", str(tmp_path / "absent.yml"))
 
     result = CliRunner().invoke(
-        ClickAdapter(
-            operator_surface, operation_error_exit_code=operation_error_exit_code
-        ).command(),
+        operator_click_adapter().command(),
         ["host", "list", "--format", "json"],
     )
 
     assert result.exit_code == 3
     assert json.loads(result.output)["error"]["code"] == "configuration_required"
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("usage_error", ExitCode.USAGE_ERROR),
+        ("invalid_cursor", ExitCode.USAGE_ERROR),
+        ("configuration_required", ExitCode.INPUT_ERROR),
+        ("entity_not_found", ExitCode.INPUT_ERROR),
+        ("provider_timeout", ExitCode.PROVIDER_ERROR),
+        ("unsupported_platform", ExitCode.UNSUPPORTED_PLATFORM),
+        ("internal_error", ExitCode.INTERNAL_ERROR),
+        ("artifact_io_failed", ExitCode.ARTIFACT_IO_ERROR),
+        ("unknown_future_code", ExitCode.INTERNAL_ERROR),
+    ],
+)
+def test_typed_operation_exit_taxonomy_is_unambiguous(code: str, expected: ExitCode) -> None:
+    assert operation_error_exit_code(code) == int(expected)
 
 
 def test_load_sources_reports_a_missing_edge_declaration(tmp_path: Path) -> None:
@@ -136,7 +152,7 @@ def test_generated_click_projects_host_list_from_the_shared_operation(tmp_path: 
     )
 
     result = CliRunner().invoke(
-        ClickAdapter(operator_surface).command(),
+        operator_click_adapter().command(),
         ["--registry", str(tmp_path), "host", "list", "--format", "json"],
     )
 

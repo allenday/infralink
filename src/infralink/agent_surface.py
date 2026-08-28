@@ -17,11 +17,21 @@ if TYPE_CHECKING:
 
 
 def operation_error_exit_code(code: str) -> int:
-    """Preserve Infralink's published typed error taxonomy in Click projections."""
+    """Map the typed-operation error taxonomy onto Infralink process exits.
+
+    Agent Surface intentionally supplies only an error code here.  Typed
+    operations therefore use an unambiguous contract: malformed command and
+    continuation inputs are usage errors; declared-state, schema, and entity
+    failures are input errors.  Legacy Click-only call sites that used the
+    same ``configuration_required`` label for both categories are not part of
+    this adapter boundary.
+    """
     try:
         error_code = ErrorCode(code)
     except ValueError:
         return int(ExitCode.INTERNAL_ERROR)
+    if error_code in {ErrorCode.USAGE_ERROR, ErrorCode.INVALID_CURSOR}:
+        return int(ExitCode.USAGE_ERROR)
     if error_code in {
         ErrorCode.PROVIDER_UNAVAILABLE,
         ErrorCode.PROVIDER_AUTHENTICATION_FAILED,

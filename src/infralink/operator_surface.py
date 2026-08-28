@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal, NoReturn, cast
 
 from agent_surface import App, OperationError
+from agent_surface.adapters.click import ClickAdapter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
@@ -76,6 +77,17 @@ class DoctorBootstrapPlanResult(_OperationModel):
 
 
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
+
+
+def operator_click_adapter() -> ClickAdapter:
+    """Build the one Click projection for typed operator operations."""
+    from infralink.agent_surface import InfralinkEnvelopeRenderer, operation_error_exit_code
+
+    return ClickAdapter(
+        operator_surface,
+        envelope_renderer=InfralinkEnvelopeRenderer(),
+        operation_error_exit_code=operation_error_exit_code,
+    )
 
 
 class HostListRequest(SourceRequest):
