@@ -372,10 +372,21 @@ class SshOperationProvider:
             with _pinned_known_hosts(request) as known_hosts:
                 completed = subprocess.run(
                     [
-                        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                        "-o", "LogLevel=ERROR", "-o", "StrictHostKeyChecking=yes",
-                        f"UserKnownHostsFile={known_hosts}", "-p", str(request.port),
-                        f"{request.user}@{request.address}", "sh", "-s",
+                        "ssh",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=10",
+                        "-o",
+                        "LogLevel=ERROR",
+                        "-o",
+                        "StrictHostKeyChecking=yes",
+                        f"UserKnownHostsFile={known_hosts}",
+                        "-p",
+                        str(request.port),
+                        f"{request.user}@{request.address}",
+                        "sh",
+                        "-s",
                     ],
                     input=_TARGET_DIAGNOSTIC_REMOTE,
                     text=True,
@@ -384,9 +395,13 @@ class SshOperationProvider:
                     check=False,
                 )
         except (OSError, subprocess.TimeoutExpired):
-            raise _provider_failure("Declared host SSH diagnostic operation is unavailable") from None
+            raise _provider_failure(
+                "Declared host SSH diagnostic operation is unavailable"
+            ) from None
         if completed.returncode != 0:
-            raise _provider_failure("Declared host has no private adapter diagnostic for its latest run")
+            raise _provider_failure(
+                "Declared host has no private adapter diagnostic for its latest run"
+            )
         return completed.stdout.splitlines()
 
     def _run(
