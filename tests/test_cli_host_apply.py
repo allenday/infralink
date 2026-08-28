@@ -829,10 +829,13 @@ def test_host_logs_diagnostic_returns_target_private_adapter_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registry_checkout(tmp_path)
-    monkeypatch.setattr(
-        "infralink.cli.operations.subprocess.run",
-        lambda *args, **kwargs: _completed("private adapter failure detail\n"),
-    )
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _completed("private adapter failure detail\n")
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
     monkeypatch.setattr(
         "infralink.cli.operations._pinned_known_hosts",
         lambda request: nullcontext(Path("/tmp/known-hosts")),
@@ -845,6 +848,26 @@ def test_host_logs_diagnostic_returns_target_private_adapter_output(
 
     assert response.exit_code == 0
     assert payload["result"]["lines"] == ["private adapter failure detail"]
+    assert calls == [
+        [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "UserKnownHostsFile=/tmp/known-hosts",
+            "-p",
+            "22",
+            "root@100.64.68.83",
+            "sh",
+            "-s",
+        ]
+    ]
 
 
 def test_host_status_marks_an_active_target_reconcile_in_progress(
