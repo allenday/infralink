@@ -14,6 +14,7 @@ from typing import Literal, NoReturn, cast
 
 from agent_surface import App, OperationError
 from agent_surface.adapters.click import ClickAdapter
+from agent_surface.adapters.mcp import MCPAdapter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
@@ -88,6 +89,13 @@ def operator_click_adapter() -> ClickAdapter:
         envelope_renderer=InfralinkEnvelopeRenderer(),
         operation_error_exit_code=operation_error_exit_code,
     )
+
+
+def operator_mcp_adapter() -> MCPAdapter:
+    """Build the one MCP projection for typed operator operations."""
+    from infralink.agent_surface import InfralinkEnvelopeRenderer
+
+    return MCPAdapter(operator_surface, envelope_renderer=InfralinkEnvelopeRenderer())
 
 
 class HostListRequest(SourceRequest):

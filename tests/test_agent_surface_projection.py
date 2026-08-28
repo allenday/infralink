@@ -15,7 +15,11 @@ from mcp import Client
 
 from infralink.agent_surface import InfralinkEnvelopeRenderer
 from infralink.cli.contracts import HostListResult
-from infralink.operator_surface import operator_click_adapter, operator_surface
+from infralink.operator_surface import (
+    operator_click_adapter,
+    operator_mcp_adapter,
+    operator_surface,
+)
 
 
 def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
@@ -28,17 +32,13 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
         f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
         encoding="utf-8",
     )
-    renderer = InfralinkEnvelopeRenderer()
-
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
         ["--registry", str(tmp_path), "host", "list", "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
-        async with Client(
-            MCPAdapter(operator_surface, envelope_renderer=renderer).server
-        ) as client:
+        async with Client(operator_mcp_adapter().server) as client:
             result = await client.call_tool("host.list", {"registry": str(tmp_path)})
         assert result.is_error is False
         return result.structured_content
@@ -306,16 +306,13 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
         ),
         encoding="utf-8",
     )
-    renderer = InfralinkEnvelopeRenderer()
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
         ["--registry", str(tmp_path), "--edges", str(edges), *path, "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
-        async with Client(
-            MCPAdapter(operator_surface, envelope_renderer=renderer).server
-        ) as client:
+        async with Client(operator_mcp_adapter().server) as client:
             result = await client.call_tool(
                 operation, {"registry": str(tmp_path), "edges": str(edges)}
             )
@@ -345,16 +342,13 @@ def test_typed_source_failure_projects_one_error_envelope_through_click_and_mcp(
     tmp_path: Path,
 ) -> None:
     missing_registry = tmp_path / "missing"
-    renderer = InfralinkEnvelopeRenderer()
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
         ["--registry", str(missing_registry), "host", "list", "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
-        async with Client(
-            MCPAdapter(operator_surface, envelope_renderer=renderer).server
-        ) as client:
+        async with Client(operator_mcp_adapter().server) as client:
             result = await client.call_tool("host.list", {"registry": str(missing_registry)})
         assert result.is_error is True
         return result.structured_content
