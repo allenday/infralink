@@ -310,6 +310,6 @@ def _invalid_cursor() -> None:
 def _host_edges_path(request: SourceRequest, registry_source_path: Path) -> Path | None:
     """Retain legacy host-show cursor binding without loading edge declarations."""
     if request.edges is not None:
-        return request.edges.expanduser().resolve()
+        return request.edges.expanduser()
     candidate = registry_source_path / "network/main-dev/edges/edges.yml"
     return candidate if candidate.exists() else None
