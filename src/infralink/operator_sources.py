@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
+from infralink.operator_config import OperatorConfigError, configured_registry
 
 
 class SourceRequest(BaseModel):
@@ -16,7 +17,10 @@ class SourceRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    registry: Path = Field(description="Registry checkout root.")
+    registry: Path | None = Field(
+        default=None,
+        description="Registry checkout root; defaults to local operator configuration.",
+    )
     edges: Path | None = Field(
         default=None,
         description="Optional edge declaration file; defaults to the registry companion file.",
@@ -45,7 +49,23 @@ class LoadedRegistry(BaseModel):
 
 def load_registry(request: SourceRequest) -> LoadedRegistry:
     """Load the one explicitly selected registry checkout."""
-    registry_path = request.registry.expanduser().resolve()
+    try:
+        selected = request.registry or configured_registry()
+    except OperatorConfigError as error:
+        raise OperationError(
+            "input_load_failed",
+            "Operator configuration could not be loaded",
+            details=({"source": "operator_config", "path": str(error)},),
+            fix="Correct INFRALINK_CONFIG or pass an explicit registry checkout root.",
+        ) from None
+    if selected is None:
+        raise OperationError(
+            "configuration_required",
+            "Registry source is required",
+            details=({"source": "registry"},),
+            fix="Pass a registry checkout root or configure INFRALINK_CONFIG.",
+        )
+    registry_path = selected.expanduser().resolve()
     if not registry_path.exists():
         raise OperationError(
             "source_not_found",
