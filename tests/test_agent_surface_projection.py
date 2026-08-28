@@ -66,6 +66,36 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert mcp_document["command"]["resolved"]["output"] == "json"
 
 
+def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
+    """The diagnostic query is declared once, rather than reflected from Click."""
+    definition = operator_surface.operations.describe("host.logs")
+
+    assert definition.input_model.model_fields["host_ref"].is_required()
+    assert definition.input_model.model_fields["last_run"].is_required()
+    assert "diagnostic" in definition.input_model.model_fields
+
+    async def listed_schema() -> dict[str, object]:
+        async with Client(
+            MCPAdapter(operator_surface, envelope_renderer=InfralinkEnvelopeRenderer()).server
+        ) as client:
+            tools = await client.list_tools()
+        tool = next(item for item in tools.tools if item.name == "host.logs")
+        return tool.input_schema
+
+    schema = asyncio.run(listed_schema())
+    diagnostic = schema["properties"]["diagnostic"]
+    assert diagnostic["default"] is False
+    assert diagnostic["type"] == "boolean"
+    assert set(schema["required"]) == {"registry", "host_ref", "last_run"}
+
+
+def test_host_control_operations_are_all_declared_by_the_agent_surface() -> None:
+    """Host control schemas must not be inferred from a parallel Click command tree."""
+    expected = {"host.apply", "host.bootstrap", "host.logs", "host.status", "host.verifier"}
+
+    assert expected <= {definition.name for definition in operator_surface.operations.list()}
+
+
 def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() -> None:
     definition = operator_surface.operations.describe("host.list")
     renderer = InfralinkEnvelopeRenderer()

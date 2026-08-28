@@ -6,12 +6,18 @@ not introduce an independent validation path.
 
 from __future__ import annotations
 
+import re
+import subprocess
 from ipaddress import ip_address, ip_network
+from pathlib import Path
+from typing import Literal, NoReturn, cast
 
 from agent_surface import App, OperationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
+    Action,
+    DoctorTarget,
     EdgeListResult,
     HostBootstrapPlanResult,
     HostListResult,
@@ -20,7 +26,19 @@ from infralink.cli.contracts import (
     InfoSummary,
     ServiceListResult,
 )
-from infralink.cli.queries import list_edges, list_hosts, list_services
+from infralink.cli.operation_contracts import (
+    HostApplyPlan,
+    HostApplyResult,
+    HostDispatch,
+    HostLogsResult,
+    HostStatusResult,
+    HostTimer,
+    HostVerifierResult,
+    LastReconcile,
+    OperationSummary,
+    TargetReconcileStatus,
+)
+from infralink.cli.queries import entity_not_found, list_edges, list_hosts, list_services
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
 
 
@@ -83,8 +101,43 @@ class HostBootstrapRequest(SourceRequest):
         return self
 
 
+class HostLogsRequest(SourceRequest):
+    """Read bounded evidence for one declared host reconcile run."""
+
+    host_ref: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+    last_run: bool = Field(
+        json_schema_extra={"cli": {"kind": "option"}},
+        description="Require the latest reconcile run evidence.",
+    )
+    diagnostic: bool = Field(
+        default=False,
+        description="Read target-local adapter diagnostics instead of public evidence.",
+    )
+
+    @model_validator(mode="after")
+    def require_last_run(self) -> HostLogsRequest:
+        if not self.last_run:
+            raise ValueError("last_run must be true")
+        return self
+
+
+class HostTargetRequest(SourceRequest):
+    """Select one declared host for a typed control-plane query."""
+
+    host_ref: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+
+
+class HostApplyRequest(HostTargetRequest):
+    """Submit one idempotent reconcile request or inspect its exact plan."""
+
+    dry_run: bool = False
+    wait: bool = False
+    timeout: int = Field(default=300, ge=1, le=3600)
+
+
 class HostBootstrapOperationResult(_OperationModel):
     result: HostBootstrapPlanResult
+    actions: tuple[Action, ...] = Field(default=(), exclude=True)
     succeeded: bool
 
 
@@ -101,8 +154,152 @@ def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOper
     context.registry_path = sources.registry_path
     context.edges_path = request.edges
     context._registry = sources.registry
-    result, _actions, succeeded = execute_bootstrap(context, request)
-    return HostBootstrapOperationResult(result=result, succeeded=succeeded)
+    result, actions, succeeded = execute_bootstrap(context, request)
+    return HostBootstrapOperationResult(result=result, actions=tuple(actions), succeeded=succeeded)
+
+
+@operator_surface.operation(
+    "host.logs", summary="Read bounded evidence from a host reconcile run", read_only=True
+)  # type: ignore[untyped-decorator]
+def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
+    """Execute the one typed target-log query shared by all public transports."""
+    from infralink.cli.operations import (
+        inspect_target_diagnostic,
+        inspect_target_logs,
+        resolve_apply_request,
+    )
+
+    sources = load_registry(request)
+    target = sources.registry.get(request.host_ref)
+    if target is None:
+        _raise_operation_failure(entity_not_found("host", request.host_ref))
+    try:
+        apply_request = resolve_apply_request(sources.registry_path / "hosts", target)
+        lines = (
+            inspect_target_diagnostic(apply_request)
+            if request.diagnostic
+            else inspect_target_logs(apply_request)
+        )
+    except Exception as error:
+        _raise_operation_failure(error)
+    return HostLogsResult(
+        target=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        lines=lines,
+    )
+
+
+@operator_surface.operation(
+    "host.status", summary="Read a host timer and latest reconcile status", read_only=True
+)  # type: ignore[untyped-decorator]
+def host_status_operation(request: HostTargetRequest) -> HostStatusResult:
+    """Read the declared target's status through the sole SSH provider."""
+    from infralink.cli.operations import inspect_target_status, resolve_apply_request
+
+    sources = load_registry(request)
+    target = sources.registry.get(request.host_ref)
+    if target is None:
+        _raise_operation_failure(entity_not_found("host", request.host_ref))
+    try:
+        values = inspect_target_status(
+            resolve_apply_request(sources.registry_path / "hosts", target)
+        )
+    except Exception as error:
+        _raise_operation_failure(error)
+    return HostStatusResult(
+        target=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        **_target_reconcile_status(values).model_dump(),
+    )
+
+
+@operator_surface.operation(
+    "host.verifier", summary="Inspect public host verifier facts", read_only=True
+)  # type: ignore[untyped-decorator]
+def host_verifier_operation(request: HostTargetRequest) -> HostVerifierResult:
+    """Read the declared target's V2 signature verifier facts."""
+    from infralink.cli.operations import inspect_verifier, resolve_apply_request
+
+    sources = load_registry(request)
+    target = sources.registry.get(request.host_ref)
+    if target is None:
+        _raise_operation_failure(entity_not_found("host", request.host_ref))
+    try:
+        verifier = inspect_verifier(resolve_apply_request(sources.registry_path / "hosts", target))
+    except Exception as error:
+        _raise_operation_failure(error)
+    return HostVerifierResult(
+        target=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
+        verifier=verifier,
+    )
+
+
+@operator_surface.operation(
+    "host.apply", summary="Plan or submit declared host reconciliation", idempotent=True
+)  # type: ignore[untyped-decorator]
+def host_apply_operation(request: HostApplyRequest) -> HostApplyResult:
+    """Use the only declared SSH provider for a host-local reconcile request."""
+    from infralink.cli.errors import CliFailure
+    from infralink.cli.operations import (
+        inspect_target_status,
+        operation_provider,
+        resolve_apply_request,
+        validate_target_ssh_identity,
+        wait_for_terminal,
+    )
+
+    sources = load_registry(request)
+    target = sources.registry.get(request.host_ref)
+    if target is None:
+        _raise_operation_failure(entity_not_found("host", request.host_ref))
+    try:
+        apply_request = resolve_apply_request(sources.registry_path / "hosts", target)
+        doctor_target = DoctorTarget(
+            type="host", id=target.uuid, canonical_name=target.canonical_name
+        )
+        if request.dry_run:
+            revision = _registry_revision(sources.registry_path)
+            validate_target_ssh_identity(apply_request)
+            return HostApplyResult(
+                target=doctor_target,
+                dry_run=True,
+                plan=HostApplyPlan(
+                    registry_revision=revision,
+                    dispatch_provider="ssh",
+                    reconcile_mode="timer",
+                    action_categories=["registry_checkout", "render", "reconcile"],
+                ),
+                ssh_host_identity="passed",
+            )
+        provider = operation_provider()
+        try:
+            record = provider.submit(apply_request)
+        except CliFailure as failure:
+            dispatch_status = failure.details.get("dispatch")
+            if failure.code.value != "provider_unavailable" or dispatch_status not in {
+                "rejected",
+                "unavailable",
+            }:
+                raise
+            return HostApplyResult(
+                target=doctor_target,
+                dispatch=HostDispatch(provider="ssh", status=dispatch_status),
+                target_status=_target_reconcile_status(inspect_target_status(apply_request)),
+            )
+        if request.wait:
+            record = wait_for_terminal(
+                provider, record.id, apply_request, timeout_seconds=request.timeout
+            )
+        return HostApplyResult(
+            operation=OperationSummary(
+                id=record.id,
+                state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
+            ),
+            target=doctor_target,
+            dispatch=HostDispatch(provider="ssh", status="accepted"),
+            ssh_host_identity="passed",
+            failure=record.failure,
+        )
+    except Exception as error:
+        _raise_operation_failure(error)
 
 
 @operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
@@ -179,3 +376,62 @@ def _is_tailnet_ipv4(address: str) -> bool:
         return ip_address(address) in ip_network("100.64.0.0/10")
     except ValueError:
         return False
+
+
+def _target_reconcile_status(values: dict[str, str]) -> TargetReconcileStatus:
+    result_value = values.get("unit_result")
+    status = "success" if result_value == "success" else "failed" if result_value else "unknown"
+    sha = values.get("registry_sha")
+    active = values.get("unit_active") in {"active", "activating", "reloading"}
+    return TargetReconcileStatus(
+        reconcile_mode="timer",
+        timer=HostTimer(
+            active=values.get("timer_active") == "active",
+            next_scheduled_at=values.get("timer_next") or None,
+        ),
+        in_progress=active,
+        last_reconcile=LastReconcile(
+            status=cast(Literal["success", "failed", "unknown"], status),
+            registry_sha=sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else None,
+            finished_at=(
+                values["finished_at"]
+                if re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                    values.get("finished_at", ""),
+                )
+                else None
+            ),
+        ),
+    )
+
+
+def _registry_revision(registry_path: Path) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(registry_path), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    revision = completed.stdout.strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise OperationError(
+            "input_load_failed",
+            "Selected registry revision could not be resolved",
+            details=({"registry": str(registry_path)},),
+            fix="Use a Git checkout containing the selected registry revision.",
+        )
+    return revision
+
+
+def _raise_operation_failure(error: Exception) -> NoReturn:
+    """Keep expected CLI domain failures as typed operation errors."""
+    from infralink.cli.errors import CliFailure
+
+    if isinstance(error, CliFailure):
+        raise OperationError(
+            error.code.value,
+            error.message,
+            details=(error.details,),
+            fix=error.fix,
+        ) from None
+    raise error
