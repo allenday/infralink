@@ -114,6 +114,11 @@ _TARGET_LOGS_REMOTE = """set -eu
 unit=$1
 journalctl --quiet --no-pager --output=cat -u "$unit" -n 8 || true
 """
+_TARGET_DIAGNOSTIC_REMOTE = """set -eu
+diagnostic=/var/lib/infralink/private-adapter.stderr
+[ -f "$diagnostic" ] || exit 3
+tail -c 65536 "$diagnostic"
+"""
 _VERIFIER_REMOTE = """set -eu
 registry=$1
 runtime_root=$2
@@ -270,6 +275,9 @@ class SshOperationProvider:
     def target_logs(self, request: ApplyRequest) -> list[str]:
         return self._run_target_logs(request)
 
+    def target_diagnostic(self, request: ApplyRequest) -> list[str]:
+        return self._run_target_diagnostic(request)
+
     def _run_target_status(self, request: ApplyRequest) -> dict[str, str]:
         try:
             with _pinned_known_hosts(request) as known_hosts:
@@ -358,6 +366,43 @@ class SshOperationProvider:
             if isinstance(value, dict):
                 records.append(value)
         return _sanitize_journal(records)
+
+    def _run_target_diagnostic(self, request: ApplyRequest) -> list[str]:
+        try:
+            with _pinned_known_hosts(request) as known_hosts:
+                completed = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=10",
+                        "-o",
+                        "LogLevel=ERROR",
+                        "-o",
+                        "StrictHostKeyChecking=yes",
+                        f"UserKnownHostsFile={known_hosts}",
+                        "-p",
+                        str(request.port),
+                        f"{request.user}@{request.address}",
+                        "sh",
+                        "-s",
+                    ],
+                    input=_TARGET_DIAGNOSTIC_REMOTE,
+                    text=True,
+                    capture_output=True,
+                    timeout=20,
+                    check=False,
+                )
+        except (OSError, subprocess.TimeoutExpired):
+            raise _provider_failure(
+                "Declared host SSH diagnostic operation is unavailable"
+            ) from None
+        if completed.returncode != 0:
+            raise _provider_failure(
+                "Declared host has no private adapter diagnostic for its latest run"
+            )
+        return completed.stdout.splitlines()
 
     def _run(
         self,
@@ -473,6 +518,10 @@ def inspect_target_status(request: ApplyRequest) -> dict[str, str]:
 
 def inspect_target_logs(request: ApplyRequest) -> list[str]:
     return SshOperationProvider().target_logs(request)
+
+
+def inspect_target_diagnostic(request: ApplyRequest) -> list[str]:
+    return SshOperationProvider().target_diagnostic(request)
 
 
 def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:

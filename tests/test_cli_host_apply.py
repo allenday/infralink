@@ -825,6 +825,28 @@ def test_host_logs_last_run_returns_bounded_sanitized_target_evidence(
     assert_schema(payload, "host-logs")
 
 
+def test_host_logs_diagnostic_returns_target_private_adapter_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed("private adapter failure detail\n"),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "logs", HOST_ID, "--last-run", "--diagnostic"]
+    )
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert payload["result"]["lines"] == ["private adapter failure detail"]
+
+
 def test_host_status_marks_an_active_target_reconcile_in_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
