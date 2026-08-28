@@ -835,9 +835,7 @@ def test_host_logs_diagnostic_returns_target_private_adapter_output(
         calls.append(args)
         return _completed("private adapter failure detail\n")
 
-    monkeypatch.setattr(
-        "infralink.cli.operations.subprocess.run", fake_run
-    )
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
     monkeypatch.setattr(
         "infralink.cli.operations._pinned_known_hosts",
         lambda request: nullcontext(Path("/tmp/known-hosts")),
