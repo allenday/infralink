@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Literal
 
 from agent_surface import OperationError
-from pydantic import Field
+from pydantic import Field, StrictInt
 
 from infralink.cli.contracts import (
     AppListResult,
@@ -30,13 +31,13 @@ from infralink.cli.queries import (
     show_host,
     show_service,
 )
-from infralink.operator_sources import LoadedSources, SourceRequest, load_registry, load_sources
+from infralink.operator_sources import SourceRequest, load_registry, load_sources
 
 
 class PagedTopologyRequest(SourceRequest):
     """Bound one topology collection without transport-owned pagination."""
 
-    limit: int = Field(default=20, ge=1, le=1000)
+    limit: StrictInt = Field(default=20, ge=1, le=1000)
     cursor: str | None = None
 
 
@@ -79,18 +80,25 @@ def list_declared_apps(request: SourceRequest) -> AppListResult:
 
 
 def show_declared_host(request: HostShowRequest) -> HostShowResult:
-    sources = load_sources(request)
+    registry = load_registry(request)
+    edges_path = _host_edges_path(request, registry.registry_path)
     selected = _selected_collection(request.collection, request.cursor, ("services", "projects"))
+    fingerprint = _fingerprint(
+        registry_path=registry.registry_path,
+        edges_path=edges_path,
+        registry=registry.registry,
+        edges=None,
+        include_edges=False,
+        identifiers={"host_id": request.host_id},
+    )
     offset = _page_offset(
         request.cursor,
         command="host show",
         collection=selected,
-        fingerprint=_fingerprint(
-            sources, include_edges=False, identifiers={"host_id": request.host_id}
-        ),
+        fingerprint=fingerprint,
     )
     result = show_host(
-        sources.registry,
+        registry.registry,
         request.host_id,
         collection=selected,
         limit=request.limit,
@@ -103,9 +111,7 @@ def show_declared_host(request: HostShowRequest) -> HostShowResult:
         selected=selected,
         offset=offset,
         limit=request.limit,
-        fingerprint=_fingerprint(
-            sources, include_edges=False, identifiers={"host_id": request.host_id}
-        ),
+        fingerprint=fingerprint,
     )
     return result
 
@@ -118,7 +124,14 @@ def show_declared_service(request: ServiceShowRequest) -> ServiceShowResult:
     identifiers = {"service_id": request.service_id}
     if request.app_id is not None:
         identifiers["app_id"] = request.app_id
-    fingerprint = _fingerprint(sources, include_edges=True, identifiers=identifiers)
+    fingerprint = _fingerprint(
+        registry_path=sources.registry_path,
+        edges_path=sources.edges_path,
+        registry=sources.registry,
+        edges=sources.edges,
+        include_edges=True,
+        identifiers=identifiers,
+    )
     offset = _page_offset(
         request.cursor,
         command="service show",
@@ -149,7 +162,10 @@ def show_declared_service(request: ServiceShowRequest) -> ServiceShowResult:
 def show_declared_edge(request: EdgeShowRequest) -> EdgeShowResult:
     sources = load_sources(request)
     fingerprint = _fingerprint(
-        sources,
+        registry_path=sources.registry_path,
+        edges_path=sources.edges_path,
+        registry=sources.registry,
+        edges=sources.edges,
         include_edges=True,
         include_registry=False,
         identifiers={"edge_id": request.edge_id},
@@ -176,7 +192,14 @@ def show_declared_edge(request: EdgeShowRequest) -> EdgeShowResult:
 def show_declared_app(request: AppShowRequest) -> AppShowResult:
     sources = load_sources(request)
     selected = _selected_collection(request.collection, request.cursor, ("services", "edges"))
-    fingerprint = _fingerprint(sources, include_edges=True, identifiers={"app_id": request.app_id})
+    fingerprint = _fingerprint(
+        registry_path=sources.registry_path,
+        edges_path=sources.edges_path,
+        registry=sources.registry,
+        edges=sources.edges,
+        include_edges=True,
+        identifiers={"app_id": request.app_id},
+    )
     offset = _page_offset(
         request.cursor,
         command="app show",
@@ -247,25 +270,31 @@ def _attach_cursors(
 
 
 def _fingerprint(
-    sources: LoadedSources,
     *,
+    registry_path: Path,
+    edges_path: Path | None,
+    registry: Any,
+    edges: Any,
     include_edges: bool,
     include_registry: bool = True,
     identifiers: dict[str, str],
 ) -> str:
-    snapshot: dict[str, Any] = {"identifiers": identifiers}
+    snapshot: dict[str, Any] = {
+        "registry_path": str(registry_path),
+        "edges_path": str(edges_path),
+        "identifiers": identifiers,
+    }
     if include_registry:
         snapshot["hosts"] = [
-            host.to_dict() for host in sorted(sources.registry, key=lambda item: item.uuid)
+            host.to_dict() for host in sorted(registry, key=lambda item: item.uuid)
         ]
         snapshot["applications"] = [
             application.to_dict()
-            for application in sorted(sources.registry.applications, key=lambda item: item.id)
+            for application in sorted(registry.applications, key=lambda item: item.id)
         ]
     if include_edges:
-        snapshot["edges"] = [
-            edge.to_dict() for edge in sorted(sources.edges, key=lambda item: item.id)
-        ]
+        assert edges is not None
+        snapshot["edges"] = [edge.to_dict() for edge in sorted(edges, key=lambda item: item.id)]
     return hashlib.sha256(
         json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
@@ -276,3 +305,11 @@ def _invalid_cursor() -> None:
 
     error = invalid_cursor()
     raise OperationError(error.code.value, error.message, fix=error.fix)
+
+
+def _host_edges_path(request: SourceRequest, registry_path: Path) -> Path | None:
+    """Retain legacy host-show cursor binding without loading edge declarations."""
+    if request.edges is not None:
+        return request.edges.expanduser().resolve()
+    candidate = registry_path / "network/main-dev/edges/edges.yml"
+    return candidate if candidate.exists() else None
