@@ -33,7 +33,9 @@ class LoadedSources(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     registry_path: Path
+    registry_source_path: Path
     edges_path: Path
+    edges_source_path: Path
     registry: Registry
     edges: EdgeSet
 
@@ -44,6 +46,7 @@ class LoadedRegistry(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     registry_path: Path
+    registry_source_path: Path
     registry: Registry
 
 
@@ -65,7 +68,8 @@ def load_registry(request: SourceRequest) -> LoadedRegistry:
             details=({"source": "registry"},),
             fix="Pass a registry checkout root or configure INFRALINK_CONFIG.",
         )
-    registry_path = selected.expanduser().resolve()
+    registry_source_path = selected.expanduser()
+    registry_path = registry_source_path.resolve()
     if not registry_path.exists():
         raise OperationError(
             "source_not_found",
@@ -91,17 +95,22 @@ def load_registry(request: SourceRequest) -> LoadedRegistry:
             fix="Correct the registry declaration and validate it before retrying.",
         ) from error
 
-    return LoadedRegistry(registry_path=registry_path, registry=registry)
+    return LoadedRegistry(
+        registry_path=registry_path,
+        registry_source_path=registry_source_path,
+        registry=registry,
+    )
 
 
 def load_sources(request: SourceRequest) -> LoadedSources:
     """Load the selected registry checkout and its edge declaration."""
     loaded_registry = load_registry(request)
-    edges_path = (
-        request.edges.expanduser().resolve()
+    edges_source_path = (
+        request.edges.expanduser()
         if request.edges is not None
-        else loaded_registry.registry_path / "network/main-dev/edges/edges.yml"
+        else loaded_registry.registry_source_path / "network/main-dev/edges/edges.yml"
     )
+    edges_path = edges_source_path.resolve()
     if not edges_path.is_file():
         raise OperationError(
             "source_not_found",
@@ -120,7 +129,9 @@ def load_sources(request: SourceRequest) -> LoadedSources:
         ) from error
     return LoadedSources(
         registry_path=loaded_registry.registry_path,
+        registry_source_path=loaded_registry.registry_source_path,
         edges_path=edges_path,
+        edges_source_path=edges_source_path,
         registry=loaded_registry.registry,
         edges=edges,
     )

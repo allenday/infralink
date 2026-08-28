@@ -202,6 +202,40 @@ def test_topology_host_cursor_remains_compatible_with_the_legacy_cli(
     assert typed.services.items == ["beta"]
 
 
+def test_topology_host_cursor_preserves_relative_registry_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n"
+        "    canonical_name: host-1\n"
+        "    services: {alpha: {}, beta: {}}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    legacy = CliRunner().invoke(
+        cli,
+        ["--registry", "registry", "host", "show", host_id, "--limit", "1"],
+    )
+    assert legacy.exit_code == 0, legacy.output
+    cursor = yaml.safe_load(legacy.output)["result"]["services"]["page"]["next_cursor"]
+
+    typed = show_declared_host(
+        HostShowRequest(
+            registry=Path("registry"),
+            host_id=host_id,
+            limit=1,
+            cursor=cursor,
+            collection="services",
+        )
+    )
+
+    assert typed.services.items == ["beta"]
+
+
 def test_topology_host_cursor_is_bound_to_its_checkout_path(tmp_path: Path) -> None:
     host_id = "11111111-1111-4111-8111-111111111111"
     for name in ("first", "second"):

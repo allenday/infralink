@@ -81,10 +81,10 @@ def list_declared_apps(request: SourceRequest) -> AppListResult:
 
 def show_declared_host(request: HostShowRequest) -> HostShowResult:
     registry = load_registry(request)
-    edges_path = _host_edges_path(request, registry.registry_path)
+    edges_path = _host_edges_path(request, registry.registry_source_path)
     selected = _selected_collection(request.collection, request.cursor, ("services", "projects"))
     fingerprint = _fingerprint(
-        registry_path=registry.registry_path,
+        registry_path=registry.registry_source_path,
         edges_path=edges_path,
         registry=registry.registry,
         edges=None,
@@ -125,8 +125,8 @@ def show_declared_service(request: ServiceShowRequest) -> ServiceShowResult:
     if request.app_id is not None:
         identifiers["app_id"] = request.app_id
     fingerprint = _fingerprint(
-        registry_path=sources.registry_path,
-        edges_path=sources.edges_path,
+        registry_path=sources.registry_source_path,
+        edges_path=sources.edges_source_path,
         registry=sources.registry,
         edges=sources.edges,
         include_edges=True,
@@ -162,8 +162,8 @@ def show_declared_service(request: ServiceShowRequest) -> ServiceShowResult:
 def show_declared_edge(request: EdgeShowRequest) -> EdgeShowResult:
     sources = load_sources(request)
     fingerprint = _fingerprint(
-        registry_path=sources.registry_path,
-        edges_path=sources.edges_path,
+        registry_path=sources.registry_source_path,
+        edges_path=sources.edges_source_path,
         registry=sources.registry,
         edges=sources.edges,
         include_edges=True,
@@ -193,8 +193,8 @@ def show_declared_app(request: AppShowRequest) -> AppShowResult:
     sources = load_sources(request)
     selected = _selected_collection(request.collection, request.cursor, ("services", "edges"))
     fingerprint = _fingerprint(
-        registry_path=sources.registry_path,
-        edges_path=sources.edges_path,
+        registry_path=sources.registry_source_path,
+        edges_path=sources.edges_source_path,
         registry=sources.registry,
         edges=sources.edges,
         include_edges=True,
@@ -307,9 +307,9 @@ def _invalid_cursor() -> None:
     raise OperationError(error.code.value, error.message, fix=error.fix)
 
 
-def _host_edges_path(request: SourceRequest, registry_path: Path) -> Path | None:
+def _host_edges_path(request: SourceRequest, registry_source_path: Path) -> Path | None:
     """Retain legacy host-show cursor binding without loading edge declarations."""
     if request.edges is not None:
         return request.edges.expanduser().resolve()
-    candidate = registry_path / "network/main-dev/edges/edges.yml"
+    candidate = registry_source_path / "network/main-dev/edges/edges.yml"
     return candidate if candidate.exists() else None
