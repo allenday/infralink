@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 from agent_surface import Invocation, OutputBudget
-from agent_surface.adapters.mcp import MCPAdapter
 from agent_surface.contracts import Action, ActionCollection
 from click.testing import CliRunner
 from mcp import Client
@@ -74,9 +73,7 @@ def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
     assert "diagnostic" in definition.input_model.model_fields
 
     async def listed_schema() -> dict[str, object]:
-        async with Client(
-            MCPAdapter(operator_surface, envelope_renderer=InfralinkEnvelopeRenderer()).server
-        ) as client:
+        async with Client(operator_mcp_adapter().server) as client:
             tools = await client.list_tools()
         tool = next(item for item in tools.tools if item.name == "host.logs")
         return tool.input_schema
