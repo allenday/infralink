@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 from agent_surface import Invocation, OutputBudget
-from agent_surface.adapters.click import ClickAdapter
 from agent_surface.adapters.mcp import MCPAdapter
 from agent_surface.contracts import Action, ActionCollection
 from click.testing import CliRunner
@@ -16,7 +15,7 @@ from mcp import Client
 
 from infralink.agent_surface import InfralinkEnvelopeRenderer
 from infralink.cli.contracts import HostListResult
-from infralink.operator_surface import operator_surface
+from infralink.operator_surface import operator_click_adapter, operator_surface
 
 
 def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
@@ -32,8 +31,8 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     renderer = InfralinkEnvelopeRenderer()
 
     click_result = CliRunner().invoke(
-        ClickAdapter(operator_surface, envelope_renderer=renderer).command(),
-        ["host", "list", "--registry", str(tmp_path), "--format", "json"],
+        operator_click_adapter().command(),
+        ["--registry", str(tmp_path), "host", "list", "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -56,7 +55,7 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
         assert document["next_actions"] == []
 
     assert click_document["command"]["raw"] == (
-        f"infralink host list --registry {tmp_path} --format json"
+        f"infralink --registry {tmp_path} host list --format json"
     )
     assert click_document["command"]["parsed"]["flags"] == ["--registry", "--format"]
     assert click_document["command"]["resolved"]["output"] == "json"
@@ -309,8 +308,8 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
     )
     renderer = InfralinkEnvelopeRenderer()
     click_result = CliRunner().invoke(
-        ClickAdapter(operator_surface, envelope_renderer=renderer).command(),
-        [*path, "--registry", str(tmp_path), "--edges", str(edges), "--format", "json"],
+        operator_click_adapter().command(),
+        ["--registry", str(tmp_path), "--edges", str(edges), *path, "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -348,8 +347,8 @@ def test_typed_source_failure_projects_one_error_envelope_through_click_and_mcp(
     missing_registry = tmp_path / "missing"
     renderer = InfralinkEnvelopeRenderer()
     click_result = CliRunner().invoke(
-        ClickAdapter(operator_surface, envelope_renderer=renderer).command(),
-        ["host", "list", "--registry", str(missing_registry), "--format", "json"],
+        operator_click_adapter().command(),
+        ["--registry", str(missing_registry), "host", "list", "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:

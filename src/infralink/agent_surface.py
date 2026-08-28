@@ -10,9 +10,43 @@ from pydantic import BaseModel
 
 from infralink import __version__
 from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
+from infralink.cli.errors import ErrorCode, ExitCode
 
 if TYPE_CHECKING:
     from agent_surface import Invocation
+
+
+def operation_error_exit_code(code: str) -> int:
+    """Map the typed-operation error taxonomy onto Infralink process exits.
+
+    Agent Surface intentionally supplies only an error code here.  Typed
+    operations therefore use an unambiguous contract: malformed command and
+    continuation inputs are usage errors; declared-state, schema, and entity
+    failures are input errors.  Legacy Click-only call sites that used the
+    same ``configuration_required`` label for both categories are not part of
+    this adapter boundary.
+    """
+    try:
+        error_code = ErrorCode(code)
+    except ValueError:
+        return int(ExitCode.INTERNAL_ERROR)
+    if error_code in {ErrorCode.USAGE_ERROR, ErrorCode.INVALID_CURSOR}:
+        return int(ExitCode.USAGE_ERROR)
+    if error_code in {
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        ErrorCode.PROVIDER_AUTHENTICATION_FAILED,
+        ErrorCode.PROVIDER_AUTHORIZATION_FAILED,
+        ErrorCode.PROVIDER_TIMEOUT,
+        ErrorCode.RELEASE_PUBLISHER_UNAVAILABLE,
+    }:
+        return int(ExitCode.PROVIDER_ERROR)
+    if error_code is ErrorCode.UNSUPPORTED_PLATFORM:
+        return int(ExitCode.UNSUPPORTED_PLATFORM)
+    if error_code in {ErrorCode.ARTIFACT_IO_FAILED, ErrorCode.ARTIFACT_RECOVERY_REQUIRED}:
+        return int(ExitCode.ARTIFACT_IO_ERROR)
+    if error_code is ErrorCode.INTERNAL_ERROR:
+        return int(ExitCode.INTERNAL_ERROR)
+    return int(ExitCode.INPUT_ERROR)
 
 
 class InfralinkEnvelopeRenderer:

@@ -39,7 +39,7 @@ dependencies = [
     "jinja2>=3.0",
     "pydantic>=2.11,<3",
     "mcp>=2,<3",
-    "agent-surface[mcp]==0.1.5",
+    "agent-surface[mcp]==0.1.6",
 ]
 
 [project.optional-dependencies]
