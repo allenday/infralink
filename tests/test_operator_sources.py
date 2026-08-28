@@ -8,6 +8,7 @@ from agent_surface import OperationError
 from agent_surface.adapters.click import ClickAdapter
 from click.testing import CliRunner
 
+from infralink.operator_operations.topology import HostShowRequest, show_declared_host
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
 from infralink.operator_surface import operator_surface
 
@@ -124,3 +125,47 @@ def test_generated_click_projects_host_list_from_the_shared_operation(tmp_path: 
     assert payload["ok"] is True
     assert payload["command"]["parsed"]["path"] == ["host", "list"]
     assert payload["result"]["items"] == ["11111111-1111-4111-8111-111111111111"]
+
+
+def test_topology_reads_are_registered_once_and_preserve_bounded_host_continuation(
+    tmp_path: Path,
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    manifest = tmp_path / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n"
+        "    canonical_name: host-1\n"
+        "    status: active\n"
+        "    projects: [one, two]\n"
+        "    services:\n"
+        "      alpha: {}\n"
+        "      beta: {}\n",
+        encoding="utf-8",
+    )
+    edges = tmp_path / "network/main-dev/edges"
+    edges.mkdir(parents=True)
+    (edges / "edges.yml").write_text("edges: []\n", encoding="utf-8")
+
+    registered = {item.name for item in operator_surface.operations.list()}
+    assert {
+        "host.show",
+        "service.show",
+        "edge.show",
+        "app.list",
+        "app.show",
+    } <= registered
+
+    first = show_declared_host(HostShowRequest(registry=tmp_path, host_id=host_id, limit=1))
+    assert first.services.items == ["alpha"]
+    assert first.services.page.next_cursor is not None
+    second = show_declared_host(
+        HostShowRequest(
+            registry=tmp_path,
+            host_id=host_id,
+            limit=1,
+            cursor=first.services.page.next_cursor,
+            collection="services",
+        )
+    )
+    assert second.services.items == ["beta"]
