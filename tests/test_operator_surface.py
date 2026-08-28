@@ -97,11 +97,11 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     result = CliRunner().invoke(
         ClickAdapter(operator_surface).command(),
         [
+            "--registry",
+            str(registry),
             "host",
             "bootstrap",
             host_id,
-            "--registry",
-            str(registry),
             "--ssh-host",
             "100.64.0.1",
             "--apply",

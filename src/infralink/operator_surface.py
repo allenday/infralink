@@ -57,14 +57,14 @@ from infralink.operator_operations.topology import (
     show_declared_host,
     show_declared_service,
 )
-from infralink.operator_sources import SourceRequest, load_registry, load_sources
+from infralink.operator_sources import OperatorInputs, SourceRequest, load_registry, load_sources
 
 
 class _OperationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class DoctorBootstrapPlanRequest(_OperationModel):
+class DoctorBootstrapPlanRequest(SourceRequest):
     host_ref: str = Field(min_length=1)
     ssh_host: str = Field(min_length=1)
     declared_ssh_host: str = Field(min_length=1)
@@ -75,7 +75,7 @@ class DoctorBootstrapPlanResult(_OperationModel):
     ssh_host: str
 
 
-operator_surface = App("infralink")
+operator_surface = App("infralink", shared_input_model=OperatorInputs)
 
 
 class HostListRequest(SourceRequest):

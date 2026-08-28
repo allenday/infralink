@@ -12,8 +12,8 @@ from infralink.core.registry import Registry
 from infralink.operator_config import OperatorConfigError, configured_registry
 
 
-class SourceRequest(BaseModel):
-    """Explicit source inputs shared by every registry-backed operation."""
+class OperatorInputs(BaseModel):
+    """Root inputs projected once before every Agent Surface command path."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -25,6 +25,10 @@ class SourceRequest(BaseModel):
         default=None,
         description="Optional edge declaration file; defaults to the registry companion file.",
     )
+
+
+class SourceRequest(OperatorInputs):
+    """Explicit source inputs inherited by every registry-backed operation."""
 
 
 class LoadedSources(BaseModel):

@@ -137,7 +137,7 @@ def test_generated_click_projects_host_list_from_the_shared_operation(tmp_path: 
 
     result = CliRunner().invoke(
         ClickAdapter(operator_surface).command(),
-        ["host", "list", "--registry", str(tmp_path), "--format", "json"],
+        ["--registry", str(tmp_path), "host", "list", "--format", "json"],
     )
 
     assert result.exit_code == 0, result.output

@@ -33,7 +33,7 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
 
     click_result = CliRunner().invoke(
         ClickAdapter(operator_surface, envelope_renderer=renderer).command(),
-        ["host", "list", "--registry", str(tmp_path), "--format", "json"],
+        ["--registry", str(tmp_path), "host", "list", "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -56,7 +56,7 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
         assert document["next_actions"] == []
 
     assert click_document["command"]["raw"] == (
-        f"infralink host list --registry {tmp_path} --format json"
+        f"infralink --registry {tmp_path} host list --format json"
     )
     assert click_document["command"]["parsed"]["flags"] == ["--registry", "--format"]
     assert click_document["command"]["resolved"]["output"] == "json"
@@ -310,7 +310,7 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
     renderer = InfralinkEnvelopeRenderer()
     click_result = CliRunner().invoke(
         ClickAdapter(operator_surface, envelope_renderer=renderer).command(),
-        [*path, "--registry", str(tmp_path), "--edges", str(edges), "--format", "json"],
+        ["--registry", str(tmp_path), "--edges", str(edges), *path, "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -349,7 +349,7 @@ def test_typed_source_failure_projects_one_error_envelope_through_click_and_mcp(
     renderer = InfralinkEnvelopeRenderer()
     click_result = CliRunner().invoke(
         ClickAdapter(operator_surface, envelope_renderer=renderer).command(),
-        ["host", "list", "--registry", str(missing_registry), "--format", "json"],
+        ["--registry", str(missing_registry), "host", "list", "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
