@@ -17,14 +17,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from infralink.cli.contracts import (
     Action,
+    AppListResult,
+    AppShowResult,
     DoctorTarget,
     EdgeListResult,
+    EdgeShowResult,
     HostBootstrapPlanResult,
     HostListResult,
+    HostShowResult,
     InfoResult,
     InfoSources,
     InfoSummary,
     ServiceListResult,
+    ServiceShowResult,
 )
 from infralink.cli.operation_contracts import (
     HostApplyPlan,
@@ -38,7 +43,21 @@ from infralink.cli.operation_contracts import (
     OperationSummary,
     TargetReconcileStatus,
 )
-from infralink.cli.queries import entity_not_found, list_edges, list_hosts, list_services
+from infralink.cli.queries import entity_not_found, list_services
+from infralink.operator_operations.topology import (
+    AppShowRequest,
+    EdgeShowRequest,
+    HostShowRequest,
+    ServiceShowRequest,
+    list_declared_apps,
+    list_declared_edges,
+    list_declared_hosts,
+    list_declared_services,
+    show_declared_app,
+    show_declared_edge,
+    show_declared_host,
+    show_declared_service,
+)
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
 
 
@@ -305,20 +324,49 @@ def host_apply_operation(request: HostApplyRequest) -> HostApplyResult:
 @operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
 def host_list(request: HostListRequest) -> HostListResult:
     """Return the registry host list without a Click context."""
-    return list_hosts(load_registry(request).registry)
+    return list_declared_hosts(request)
+
+
+@operator_surface.operation("host.show", summary="Show one declared host", read_only=True)  # type: ignore[untyped-decorator]
+def host_show(request: HostShowRequest) -> HostShowResult:
+    """Return one bounded host view without a Click context."""
+    return show_declared_host(request)
 
 
 @operator_surface.operation("service.list", summary="List declared services", read_only=True)  # type: ignore[untyped-decorator]
 def service_list(request: ServiceListRequest) -> ServiceListResult:
     """Return the registry service list without a Click context."""
-    sources = load_sources(request)
-    return list_services(sources.registry, sources.edges)
+    return list_declared_services(request)
+
+
+@operator_surface.operation("service.show", summary="Show one declared service", read_only=True)  # type: ignore[untyped-decorator]
+def service_show(request: ServiceShowRequest) -> ServiceShowResult:
+    """Return one bounded service view without a Click context."""
+    return show_declared_service(request)
 
 
 @operator_surface.operation("edge.list", summary="List declared edges", read_only=True)  # type: ignore[untyped-decorator]
 def edge_list(request: EdgeListRequest) -> EdgeListResult:
     """Return the selected registry edge list without a Click context."""
-    return list_edges(load_sources(request).edges)
+    return list_declared_edges(request)
+
+
+@operator_surface.operation("edge.show", summary="Show one declared edge", read_only=True)  # type: ignore[untyped-decorator]
+def edge_show(request: EdgeShowRequest) -> EdgeShowResult:
+    """Return one bounded edge view without a Click context."""
+    return show_declared_edge(request)
+
+
+@operator_surface.operation("app.list", summary="List declared applications", read_only=True)  # type: ignore[untyped-decorator]
+def app_list(request: SourceRequest) -> AppListResult:
+    """Return application IDs without a Click context."""
+    return list_declared_apps(request)
+
+
+@operator_surface.operation("app.show", summary="Show one declared application", read_only=True)  # type: ignore[untyped-decorator]
+def app_show(request: AppShowRequest) -> AppShowResult:
+    """Return one bounded application view without a Click context."""
+    return show_declared_app(request)
 
 
 @operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[untyped-decorator]
