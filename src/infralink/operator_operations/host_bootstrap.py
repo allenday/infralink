@@ -201,6 +201,7 @@ _BOOTSTRAP_CONTROLLER_BACKED_CHECK_IDS = frozenset(
         "self_deploy_runtime",
         "self_deploy_timer",
         "self_deploy_reconcile",
+        "controller_python",
     }
 )
 
@@ -747,10 +748,16 @@ def _controller_bootstrap_state(
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["hosts"][target.uuid]
         bootstrap = manifest["controller_bootstrap"]
         deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
-        image = deployment["controller"]["image"]
+        if (
+            deployment.get("schema_version") == "self-deploy.preservation-state.v1"
+            and deployment.get("mode") == "preserve-only"
+        ):
+            controller_image = os.environ["INFRALINK_CONTROLLER_IMAGE"]
+        else:
+            controller_image = _controller_image_reference(deployment["controller"]["image"])
         state = HostControllerBootstrapState.model_validate(
             {
-                "controller_image": _controller_image_reference(image),
+                "controller_image": controller_image,
                 "registry_read_identity_secret": bootstrap["registry_read_identity_secret"],
                 "registry_repo_url": bootstrap["registry_repo_url"],
                 "registry_ref": bootstrap["registry_ref"],

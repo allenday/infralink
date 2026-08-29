@@ -551,6 +551,50 @@ def test_bootstrap_plan_advertises_apply_handoff_for_declared_executor_prerequis
     assert [item.rel for item in actions] == ["reinspect-readiness", "apply"]
 
 
+def test_bootstrap_plan_does_not_gate_initial_controller_image_materialization(
+    tmp_path: Path,
+) -> None:
+    context = Context()
+    context.registry_path = tmp_path / "hosts"
+    target = type(
+        "Target",
+        (),
+        {"uuid": HOST_ID, "canonical_name": HOST_NAME},
+    )()
+    readiness = _readiness_with_bws_token_required(
+        HostReadinessResult(
+            transport="root_ssh",
+            ready=False,
+            checks=[
+                HostReadinessCheck(
+                    id="controller_python",
+                    required=True,
+                    passed=False,
+                    description="The controller image has not been materialized yet.",
+                    detail="controller_image_unresolved",
+                )
+            ],
+            actions=[
+                HostBootstrapAction(
+                    id="refresh_controller_image",
+                    check_id="controller_python",
+                    description="Refresh the controller image.",
+                )
+            ],
+        )
+    )
+
+    actions = _bootstrap_plan_actions(
+        context,
+        target,
+        "100.64.68.83",
+        readiness,
+        bws_token_supplied=False,
+    )
+
+    assert [item.rel for item in actions] == ["reinspect-readiness", "apply"]
+
+
 def test_bootstrap_plan_omits_apply_handoff_for_manual_ssh_prerequisite(
     tmp_path: Path,
 ) -> None:
@@ -717,6 +761,46 @@ def test_controller_bootstrap_requires_declared_registry_known_hosts(tmp_path: P
     assert raised.value.details["required_manifest_fields"][-1] == (
         "controller_bootstrap.registry_known_hosts"
     )
+
+
+def test_controller_bootstrap_uses_invoking_seed_for_preservation_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preserve-only declaration has no Compose controller image by design."""
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    deployment = registry / HOST_ID / "operations" / "deployment.yml"
+    deployment.parent.mkdir(parents=True)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        "    controller_bootstrap:\n"
+        "      registry_read_identity_secret:\n"
+        "        project: fleet\n"
+        "        id: 11111111-1111-4111-8111-111111111111\n"
+        "      registry_repo_url: ssh://git@example.invalid:2222/registry.git\n"
+        "      registry_ref: main\n"
+        "      registry_known_hosts: git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/\n",
+        encoding="utf-8",
+    )
+    deployment.write_text(
+        "schema_version: self-deploy.preservation-state.v1\n"
+        "mode: preserve-only\n"
+        f"machine: {{uuid: {HOST_ID}, status: active}}\n"
+        "infra_management:\n"
+        "  provider: git\n"
+        "  source: {remote: https://example.invalid/management.git, ref: refs/heads/main}\n"
+        "  revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        "working_tree: preserve-dirty\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INFRALINK_CONTROLLER_IMAGE", "ghcr.io/example/controller:main")
+
+    state = _controller_bootstrap_state(registry, type("Target", (), {"uuid": HOST_ID})())
+
+    assert state.controller_image == "ghcr.io/example/controller:main"
+    assert state.registry_ref == "main"
 
 
 @pytest.mark.parametrize("known_hosts", ["", "git.example.invalid ssh-ed25519 not-base64"])
