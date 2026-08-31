@@ -45,6 +45,7 @@ from infralink.cli.operation_contracts import (
     TargetReconcileStatus,
 )
 from infralink.cli.queries import entity_not_found, list_services
+from infralink.fleet.validation import FleetValidationResult, validate_fleet
 from infralink.operator_operations.topology import (
     AppShowRequest,
     EdgeShowRequest,
@@ -60,7 +61,6 @@ from infralink.operator_operations.topology import (
     show_declared_service,
 )
 from infralink.operator_sources import OperatorInputs, SourceRequest, load_registry, load_sources
-from infralink.fleet.validation import FleetValidationResult, validate_fleet
 
 
 class _OperationModel(BaseModel):
