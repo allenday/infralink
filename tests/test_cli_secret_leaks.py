@@ -438,6 +438,11 @@ selection:
         ),
     }
     discovered = _leaf_paths(cli)
+    if ("controller", "doctor") in discovered:
+        # A controller plugin may be installed with the public CLI. The local
+        # probe is intentionally unavailable in this hermetic topology, but
+        # its typed failure must not expose loaded registry values.
+        invocations[("controller", "doctor")] = (["controller", "doctor"], 70, False)
     # `mcp serve` owns a long-running JSON-RPC transport and cannot be invoked
     # as a one-shot CLI envelope. Its delegated command boundary is covered by
     # tests/test_mcp_server.py.
@@ -446,6 +451,14 @@ selection:
     runner = CliRunner()
     for path, (argv, expected_exit, expected_ok) in invocations.items():
         result = runner.invoke(cli, argv)
+        if path == ("controller", "doctor"):
+            # The optional plugin reads local controller state, so the
+            # hermetic fixture cannot prescribe its health result. Its public
+            # envelope and exception still must never disclose loaded data.
+            assert canary not in result.output
+            assert canary not in result.stderr
+            assert canary not in repr(result.exception)
+            continue
         _assert_no_canary(
             canary,
             " ".join(path) or "root",

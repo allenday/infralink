@@ -1068,6 +1068,42 @@ def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
     return query_entity_not_found(entity_type, requested_id)
 
 
+_BUILTIN_COMMAND_NAMES = frozenset(
+    {
+        "help",
+        "version",
+        "analyze",
+        "check",
+        "doctor",
+        "mcp",
+        "diagram",
+        "docs",
+        "resolve",
+        "validate",
+        "capabilities",
+        "project",
+        "explain",
+        "app",
+        "info",
+        "hosts",
+        "edges-list",
+        "services",
+        "host",
+        "operation",
+        "edge",
+        "service",
+        "secrets",
+        "release",
+        "registry",
+    }
+)
+
+
+def _is_external_command(name: str) -> bool:
+    """Whether a name resolves only through an installed command plugin."""
+    return name not in _BUILTIN_COMMAND_NAMES and name in command_plugins.names()
+
+
 def _load_command(name: str) -> click.Command | None:
     if name == "help":
         return help_command
@@ -1162,7 +1198,7 @@ class JsonGroup(click.Group):
         self, ctx: click.Context, args: list[str]
     ) -> tuple[str | None, click.Command | None, list[str]]:
         cmd_name, command, remaining = super().resolve_command(ctx, args)
-        if cmd_name in command_plugins.names():
+        if cmd_name is not None and _is_external_command(cmd_name):
             _reject_mounted_overrides(remaining)
         return cmd_name, command, remaining
 
@@ -1404,7 +1440,9 @@ def cli(
         is not click.core.ParameterSource.DEFAULT
     )
 
-    if click_ctx.invoked_subcommand in command_plugins.names():
+    if click_ctx.invoked_subcommand is not None and _is_external_command(
+        click_ctx.invoked_subcommand
+    ):
         mounted = _load_command(click_ctx.invoked_subcommand)
         if mounted is not None:
             _set_mounted_defaults(click_ctx, click_ctx.invoked_subcommand, mounted)

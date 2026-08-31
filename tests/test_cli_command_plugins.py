@@ -74,3 +74,9 @@ def test_root_discovers_a_declared_external_command(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert result.output == "controller-command\n"
+
+
+def test_packaging_entry_points_do_not_reclassify_builtin_commands() -> None:
+    # Core historically advertised a few built-ins through package metadata.
+    # Their actual Click implementations remain built-in command surfaces.
+    assert cli_main._is_external_command("diagram") is False
