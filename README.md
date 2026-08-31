@@ -249,6 +249,7 @@ templates.
 - Contribution flow and canonical checks: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Agent instructions: [AGENTS.md](AGENTS.md)
 - Architecture/navigation: [docs/architecture.md](docs/architecture.md)
+- Read-only declared fleet validation: [docs/fleet-validate.md](docs/fleet-validate.md)
 - Public/private runtime split: [docs/architecture.md#public-and-private-runtime-boundary](docs/architecture.md#public-and-private-runtime-boundary)
 - Observable topology and metric contracts: [docs/observable-model.md](docs/observable-model.md)
 - Security boundaries: [docs/security-boundaries.md](docs/security-boundaries.md)

@@ -257,6 +257,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "description": "Validate registry and edges.",
         "usage": "infralink validate",
     },
+    "fleet": {
+        "description": "Validate declared fleet topology without host-side operations.",
+        "usage": "infralink fleet validate",
+    },
     "app": {"description": "Manage applications.", "usage": "infralink app [list|show]"},
     "info": {"description": "Show registry and edge summary.", "usage": "infralink info"},
     "mcp": {
@@ -1091,6 +1095,10 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.validate import validate
 
         return validate
+    if name == "fleet":
+        from infralink.cli.fleet import fleet
+
+        return fleet
     if name == "capabilities":
         from infralink.cli.observation import capabilities
 
