@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 from pydantic import BaseModel
@@ -33,7 +33,7 @@ def mounted_click_command(app: App) -> click.Group:
         operation_error_exit_code=operation_error_exit_code,
     ).command()
     _inherit_root_output(root)
-    return root
+    return cast(click.Group, root)
 
 
 def _mounted_invocation_argv() -> tuple[str, ...]:
