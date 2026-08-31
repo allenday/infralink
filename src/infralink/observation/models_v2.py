@@ -22,6 +22,7 @@ from infralink.observation.models import (
     CanonicalId,
     Endpoint,
     EndpointExposure,
+    EndpointProtocol,
     HostId,
     MetricCondition,
     Port,
@@ -63,6 +64,14 @@ class ConfigurationValueKind(str, Enum):
     STRING_LIST_MAP = "string-list-map"
     RECORD = "record"
     RECORD_LIST = "record-list"
+    CONNECTION = "connection"
+
+
+class ConnectionCardinality(str, Enum):
+    """The number of in-fleet targets a connection contract permits."""
+
+    ONE = "one"
+    MANY = "many"
 
 
 class ConfigurationFieldKind(str, Enum):
@@ -121,6 +130,9 @@ class ConfigurationSlot(StrictModel):
     required: bool = True
     purpose: Annotated[str, Field(min_length=1)]
     fields: list[ConfigurationField] = Field(default_factory=list)
+    protocol: EndpointProtocol | None = None
+    cardinality: ConnectionCardinality | None = None
+    target_profile_id: CanonicalId | None = None
 
     @model_validator(mode="after")
     def validate_record_shape(self) -> ConfigurationSlot:
@@ -128,6 +140,22 @@ class ConfigurationSlot(StrictModel):
         if len(field_ids) != len(set(field_ids)):
             raise ValueError("duplicate configuration record field")
         structured_kinds = {ConfigurationValueKind.RECORD, ConfigurationValueKind.RECORD_LIST}
+        if self.kind is ConfigurationValueKind.CONNECTION:
+            if self.component_id is None:
+                raise ValueError("connection configuration slot requires component_id")
+            if self.protocol is None or self.cardinality is None:
+                raise ValueError("connection configuration slot requires protocol and cardinality")
+            if self.fields or self.identity_field is not None:
+                raise ValueError("connection configuration slot cannot declare record fields")
+            return self
+        if (
+            self.protocol is not None
+            or self.cardinality is not None
+            or self.target_profile_id is not None
+        ):
+            raise ValueError(
+                "connection protocol, cardinality, and target_profile_id are only valid for connection configuration slots"
+            )
         if self.kind in structured_kinds and not self.fields:
             raise ValueError("record configuration slot requires fields")
         if self.kind not in structured_kinds and self.fields:
@@ -155,7 +183,16 @@ class ConfigurationBinding(StrictModel):
     """One value bound to a declared profile configuration slot."""
 
     slot_id: CanonicalId
-    value: ConfigurationValue
+    value: ConfigurationValue | None = None
+    edge_refs: list[CanonicalId] | None = None
+
+    @model_validator(mode="after")
+    def require_exactly_one_binding_source(self) -> ConfigurationBinding:
+        if (self.value is None) == (self.edge_refs is None):
+            raise ValueError("configuration binding requires exactly one of value or edge_refs")
+        if self.edge_refs is not None and len(self.edge_refs) != len(set(self.edge_refs)):
+            raise ValueError("duplicate connection edge reference")
+        return self
 
 
 def _relative_artifact_path(value: str, *, field: str) -> str:
