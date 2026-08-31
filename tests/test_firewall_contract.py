@@ -166,16 +166,16 @@ def test_policy_rejects_duplicate_ingress_socket_ownership() -> None:
         )
 
 
-def test_policy_rejects_same_socket_across_different_bind_addresses() -> None:
+def test_policy_rejects_same_address_port_across_different_interfaces() -> None:
     ingress = {
         "service": "reverse-proxy",
         "protocol": "tcp",
         "ports": [443],
-        "interface": "tailscale0",
-        "bind_address": "100.64.0.10",
-        "sources": ["100.64.0.0/10"],
+        "interface": "eth0",
+        "bind_address": "198.51.100.10",
+        "sources": ["203.0.113.0/24"],
     }
-    alternate_address = {**ingress, "service": "other-proxy", "bind_address": "100.64.0.11"}
+    duplicate = {**ingress, "service": "other-proxy", "interface": "eth1"}
 
     with pytest.raises(ValidationError, match="one service owner"):
         FirewallPolicy.model_validate(
@@ -187,6 +187,33 @@ def test_policy_rejects_same_socket_across_different_bind_addresses() -> None:
                     "interface": "eth0",
                     "sources": ["203.0.113.0/24"],
                 },
-                "ingress": [ingress, alternate_address],
+                "ingress": [ingress, duplicate],
             }
         )
+
+
+def test_policy_accepts_same_port_across_different_bind_addresses() -> None:
+    ingress = {
+        "service": "reverse-proxy",
+        "protocol": "tcp",
+        "ports": [443],
+        "interface": "tailscale0",
+        "bind_address": "100.64.0.10",
+        "sources": ["100.64.0.0/10"],
+    }
+    alternate_address = {**ingress, "service": "other-proxy", "bind_address": "100.64.0.11"}
+
+    policy = FirewallPolicy.model_validate(
+        {
+            "backend": "nftables",
+            "mode": "default-deny",
+            "management_ssh": {
+                "port": 22,
+                "interface": "eth0",
+                "sources": ["203.0.113.0/24"],
+            },
+            "ingress": [ingress, alternate_address],
+        }
+    )
+
+    assert [rule.bind_address for rule in policy.ingress] == ["100.64.0.10", "100.64.0.11"]
