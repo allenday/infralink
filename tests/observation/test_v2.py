@@ -12,6 +12,7 @@ from infralink.observation.models import EndpointExposure
 from infralink.observation.models_v2 import EdgeScope
 from infralink.observation.v2 import (
     V2ArtifactValidationError,
+    V2ConfigurationValidationError,
     V2InstanceTopologyValidationError,
     V2MetricValidationError,
     V2ResourceValidationError,
@@ -79,6 +80,312 @@ def test_component_endpoint_override_resolves_address_port_and_exposure() -> Non
         2587,
         EndpointExposure.PUBLIC,
     )
+
+
+def test_connection_configuration_slot_projects_its_declared_edge_target() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "application",
+                    "components": [
+                        {
+                            "id": "worker",
+                            "endpoints": [
+                                {"id": "database", "protocol": "postgresql", "port": 5432}
+                            ],
+                        },
+                        {
+                            "id": "postgresql",
+                            "endpoints": [
+                                {"id": "postgresql", "protocol": "postgresql", "port": 5432}
+                            ],
+                        },
+                    ],
+                    "configuration_slots": [
+                        {
+                            "id": "metadata-database",
+                            "component_id": "worker",
+                            "kind": "connection",
+                            "protocol": "postgresql",
+                            "cardinality": "one",
+                            "target_profile_id": "application",
+                            "purpose": "Connect the worker to its metadata database.",
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "application",
+                    "host_id": HOST_ID,
+                    "profile_id": "application",
+                    "components": [
+                        {
+                            "slot_id": "worker",
+                            "endpoint_overrides": [
+                                {"endpoint_id": "database", "address": "127.0.0.1"}
+                            ],
+                        },
+                        {
+                            "slot_id": "postgresql",
+                            "endpoint_overrides": [
+                                {"endpoint_id": "postgresql", "address": "100.64.0.10"}
+                            ],
+                        },
+                    ],
+                    "configuration_bindings": [
+                        {"slot_id": "metadata-database", "edge_refs": ["worker-to-postgresql"]}
+                    ],
+                }
+            ],
+            "component_edges": [
+                {
+                    "id": "worker-to-postgresql",
+                    "source_endpoint_id": f"{HOST_ID}/application/worker/database",
+                    "target_endpoint_id": f"{HOST_ID}/application/postgresql/postgresql",
+                }
+            ],
+        }
+    )
+
+    binding = plan_v2_configuration_bindings((document,))[0]
+
+    assert binding.edge_refs == ["worker-to-postgresql"]
+    assert [
+        (endpoint.address, endpoint.port, endpoint.protocol) for endpoint in binding.targets
+    ] == [("100.64.0.10", 5432, "postgresql")]
+
+
+def test_connection_configuration_slot_rejects_another_instance_source_edge() -> None:
+    payload = {
+        "schema_version": "infralink.observation/v2",
+        "service_profiles": [
+            {
+                "id": "application",
+                "components": [
+                    {
+                        "id": "worker",
+                        "endpoints": [{"id": "database", "protocol": "postgresql", "port": 5432}],
+                    },
+                    {
+                        "id": "postgresql",
+                        "endpoints": [{"id": "postgresql", "protocol": "postgresql", "port": 5432}],
+                    },
+                ],
+                "configuration_slots": [
+                    {
+                        "id": "metadata-database",
+                        "component_id": "worker",
+                        "kind": "connection",
+                        "protocol": "postgresql",
+                        "cardinality": "one",
+                        "target_profile_id": "application",
+                        "purpose": "Connect the worker to its metadata database.",
+                    }
+                ],
+            }
+        ],
+        "service_instances": [
+            {
+                "id": "application-one",
+                "host_id": HOST_ID,
+                "profile_id": "application",
+                "components": [
+                    {
+                        "slot_id": "worker",
+                        "endpoint_overrides": [{"endpoint_id": "database", "address": "127.0.0.1"}],
+                    },
+                    {
+                        "slot_id": "postgresql",
+                        "endpoint_overrides": [
+                            {"endpoint_id": "postgresql", "address": "100.64.0.10"}
+                        ],
+                    },
+                ],
+                "configuration_bindings": [
+                    {"slot_id": "metadata-database", "edge_refs": ["two-worker-to-postgresql"]}
+                ],
+            },
+            {
+                "id": "application-two",
+                "host_id": HOST_ID,
+                "profile_id": "application",
+                "components": [
+                    {
+                        "slot_id": "worker",
+                        "endpoint_overrides": [{"endpoint_id": "database", "address": "127.0.0.1"}],
+                    },
+                    {
+                        "slot_id": "postgresql",
+                        "endpoint_overrides": [
+                            {"endpoint_id": "postgresql", "address": "100.64.0.11"}
+                        ],
+                    },
+                ],
+                "configuration_bindings": [
+                    {"slot_id": "metadata-database", "edge_refs": ["two-worker-to-postgresql"]}
+                ],
+            },
+        ],
+        "component_edges": [
+            {
+                "id": "two-worker-to-postgresql",
+                "source_endpoint_id": f"{HOST_ID}/application-two/worker/database",
+                "target_endpoint_id": f"{HOST_ID}/application-two/postgresql/postgresql",
+            }
+        ],
+    }
+
+    with pytest.raises(V2ConfigurationValidationError) as caught:
+        parse_v2_document(payload)
+
+    assert caught.value.code == "service-instance-connection-source-component-mismatch"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "code"),
+    [
+        (
+            lambda payload: payload["service_instances"][0]["configuration_bindings"][0].update(
+                {"value": "manual", "edge_refs": None}
+            ),
+            "service-instance-connection-binding-invalid-source",
+        ),
+        (
+            lambda payload: payload["service_instances"][0]["configuration_bindings"][0].update(
+                {"edge_refs": []}
+            ),
+            "service-instance-connection-cardinality-invalid",
+        ),
+        (
+            lambda payload: payload["component_edges"][0].update(
+                {"source_endpoint_id": f"{HOST_ID}/application/postgresql/postgresql"}
+            ),
+            "service-instance-connection-source-component-mismatch",
+        ),
+        (
+            lambda payload: payload["service_profiles"][0]["configuration_slots"][0].update(
+                {"protocol": "tcp"}
+            ),
+            "service-instance-connection-protocol-mismatch",
+        ),
+        (
+            lambda payload: payload["service_profiles"][0]["configuration_slots"][0].update(
+                {"target_profile_id": "different-profile"}
+            ),
+            "service-instance-connection-target-profile-mismatch",
+        ),
+    ],
+)
+def test_connection_configuration_slot_rejects_invalid_edge_contracts(
+    mutate: object, code: str
+) -> None:
+    payload = {
+        "schema_version": "infralink.observation/v2",
+        "service_profiles": [
+            {
+                "id": "application",
+                "components": [
+                    {
+                        "id": "worker",
+                        "endpoints": [{"id": "database", "protocol": "postgresql", "port": 5432}],
+                    },
+                    {
+                        "id": "postgresql",
+                        "endpoints": [{"id": "postgresql", "protocol": "postgresql", "port": 5432}],
+                    },
+                ],
+                "configuration_slots": [
+                    {
+                        "id": "metadata-database",
+                        "component_id": "worker",
+                        "kind": "connection",
+                        "protocol": "postgresql",
+                        "cardinality": "one",
+                        "target_profile_id": "application",
+                        "purpose": "Connect the worker to its metadata database.",
+                    }
+                ],
+            }
+        ],
+        "service_instances": [
+            {
+                "id": "application",
+                "host_id": HOST_ID,
+                "profile_id": "application",
+                "components": [
+                    {
+                        "slot_id": "worker",
+                        "endpoint_overrides": [{"endpoint_id": "database", "address": "127.0.0.1"}],
+                    },
+                    {
+                        "slot_id": "postgresql",
+                        "endpoint_overrides": [
+                            {"endpoint_id": "postgresql", "address": "100.64.0.10"}
+                        ],
+                    },
+                ],
+                "configuration_bindings": [
+                    {"slot_id": "metadata-database", "edge_refs": ["worker-to-postgresql"]}
+                ],
+            }
+        ],
+        "component_edges": [
+            {
+                "id": "worker-to-postgresql",
+                "source_endpoint_id": f"{HOST_ID}/application/worker/database",
+                "target_endpoint_id": f"{HOST_ID}/application/postgresql/postgresql",
+            }
+        ],
+    }
+
+    assert callable(mutate)
+    mutate(payload)
+
+    with pytest.raises(V2ConfigurationValidationError) as caught:
+        parse_v2_document(payload)
+
+    assert caught.value.code == code
+
+
+def test_many_connection_configuration_slot_accepts_an_explicit_empty_edge_set() -> None:
+    document = parse_v2_document(
+        {
+            "schema_version": "infralink.observation/v2",
+            "service_profiles": [
+                {
+                    "id": "elasticsearch-node",
+                    "components": [{"id": "elasticsearch", "endpoints": []}],
+                    "configuration_slots": [
+                        {
+                            "id": "transport-peers",
+                            "component_id": "elasticsearch",
+                            "kind": "connection",
+                            "protocol": "tcp",
+                            "cardinality": "many",
+                            "purpose": "Join zero or more Elasticsearch transport peers.",
+                        }
+                    ],
+                }
+            ],
+            "service_instances": [
+                {
+                    "id": "elasticsearch",
+                    "host_id": HOST_ID,
+                    "profile_id": "elasticsearch-node",
+                    "components": [{"slot_id": "elasticsearch"}],
+                    "configuration_bindings": [{"slot_id": "transport-peers", "edge_refs": []}],
+                }
+            ],
+        }
+    )
+
+    binding = plan_v2_configuration_bindings((document,))[0]
+
+    assert binding.edge_refs == []
+    assert binding.targets == []
 
 
 def test_component_endpoint_binding_accepts_multiple_addresses_with_first_as_canonical() -> None:
