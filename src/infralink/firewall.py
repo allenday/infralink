@@ -232,7 +232,7 @@ class FirewallPolicy(StrictModel):
         sockets: set[tuple[str, str, int]] = set()
         for rule in self.ingress:
             for port in rule.ports:
-                ingress_socket = (rule.protocol, rule.interface, port)
+                ingress_socket = (rule.protocol, rule.bind_address, port)
                 if ingress_socket in sockets:
                     raise ValueError("each ingress socket needs one service owner")
                 sockets.add(ingress_socket)
