@@ -83,6 +83,8 @@ def _command_context(invocation: Invocation) -> CommandContext:
     source_fields = ("registry", "edges")
     if invocation.command is not None:
         raw_tokens = invocation.command.raw
+        if not raw_tokens or raw_tokens[0] != "infralink":
+            raw_tokens = ("infralink", *raw_tokens)
         arguments = dict(invocation.command.parsed.args)
     else:
         raw_tokens = _canonical_mcp_command(path, request, source_fields)

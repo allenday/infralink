@@ -21,7 +21,13 @@ def load(name: str) -> click.Command | None:
         return None
     if len(matches) != 1:
         raise RuntimeError("command_plugin_ambiguous")
-    command = matches[0].load()
+    loaded = matches[0].load()
+    if isinstance(loaded, click.Command):
+        command = loaded
+    elif callable(loaded):
+        command = loaded()
+    else:
+        raise RuntimeError("command_plugin_invalid")
     if not isinstance(command, click.Command):
         raise RuntimeError("command_plugin_invalid")
     if command.name != name:

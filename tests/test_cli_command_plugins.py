@@ -27,6 +27,20 @@ def test_load_command_discovers_declared_external_controller_plugin(
     assert cli_main._load_command("controller") is controller
 
 
+def test_load_command_invokes_an_external_command_factory(monkeypatch) -> None:
+    controller = click.Group("controller")
+    entry_point = SimpleNamespace(name="controller", load=lambda: lambda: controller)
+
+    monkeypatch.setattr(
+        "infralink.cli.command_plugins.entry_points",
+        lambda *, group, name: (entry_point,)
+        if (group, name) == ("infralink.commands", "controller")
+        else (),
+    )
+
+    assert cli_main._load_command("controller") is controller
+
+
 def test_load_command_rejects_a_plugin_with_the_wrong_public_name(monkeypatch) -> None:
     entry_point = SimpleNamespace(name="controller", load=lambda: click.Group("wrong"))
 

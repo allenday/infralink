@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 
 import infralink
 import infralink.cli.main as cli_main
+from infralink.cli import command_plugins
 from infralink.cli.actions import action
 from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.main import cli, main, run
@@ -502,7 +503,13 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
     live_commands = {item["name"] for item in payload_for()["result"]["commands"]}
     schema_names = {path.stem for path in (ROOT / "src/infralink/schemas/cli/v1").glob("*.json")}
 
-    assert live_commands == set(schema_coverage)
+    # Infralink owns the root envelope schema and its built-in command families.
+    # Installed runtime packages may contribute typed command subtrees, but their
+    # operation contracts remain package-owned rather than becoming undeclared
+    # core schemas. Built-ins win if an older package advertises a historical
+    # duplicate entry point.
+    external_commands = command_plugins.names() - set(schema_coverage)
+    assert live_commands - external_commands == set(schema_coverage)
     assert set().union(*schema_coverage.values()) | {"root"} == schema_names
 
 

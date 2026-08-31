@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from agent_surface import Invocation, OutputBudget
-from agent_surface.contracts import Action, ActionCollection
+from agent_surface.contracts import Action, ActionCollection, CommandView, ParsedCommand
 from click.testing import CliRunner
 from mcp import Client
 
@@ -127,6 +127,26 @@ def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() ->
             "safe": True,
         }
     ]
+
+
+def test_renderer_prefixes_a_mounted_plugin_command_with_infralink() -> None:
+    definition = operator_surface.operations.describe("host.list")
+    document = InfralinkEnvelopeRenderer().render(
+        Invocation(
+            operation=definition,
+            request={},
+            result=HostListResult(items=[]),
+            error=None,
+            command=CommandView(
+                raw=("controller", "doctor"),
+                parsed=ParsedCommand(path=("controller", "doctor")),
+            ),
+            next_actions=ActionCollection(),
+            budget=OutputBudget(),
+        )
+    )
+
+    assert document.command.raw == "infralink controller doctor"
 
 
 def test_renderer_fails_closed_for_unresolved_hateoas_action_templates() -> None:
