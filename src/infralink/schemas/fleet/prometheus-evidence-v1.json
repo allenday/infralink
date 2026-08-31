@@ -24,9 +24,8 @@
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "status", "observed_at", "detail_code"],
+      "required": ["status", "observed_at", "detail_code"],
       "properties": {
-        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
         "status": {"enum": ["observed", "absent", "query_error"]},
         "observed_at": {"type": ["string", "null"], "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"},
         "detail_code": {"enum": ["sample_observed", "sample_missing", "provider_unavailable", "query_timeout", "query_failed"]}

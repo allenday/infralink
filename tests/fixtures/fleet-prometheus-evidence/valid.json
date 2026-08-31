@@ -6,19 +6,16 @@
   "max_age_seconds": 900,
   "targets": {
     "controller-api": {
-      "id": "controller-api",
       "status": "observed",
       "observed_at": "2026-08-31T11:59:55Z",
       "detail_code": "sample_observed"
     },
     "edge-prober": {
-      "id": "edge-prober",
       "status": "absent",
       "observed_at": null,
       "detail_code": "sample_missing"
     },
     "registry-exporter": {
-      "id": "registry-exporter",
       "status": "query_error",
       "observed_at": null,
       "detail_code": "query_timeout"
@@ -27,6 +24,6 @@
   "signature": {
     "key_id": "fleet-evidence-v1",
     "algorithm": "ed25519",
-    "value": "GCkK5XTqoEajVXpl0Vu7foap+DYsFzVi4Id1gWs1ubgKZtSH+b38GtmbtrxXl/ETXFgnE3i/s3LA8Zs1+z6RBA=="
+    "value": "n3QNP3NiEIE212HAUEMSoSJz5nVRMJHIi9ec5Fga+OvmV1ovFOVGoZjTxlH09949L8CPtl7WUfgsgN0iY5X5AA=="
   }
 }

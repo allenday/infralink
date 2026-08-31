@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from cryptography.exceptions import InvalidSignature
@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION = "infralink.fleet-prometheus-evidence/v1"
+CLOCK_SKEW_SECONDS = 60
 _TARGET_ID_PATTERN = r"^[a-z][a-z0-9-]{0,127}$"
 _REVISION_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 _SIGNATURE_PATTERN = r"^[A-Za-z0-9+/]{86}==$"
@@ -33,6 +34,7 @@ __all__ = [
     "FleetPrometheusEvidence",
     "FleetPrometheusEvidenceSignature",
     "FleetPrometheusTarget",
+    "CLOCK_SKEW_SECONDS",
     "SCHEMA_VERSION",
 ]
 
@@ -63,7 +65,6 @@ class FleetPrometheusEvidenceSignature(_EvidenceModel):
 class FleetPrometheusTarget(_EvidenceModel):
     """One bounded, Registry-declared observation result."""
 
-    id: str = Field(pattern=_TARGET_ID_PATTERN)
     status: Literal["observed", "absent", "query_error"]
     observed_at: str | None
     detail_code: Literal[
@@ -113,9 +114,7 @@ class FleetPrometheusEvidence(_EvidenceModel):
     @model_validator(mode="after")
     def _validate_targets_within_window(self) -> FleetPrometheusEvidence:
         generated_at = _parse_utc_timestamp(self.generated_at)
-        for target_id, target in self.targets.items():
-            if target_id != target.id:
-                raise ValueError("target key must equal target.id")
+        for target in self.targets.values():
             if target.observed_at is None:
                 continue
             observed_at = _parse_utc_timestamp(target.observed_at)
@@ -124,6 +123,18 @@ class FleetPrometheusEvidence(_EvidenceModel):
             if (generated_at - observed_at).total_seconds() > self.window_seconds:
                 raise ValueError("observed_at must fall within window_seconds")
         return self
+
+    def is_fresh_at(self, now: datetime) -> bool:
+        """Apply the v1 bounded clock-skew and signed maximum-age policy."""
+        if now.tzinfo is None or now.utcoffset() != timezone.utc.utcoffset(now):
+            raise ValueError("now must be UTC-aware")
+        generated_at = _parse_utc_timestamp(self.generated_at)
+        skew = timedelta(seconds=CLOCK_SKEW_SECONDS)
+        return (
+            generated_at - skew
+            <= now
+            <= generated_at + timedelta(seconds=self.max_age_seconds) + skew
+        )
 
     def canonical_signed_bytes(self) -> bytes:
         """Return the exact payload the controller signs and reader verifies."""
