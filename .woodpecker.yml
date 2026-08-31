@@ -4,9 +4,21 @@ when:
   - event: manual
 
 steps:
+  docs-contract:
+    image: python:3.12-slim-bookworm
+    when:
+      - path:
+          include: [README.md, docs/**, tests/test_docs_contract.py, .woodpecker.yml]
+    commands:
+      - python -m pip install --disable-pip-version-check pytest
+      - python -m pytest -q tests/test_docs_contract.py --no-cov
+
   quality-3.12:
     image: python:3.12-slim-bookworm
     depends_on: []
+    when:
+      - path:
+          exclude: [README.md, docs/**, tests/test_docs_contract.py]
     commands:
       - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
       - sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
