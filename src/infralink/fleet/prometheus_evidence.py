@@ -100,7 +100,9 @@ class FleetPrometheusTarget(_EvidenceModel):
 class FleetPrometheusEvidence(_EvidenceModel):
     """The complete signed, bounded artifact produced by Infralink Ops."""
 
-    schema_version: Literal[SCHEMA_VERSION] = SCHEMA_VERSION
+    schema_version: Literal["infralink.fleet-prometheus-evidence/v1"] = (
+        "infralink.fleet-prometheus-evidence/v1"
+    )
     registry_revision: str = Field(pattern=_REVISION_PATTERN)
     generated_at: datetime
     window_seconds: int = Field(ge=1, le=3600)
