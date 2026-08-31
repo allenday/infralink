@@ -22,6 +22,16 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "required": ["schema_version", "ok", "command"],
     "additionalProperties": True,
 }
+_ROOT_SOURCE_PROPERTIES: dict[str, dict[str, str]] = {
+    "registry": {
+        "type": "string",
+        "description": "Registry checkout root or legacy registry YAML path.",
+    },
+    "edges": {
+        "type": "string",
+        "description": "Edges YAML path.",
+    },
+}
 
 
 def _arguments(value: Any) -> tuple[list[str], str | None]:
@@ -143,7 +153,10 @@ def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
         for parameter in command.params
         if isinstance(parameter, click.Argument)
     }
-    properties: dict[str, Any] = {}
+    # Every native projection may use the root-owned topology sources. They
+    # must remain in the MCP schema even when a mounted child hides its local
+    # adapter fields, otherwise MCP would lose a supported CLI capability.
+    properties: dict[str, Any] = dict(_ROOT_SOURCE_PROPERTIES)
     required: list[str] = []
     for argument in arguments:
         argument_parameter = arguments_by_name[argument.name]
@@ -184,19 +197,24 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
         raise ValueError(f"Unknown tool: {name}")
     command = _command_for_path(path)
     assert command is not None
+    root_sources = _native_root_source_argv(arguments)
     if path == ("help",):
         help_path = arguments.get("path", [])
         if not isinstance(help_path, list) or any(
             not isinstance(item, str) or not item for item in help_path
         ):
             raise ValueError("path must be an array of non-empty strings")
-        return ["help", *help_path]
+        return [*root_sources, "help", *help_path]
     positional, options = _help_parameters(command)
-    allowed = {item.name for item in positional} | {item.name for item in options}
+    allowed = (
+        set(_ROOT_SOURCE_PROPERTIES)
+        | {item.name for item in positional}
+        | {item.name for item in options}
+    )
     unknown = set(arguments) - allowed
     if unknown:
         raise ValueError(f"Unknown tool arguments: {', '.join(sorted(unknown))}")
-    argv: list[str] = list(path)
+    argv: list[str] = [*root_sources, *path]
     for argument in positional:
         value = arguments.get(argument.name)
         if argument.required and (not isinstance(value, str) or not value):
@@ -212,6 +230,19 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
                 argv.append("--" + option.name.replace("_", "-"))
         elif value is not None:
             argv.extend(["--" + option.name.replace("_", "-"), str(value)])
+    return argv
+
+
+def _native_root_source_argv(arguments: dict[str, Any]) -> list[str]:
+    """Emit the sole CLI topology selectors before the native command path."""
+    argv: list[str] = []
+    for name in _ROOT_SOURCE_PROPERTIES:
+        value = arguments.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{name} must be a non-empty string")
+        argv.extend((f"--{name}", value))
     return argv
 
 

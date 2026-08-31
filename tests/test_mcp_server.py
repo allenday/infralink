@@ -12,7 +12,14 @@ from mcp import Client, ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from infralink.cli.main import cli
-from infralink.mcp_server import _native_paths, _parameter_schema, create_server, invoke_cli
+from infralink.mcp_server import (
+    _native_argv,
+    _native_paths,
+    _native_tool,
+    _parameter_schema,
+    create_server,
+    invoke_cli,
+)
 
 
 def test_help_discovers_native_mcp_server_command() -> None:
@@ -86,6 +93,16 @@ def test_native_mcp_preserves_bounded_integer_option_types() -> None:
             assert timeout == {"type": "integer", "minimum": 1, "maximum": 3600}
 
     asyncio.run(exercise_protocol())
+
+
+def test_native_mcp_projects_root_topology_sources_before_the_command_path() -> None:
+    tool = _native_tool("infralink_version", ("version",))
+
+    assert {"registry", "edges"} <= set(tool.input_schema["properties"])
+    assert _native_argv(
+        "infralink_version",
+        {"registry": "/registry", "edges": "/edges.yml"},
+    ) == ["--registry", "/registry", "--edges", "/edges.yml", "version"]
 
 
 def test_native_mcp_preserves_every_click_integer_parameter_type() -> None:
