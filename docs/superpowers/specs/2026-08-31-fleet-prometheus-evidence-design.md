@@ -41,18 +41,18 @@ directory selected by operator configuration, never by a command-line path.
 
 ```yaml
 schema_version: infralink.fleet-prometheus-evidence/v1
-registry_revision: 40-64 lowercase hex source revision
+registry_revision: 40- or 64-character lowercase hex source revision
 generated_at: RFC3339 UTC timestamp
-window_seconds: 600
+window_seconds: integer from 1 through 3600
 targets:
   - id: stable registry-derived target ID
     status: observed | absent | query_error
     observed_at: RFC3339 UTC timestamp or null
-    detail_code: bounded stable code
+    detail_code: sample_observed | sample_missing | provider_unavailable | query_timeout | query_failed
 signature:
   key_id: declared signing-key identity
   algorithm: ed25519
-  value: base64 signature
+  value: base64-encoded 64-byte signature
 ```
 
 The target ID is derived by the controller from declared Registry observation
@@ -66,6 +66,27 @@ The controller must atomically replace the entire artifact only after all
 bounded target queries complete. A failed refresh retains the last valid
 artifact and separately exposes freshness failure; it must not write a partial
 success document.
+
+### Shared Contract Source
+
+The contract is published by the `infralink` library, not by a separate
+runnable or a copied schema. Its release contains all of:
+
+- a strict Pydantic model used by the controller producer and later reader;
+- `infralink/schemas/fleet/prometheus-evidence-v1.json` for non-Python
+  validation; and
+- a valid signed fixture plus a canonical unsigned payload fixture.
+
+The signature covers the complete document except `signature.value`. The
+canonical payload is UTF-8 `json.dumps` output with `sort_keys=True`,
+`ensure_ascii=True`, and `separators=(",", ":")`; there is no trailing newline.
+`signature.key_id` and `signature.algorithm` remain inside the signed payload.
+Target IDs must be unique, lowercase identifiers matching
+`[a-z][a-z0-9-]{0,127}`. `observed` requires `sample_observed` and a non-null
+`observed_at`; `absent` requires `sample_missing` and a null `observed_at`;
+`query_error` requires null `observed_at` and one of the three query/provider
+failure detail codes. These constraints prevent a successful-looking partial
+artifact.
 
 ## Public Command Behavior
 
@@ -82,18 +103,22 @@ success document.
 
 ## Sequencing
 
-1. Add the typed evidence schema/parser and `FleetEvidenceRequest` source
-   selected only by operator configuration. Publish the read-only parsing and
-   negative-result contract in Infralink.
-2. Add the controller producer in `infralink-ops`, including its credential
-   binding, bounded query policy, signing, atomic write, and timer health.
-3. Add an Infra Registry declaration for observable Prometheus targets and the
-   controller binding. Do not reuse legacy `monitoring/prometheus/prometheus.yml`.
+1. Publish and test the typed evidence schema, canonical signing payload, and
+   fixtures in the Infralink library. This adds no command, MCP operation, or
+   configured artifact reader.
+2. In parallel, add the controller producer in `infralink-ops`, including its
+   credential binding, bounded query policy, signing, atomic write, and timer
+   health, and add the Infra Registry declaration for observable Prometheus
+   targets and controller binding references. Do not reuse legacy
+   `monitoring/prometheus/prometheus.yml`.
+3. Add the Infralink `--live` reader only after the artifact shape is stable.
+   Its source is selected only by operator configuration.
 4. Add integration fixtures proving controller-produced valid, stale,
    wrong-revision, and provider-failure evidence flows through `fleet validate
    --live` with no public-network access.
-5. Switch the periodic audit runner and docs, then delete `prometheus_qa.py`
-   under the existing infra-management issue.
+5. Switch the periodic audit runner and docs, then delete both
+   `prometheus_qa.py` and `check_prom_freshness.py` under their existing
+   infra-management issues.
 
 ## Non-Goals
 
