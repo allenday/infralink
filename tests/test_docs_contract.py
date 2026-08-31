@@ -74,3 +74,24 @@ def test_cross_repo_authority_map_is_discoverable() -> None:
         "do not copy a runbook into this page",
     ]:
         assert token in authority_map
+
+
+def test_safe_cli_workflow_is_discoverable_and_preserves_deployment_boundary() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    workflow = (PROJECT_ROOT / "docs" / "safe-cli-workflow.md").read_text(encoding="utf-8")
+
+    assert "[Safe CLI workflow](docs/safe-cli-workflow.md)" in readme
+    for token in [
+        "# Safe Infralink CLI Workflow",
+        "## BLUF",
+        "## Inspect A Declared Topology",
+        "## Validate Before Consuming",
+        "## Generate A Local Diagram",
+        "## Inspect Release Evidence",
+        "infralink --registry registry.yml --edges edges.yml info",
+        "infralink --registry registry.yml --edges edges.yml validate --strict --check-resolution",
+        "infralink --registry registry.yml --edges edges.yml diagram --output ./artifacts",
+        "infralink release inspect",
+        "does not select a registry revision, render secrets, or activate services",
+    ]:
+        assert token in workflow
