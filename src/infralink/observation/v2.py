@@ -695,8 +695,13 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                             configuration_slot.id,
                             "connection configuration binding references an unknown component edge",
                         )
-                    source_component_id = connection_edge.source_owner[2]
-                    if source_component_id != configuration_slot.component_id:
+                    source_owner = connection_edge.source_owner
+                    expected_source_owner = (
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot.component_id,
+                    )
+                    if source_owner != expected_source_owner:
                         raise V2ConfigurationValidationError(
                             "service-instance-connection-source-component-mismatch",
                             instance.host_id,
