@@ -9,6 +9,11 @@ import yaml
 from agent_surface import OperationError
 from pydantic import BaseModel, ConfigDict, Field
 
+from infralink.cli.contracts import (
+    FleetValidationDiagnostic,
+    FleetValidationResult,
+    FleetValidationSummary,
+)
 from infralink.core.registry import Host
 from infralink.operator_sources import LoadedSources
 
@@ -16,6 +21,8 @@ _DB_PROTOCOLS = {"postgres", "postgresql", "mysql", "mariadb"}
 _DB_GLOBAL_USERS = {"admin": "root", "ops": "ops"}
 _DB_SCOPED_ROLES = {"rw", "ro"}
 _DB_ROLES = {*_DB_GLOBAL_USERS, *_DB_SCOPED_ROLES}
+
+__all__ = ["FleetValidationResult", "validate_fleet"]
 
 
 class _Model(BaseModel):
@@ -39,29 +46,6 @@ class ServiceDefinition(_Model):
 class RoleServiceCatalog(_Model):
     roles: dict[str, RoleDefinition] = Field(default_factory=dict)
     services: dict[str, ServiceDefinition] = Field(default_factory=dict)
-
-
-class FleetValidationDiagnostic(_Model):
-    code: str
-    severity: Literal["error", "warning", "capability_gap"]
-    message: str
-    subject_kind: Literal["host", "edge", "fleet"]
-    subject_id: str
-    path: str | None = None
-
-
-class FleetValidationSummary(_Model):
-    host_count: int
-    error_count: int
-    warning_count: int
-    capability_gap_count: int
-
-
-class FleetValidationResult(_Model):
-    valid: bool
-    mode: Literal["static", "live"]
-    diagnostics: tuple[FleetValidationDiagnostic, ...]
-    summary: FleetValidationSummary
 
 
 def load_role_service_catalog(registry_root: Path) -> RoleServiceCatalog:

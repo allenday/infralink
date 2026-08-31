@@ -475,6 +475,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         },
         "registry": {"registry-host-get", "registry-host-patch"},
         "validate": {"validate", "observation-validate"},
+        "fleet": {"fleet-validate"},
         "capabilities": {"capabilities"},
         "explain": {"explain"},
         "project": {

@@ -619,6 +619,29 @@ class ValidateResult(ContractModel):
     summary: ValidationSummary
 
 
+class FleetValidationDiagnostic(ContractModel):
+    code: str
+    severity: Literal["error", "warning", "capability_gap"]
+    message: str
+    subject_kind: Literal["host", "edge", "fleet"]
+    subject_id: str
+    path: str | None = None
+
+
+class FleetValidationSummary(ContractModel):
+    host_count: int
+    error_count: int
+    warning_count: int
+    capability_gap_count: int
+
+
+class FleetValidationResult(ContractModel):
+    valid: bool
+    mode: Literal["static", "live"]
+    diagnostics: tuple[FleetValidationDiagnostic, ...]
+    summary: FleetValidationSummary
+
+
 class ResolveResult(ContractModel):
     edge: EdgeSummary
     endpoint: Endpoint
