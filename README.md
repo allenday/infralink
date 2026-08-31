@@ -15,7 +15,7 @@ Current package version: `0.5.8`.
 | Inspect topology, evidence, or readiness | [Observable model](docs/observable-model.md) |
 | Install and use the local diagnostic agent | [Local doctor agent](docs/local-doctor-agent.md) |
 | Understand release evidence and adoption | [Release operator workflow](docs/release-operator-workflow.md) |
-| Operate a managed host runtime | [`infralink-ops`](https://github.com/cyberstorm-dev/infralink-ops) |
+| Operate a managed host runtime | `cyberstorm-dev/infralink-ops` |
 | Select or promote environment desired state | the environment's Registry repository |
 
 Use this repository to model, inspect, validate, and explain infrastructure.
