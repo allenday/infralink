@@ -79,6 +79,7 @@ SCHEMA_NAMES = (
     "edges-list",
     "edge-show",
     "validate",
+    "fleet-validate",
     "resolve",
     "check",
     "doctor",
