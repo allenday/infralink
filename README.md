@@ -7,6 +7,20 @@ documentation, and release evidence inspection.
 
 Current package version: `0.5.8`.
 
+## Start Here
+
+| If you need to... | Start with... |
+| --- | --- |
+| Understand the public model and repository boundaries | [Architecture](docs/architecture.md) |
+| Inspect topology, evidence, or readiness | [Observable model](docs/observable-model.md) |
+| Install and use the local diagnostic agent | [Local doctor agent](docs/local-doctor-agent.md) |
+| Understand release evidence and adoption | [Release operator workflow](docs/release-operator-workflow.md) |
+| Operate a managed host runtime | [`infralink-ops`](https://github.com/cyberstorm-dev/infralink-ops) |
+| Select or promote environment desired state | the environment's Registry repository |
+
+Use this repository to model, inspect, validate, and explain infrastructure.
+Use the environment controller only through its documented Registry-owned workflow.
+
 ## Public Boundary
 
 Infralink is the public CLI, schema, and Python API layer. It models declared
