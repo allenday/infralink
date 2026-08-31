@@ -54,7 +54,18 @@ def test_quality_pipeline_contract() -> None:
         assert workflow["steps"][f"quality-{version}"] == {
             "image": f"python:{version}-slim-bookworm",
             "depends_on": [],
-            "when": [{"path": {"exclude": ["README.md", "docs/**", "tests/test_docs_contract.py", ".woodpecker.yml"]}}],
+            "when": [
+                {
+                    "path": {
+                        "exclude": [
+                            "README.md",
+                            "docs/**",
+                            "tests/test_docs_contract.py",
+                            ".woodpecker.yml",
+                        ]
+                    }
+                }
+            ],
             "commands": EXPECTED_COMMANDS,
         }
 
