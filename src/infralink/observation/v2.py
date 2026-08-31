@@ -695,7 +695,7 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                             configuration_slot.id,
                             "connection configuration binding references an unknown component edge",
                         )
-                    source_component_id = connection_edge.source_endpoint_id.split("/")[2]
+                    source_component_id = connection_edge.source_owner[2]
                     if source_component_id != configuration_slot.component_id:
                         raise V2ConfigurationValidationError(
                             "service-instance-connection-source-component-mismatch",
@@ -718,8 +718,8 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                             "connection edge protocol does not match configuration slot protocol",
                         )
                     if configuration_slot.target_profile_id is not None:
-                        target_parts = connection_edge.target_endpoint_id.split("/")
-                        target_instance = instances_by_identity[(target_parts[0], target_parts[1])]
+                        target_owner = connection_edge.target_owner
+                        target_instance = instances_by_identity[target_owner[:2]]
                         if target_instance.profile_id != configuration_slot.target_profile_id:
                             raise V2ConfigurationValidationError(
                                 "service-instance-connection-target-profile-mismatch",
