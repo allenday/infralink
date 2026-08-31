@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timezone
 from typing import Literal
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION = "infralink.fleet-prometheus-evidence/v1"
 _TARGET_ID_PATTERN = r"^[a-z][a-z0-9-]{0,127}$"
 _REVISION_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 _SIGNATURE_PATTERN = r"^[A-Za-z0-9+/]{86}==$"
+_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _DETAIL_CODES = {
     "observed": {"sample_observed"},
     "absent": {"sample_missing"},
@@ -34,7 +38,7 @@ __all__ = [
 
 
 class _EvidenceModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class FleetPrometheusEvidenceSignature(_EvidenceModel):
@@ -61,7 +65,7 @@ class FleetPrometheusTarget(_EvidenceModel):
 
     id: str = Field(pattern=_TARGET_ID_PATTERN)
     status: Literal["observed", "absent", "query_error"]
-    observed_at: datetime | None
+    observed_at: str | None
     detail_code: Literal[
         "sample_observed",
         "sample_missing",
@@ -70,20 +74,12 @@ class FleetPrometheusTarget(_EvidenceModel):
         "query_failed",
     ]
 
-    @field_validator("observed_at", mode="before")
-    @classmethod
-    def _require_utc_timestamp(cls, value: object) -> object:
-        if value is None:
-            return value
-        if not isinstance(value, str) or not value.endswith("Z"):
-            raise ValueError("must be an RFC3339 UTC timestamp ending in Z")
-        return value
-
     @field_validator("observed_at")
     @classmethod
-    def _ensure_utc_offset(cls, value: datetime | None) -> datetime | None:
-        if value is not None and value.utcoffset() != timedelta(0):
-            raise ValueError("must be a UTC timestamp")
+    def _require_utc_timestamp(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        _parse_utc_timestamp(value)
         return value
 
     @model_validator(mode="after")
@@ -100,33 +96,33 @@ class FleetPrometheusTarget(_EvidenceModel):
 class FleetPrometheusEvidence(_EvidenceModel):
     """The complete signed, bounded artifact produced by Infralink Ops."""
 
-    schema_version: Literal["infralink.fleet-prometheus-evidence/v1"] = (
-        "infralink.fleet-prometheus-evidence/v1"
-    )
+    schema_version: Literal["infralink.fleet-prometheus-evidence/v1"]
     registry_revision: str = Field(pattern=_REVISION_PATTERN)
-    generated_at: datetime
+    generated_at: str
     window_seconds: int = Field(ge=1, le=3600)
-    targets: tuple[FleetPrometheusTarget, ...] = Field(min_length=1, max_length=256)
+    max_age_seconds: int = Field(ge=1, le=3600)
+    targets: dict[str, FleetPrometheusTarget] = Field(min_length=1, max_length=256)
     signature: FleetPrometheusEvidenceSignature
-
-    @field_validator("generated_at", mode="before")
-    @classmethod
-    def _require_generated_at_utc(cls, value: object) -> object:
-        if not isinstance(value, str) or not value.endswith("Z"):
-            raise ValueError("must be an RFC3339 UTC timestamp ending in Z")
-        return value
 
     @field_validator("generated_at")
     @classmethod
-    def _ensure_generated_at_utc(cls, value: datetime) -> datetime:
-        if value.utcoffset() != timedelta(0):
-            raise ValueError("must be a UTC timestamp")
+    def _validate_generated_at(cls, value: str) -> str:
+        _parse_utc_timestamp(value)
         return value
 
     @model_validator(mode="after")
-    def _validate_unique_target_ids(self) -> FleetPrometheusEvidence:
-        if len({target.id for target in self.targets}) != len(self.targets):
-            raise ValueError("target IDs must be unique")
+    def _validate_targets_within_window(self) -> FleetPrometheusEvidence:
+        generated_at = _parse_utc_timestamp(self.generated_at)
+        for target_id, target in self.targets.items():
+            if target_id != target.id:
+                raise ValueError("target key must equal target.id")
+            if target.observed_at is None:
+                continue
+            observed_at = _parse_utc_timestamp(target.observed_at)
+            if observed_at > generated_at:
+                raise ValueError("observed_at cannot be after generated_at")
+            if (generated_at - observed_at).total_seconds() > self.window_seconds:
+                raise ValueError("observed_at must fall within window_seconds")
         return self
 
     def canonical_signed_bytes(self) -> bytes:
@@ -141,3 +137,24 @@ class FleetPrometheusEvidence(_EvidenceModel):
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
+
+    def verify_signature(self, public_key: Ed25519PublicKey) -> bool:
+        """Verify an Ed25519 signature with a caller-selected trusted key."""
+        try:
+            public_key.verify(
+                base64.b64decode(self.signature.value, validate=True), self.canonical_signed_bytes()
+            )
+        except InvalidSignature:
+            return False
+        return True
+
+
+def _parse_utc_timestamp(value: str) -> datetime:
+    """Accept one canonical UTC timestamp encoding, with whole-second precision."""
+    if _TIMESTAMP_PATTERN.fullmatch(value) is None:
+        raise ValueError("must be an RFC3339 UTC timestamp with whole-second Z precision")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise ValueError("must be a valid RFC3339 UTC timestamp") from error
+    return parsed.replace(tzinfo=timezone.utc)

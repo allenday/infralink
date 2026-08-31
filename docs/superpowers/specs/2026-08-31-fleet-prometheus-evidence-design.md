@@ -44,8 +44,10 @@ schema_version: infralink.fleet-prometheus-evidence/v1
 registry_revision: 40- or 64-character lowercase hex source revision
 generated_at: RFC3339 UTC timestamp
 window_seconds: integer from 1 through 3600
+max_age_seconds: integer from 1 through 3600
 targets:
-  - id: stable registry-derived target ID
+  stable-registry-derived-target-id:
+    id: same stable registry-derived target ID
     status: observed | absent | query_error
     observed_at: RFC3339 UTC timestamp or null
     detail_code: sample_observed | sample_missing | provider_unavailable | query_timeout | query_failed
@@ -81,12 +83,23 @@ The signature covers the complete document except `signature.value`. The
 canonical payload is UTF-8 `json.dumps` output with `sort_keys=True`,
 `ensure_ascii=True`, and `separators=(",", ":")`; there is no trailing newline.
 `signature.key_id` and `signature.algorithm` remain inside the signed payload.
-Target IDs must be unique, lowercase identifiers matching
-`[a-z][a-z0-9-]{0,127}`. `observed` requires `sample_observed` and a non-null
-`observed_at`; `absent` requires `sample_missing` and a null `observed_at`;
-`query_error` requires null `observed_at` and one of the three query/provider
-failure detail codes. These constraints prevent a successful-looking partial
-artifact.
+All timestamps use exactly `YYYY-MM-DDTHH:MM:SSZ`; fractional seconds and UTC
+offset variants are invalid. Target IDs are unique map keys, lowercase
+identifiers matching `[a-z][a-z0-9-]{0,127}`, and must equal the nested `id`.
+`observed` requires `sample_observed` and a non-null `observed_at`; `absent`
+requires `sample_missing` and a null `observed_at`; `query_error` requires null
+`observed_at` and one of the three query/provider failure detail codes. An
+observed sample must not be future-dated and must fall inside `window_seconds`
+relative to `generated_at`. The reader rejects any artifact older than signed
+`max_age_seconds`, subject only to its documented bounded clock-skew allowance.
+These constraints prevent a successful-looking partial or stale artifact.
+
+The Registry declares the expected `key_id` indirectly through its opaque
+controller signing binding reference. The controller resolves the private key;
+the public reader resolves that key ID against an operator-configured trusted
+public-key map. The map is not a CLI argument, secret, or Registry field.
+Rotation adds the new public key before Registry and controller move to its new
+key ID; revocation removes the old mapping and advances the Registry reference.
 
 ## Public Command Behavior
 
@@ -104,8 +117,8 @@ artifact.
 ## Sequencing
 
 1. Publish and test the typed evidence schema, canonical signing payload, and
-   fixtures in the Infralink library. This adds no command, MCP operation, or
-   configured artifact reader.
+   real Ed25519 verification fixture in the Infralink library. This adds no
+   command, MCP operation, or configured artifact reader.
 2. In parallel, add the controller producer in `infralink-ops`, including its
    credential binding, bounded query policy, signing, atomic write, and timer
    health, and add the Infra Registry declaration for observable Prometheus

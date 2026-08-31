@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
@@ -25,19 +28,40 @@ def test_valid_fixture_has_stable_unsigned_canonical_payload() -> None:
 
     expected = (FIXTURES / "unsigned.json").read_text(encoding="utf-8").rstrip("\n").encode()
     assert evidence.canonical_signed_bytes() == expected
+    public_key = Ed25519PublicKey.from_public_bytes(
+        base64.b64decode((FIXTURES / "public-key.base64").read_text(encoding="ascii"))
+    )
+    assert evidence.verify_signature(public_key) is True
+
+
+def test_fixture_signature_matches_the_documented_private_test_vector() -> None:
+    evidence = FleetPrometheusEvidence.model_validate(_fixture("valid.json"))
+    private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    public_key = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+
+    assert (
+        base64.b64encode(public_key).decode("ascii")
+        == (FIXTURES / "public-key.base64").read_text(encoding="ascii").strip()
+    )
+    assert (
+        base64.b64encode(private_key.sign(evidence.canonical_signed_bytes())).decode("ascii")
+        == evidence.signature.value
+    )
 
 
 def test_target_status_and_detail_code_pairs_fail_closed() -> None:
     payload = _fixture("valid.json")
-    payload["targets"][0]["detail_code"] = "query_timeout"  # type: ignore[index]
+    payload["targets"]["controller-api"]["detail_code"] = "query_timeout"  # type: ignore[index]
 
     with pytest.raises(ValidationError):
         FleetPrometheusEvidence.model_validate(payload)
 
 
-def test_duplicate_target_ids_fail_closed() -> None:
+def test_target_map_key_mismatch_fails_closed() -> None:
     payload = _fixture("valid.json")
-    payload["targets"][1]["id"] = "controller-api"  # type: ignore[index]
+    payload["targets"]["edge-prober"]["id"] = "not-edge-prober"  # type: ignore[index]
 
     with pytest.raises(ValidationError):
         FleetPrometheusEvidence.model_validate(payload)
@@ -50,6 +74,32 @@ def test_json_schema_accepts_the_shared_fixture_and_rejects_extra_fields() -> No
     invalid = _fixture("valid.json")
     invalid["unexpected"] = True
     assert list(validator.iter_errors(invalid))
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("schema_version",), None),
+        (("window_seconds",), "600"),
+        (("generated_at",), "2026-08-31T12:00:00.1Z"),
+    ],
+)
+def test_schema_and_model_reject_shared_invalid_shapes(
+    path: tuple[str, ...], value: object
+) -> None:
+    payload = _fixture("valid.json")
+    parent = payload
+    for key in path[:-1]:
+        parent = parent[key]  # type: ignore[index]
+    if value is None:
+        parent.pop(path[-1])
+    else:
+        parent[path[-1]] = value
+
+    validator = Draft202012Validator(json.loads(SCHEMA.read_text(encoding="utf-8")))
+    assert list(validator.iter_errors(payload))
+    with pytest.raises(ValidationError):
+        FleetPrometheusEvidence.model_validate(payload)
 
 
 def test_contract_adds_no_click_or_agent_surface_command() -> None:
