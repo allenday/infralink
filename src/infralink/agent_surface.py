@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+import click
+from agent_surface.adapters.click import ClickAdapter
 from pydantic import BaseModel
 
 from infralink import __version__
@@ -13,7 +15,79 @@ from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetai
 from infralink.cli.errors import ErrorCode, ExitCode
 
 if TYPE_CHECKING:
-    from agent_surface import Invocation
+    from agent_surface import App, Invocation
+
+
+class _MountedClickAdapter(ClickAdapter):  # type: ignore[misc]
+    """Carry the root's canonical topology selections into mounted operations."""
+
+    def _payload(self, context: click.Context, plan: Any, params: dict[str, Any]) -> dict[str, Any]:
+        payload = super()._payload(context, plan, params)
+        for field in plan.fields:
+            if field.source != "argv" or field.name not in {"registry", "edges"}:
+                continue
+            value = params.get(field.name)
+            if value is not None:
+                payload[field.name] = value
+        return cast(dict[str, Any], payload)
+
+
+def mounted_click_command(app: App) -> click.Group:
+    """Project an external typed app into the canonical Infralink CLI tree.
+
+    The core executable owns the global ``--output`` switch. Mounted typed
+    operations keep YAML as their native default while inheriting an explicit
+    root JSON selection, which is how the MCP transport requests JSON.
+    """
+    root = _MountedClickAdapter(
+        app,
+        argv_provider=_mounted_invocation_argv,
+        envelope_renderer=InfralinkEnvelopeRenderer(),
+        operation_error_exit_code=operation_error_exit_code,
+    ).command()
+    _inherit_root_output(root)
+    return cast(click.Group, root)
+
+
+def _mounted_invocation_argv() -> tuple[str, ...]:
+    # Import lazily: the primary Click module imports this renderer.
+    from infralink.cli.main import current_invocation_argv
+
+    argv = current_invocation_argv()
+    return ("infralink", *argv) if argv else ("infralink",)
+
+
+def _root_output_default() -> str:
+    context = click.get_current_context(silent=True)
+    root = context.find_root() if context is not None else None
+    output = getattr(getattr(root, "obj", None), "output", "yaml")
+    return output if output in {"yaml", "json"} else "yaml"
+
+
+def _root_source_default(name: str) -> Any:
+    context = click.get_current_context(silent=True)
+    root = context.find_root() if context is not None else None
+    attribute = {"registry": "registry_path", "edges": "edges_path"}.get(name)
+    return getattr(getattr(root, "obj", None), attribute, None) if attribute is not None else None
+
+
+def _inherit_root_output(command: click.Command) -> None:
+    """Remove duplicate selector authority from a mounted command tree."""
+    for parameter in command.params:
+        if not isinstance(parameter, click.Option):
+            continue
+        if parameter.name == "_surface_format":
+            parameter.default = _root_output_default
+        elif parameter.name == "_surface_yaml_style":
+            pass
+        elif parameter.name in {"registry", "edges"}:
+            parameter.default = lambda name=parameter.name: _root_source_default(name)
+        else:
+            continue
+        parameter.hidden = True
+    if isinstance(command, click.Group):
+        for child in command.commands.values():
+            _inherit_root_output(child)
 
 
 def operation_error_exit_code(code: str) -> int:
@@ -83,6 +157,8 @@ def _command_context(invocation: Invocation) -> CommandContext:
     source_fields = ("registry", "edges")
     if invocation.command is not None:
         raw_tokens = invocation.command.raw
+        if not raw_tokens or raw_tokens[0] != "infralink":
+            raw_tokens = ("infralink", *raw_tokens)
         arguments = dict(invocation.command.parsed.args)
     else:
         raw_tokens = _canonical_mcp_command(path, request, source_fields)
@@ -122,9 +198,9 @@ def _command_flags(tokens: tuple[str, ...]) -> list[str]:
 
 def _output_format(tokens: tuple[str, ...], *, mcp: bool) -> str:
     for index, token in enumerate(tokens):
-        if token == "--format" and index + 1 < len(tokens):
+        if token in {"--format", "--output"} and index + 1 < len(tokens):
             return tokens[index + 1]
-        if token.startswith("--format="):
+        if token.startswith(("--format=", "--output=")):
             return token.partition("=")[2]
     return "json" if mcp else "yaml"
 

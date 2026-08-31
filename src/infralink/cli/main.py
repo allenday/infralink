@@ -18,6 +18,7 @@ import click
 import yaml
 
 from infralink import __version__
+from infralink.cli import command_plugins
 from infralink.cli.actions import action, redact_argv
 from infralink.cli.contracts import (
     Action,
@@ -107,6 +108,11 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+
+
+def current_invocation_argv() -> tuple[str, ...]:
+    """Return the active root invocation for mounted typed command projections."""
+    return tuple(_INVOCATION_ARGS.get() or ())
 
 
 def _configured_registry() -> Path | None:
@@ -303,6 +309,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     "registry": {
         "description": "Inspect and author local registry declarations.",
         "usage": "infralink registry host [get|patch] <ref>",
+    },
+    "controller": {
+        "description": "Run typed controller runtime operations.",
+        "usage": "infralink controller [doctor|reconcile|bootstrap]",
     },
 }
 
@@ -916,6 +926,8 @@ def _help_parameters(
     arguments: list[ArgumentDescriptor] = []
     options: list[OptionDescriptor] = []
     for parameter in command.params:
+        if getattr(parameter, "hidden", False):
+            continue
         if isinstance(parameter, click.Argument):
             arguments.append(
                 ArgumentDescriptor(
@@ -1060,6 +1072,42 @@ def entity_not_found(entity_type: str, requested_id: str) -> CliFailure:
     return query_entity_not_found(entity_type, requested_id)
 
 
+_BUILTIN_COMMAND_NAMES = frozenset(
+    {
+        "help",
+        "version",
+        "analyze",
+        "check",
+        "doctor",
+        "mcp",
+        "diagram",
+        "docs",
+        "resolve",
+        "validate",
+        "capabilities",
+        "project",
+        "explain",
+        "app",
+        "info",
+        "hosts",
+        "edges-list",
+        "services",
+        "host",
+        "operation",
+        "edge",
+        "service",
+        "secrets",
+        "release",
+        "registry",
+    }
+)
+
+
+def _is_external_command(name: str) -> bool:
+    """Whether a name resolves only through an installed command plugin."""
+    return name not in _BUILTIN_COMMAND_NAMES and name in command_plugins.names()
+
+
 def _load_command(name: str) -> click.Command | None:
     if name == "help":
         return help_command
@@ -1143,15 +1191,24 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.registry_authoring import registry
 
         return registry
-    return None
+    return command_plugins.load(name)
 
 
 class JsonGroup(click.Group):
     def list_commands(self, ctx: click.Context) -> list[str]:
-        return sorted(name for name in COMMAND_METADATA if _load_command(name) is not None)
+        names = set(COMMAND_METADATA) | command_plugins.names()
+        return sorted(name for name in names if _load_command(name) is not None)
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         return _load_command(cmd_name)
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        cmd_name, command, remaining = super().resolve_command(ctx, args)
+        if cmd_name is not None and _is_external_command(cmd_name):
+            _reject_mounted_overrides(remaining)
+        return cmd_name, command, remaining
 
     def main(
         self,
@@ -1185,7 +1242,7 @@ class JsonGroup(click.Group):
                         failure = internal_failure()
                         _emit(error_envelope(_context_for(incoming), failure))
                         exit_code = failure.exit_code
-            except click.UsageError:
+            except click.UsageError as usage_error:
                 path, _, _ = _parse_invocation(redact_argv(incoming))
                 from infralink.cli.observation import is_observation_argv
 
@@ -1205,7 +1262,11 @@ class JsonGroup(click.Group):
                 )
                 usage_failure = CliFailure(
                     code=ErrorCode.USAGE_ERROR,
-                    message="Invalid command usage",
+                    message=(
+                        str(usage_error)
+                        if isinstance(usage_error, MountedOverrideUsageError)
+                        else "Invalid command usage"
+                    ),
                     exit_code=ExitCode.USAGE_ERROR,
                     fix=(
                         "Provide an explicit safe relative --output directory"
@@ -1262,6 +1323,50 @@ class JsonGroup(click.Group):
         if standalone_mode:
             raise SystemExit(exit_code)
         return exit_code
+
+
+def _set_mounted_defaults(ctx: click.Context, name: str, command: click.Command) -> None:
+    """Pass the root's sole source/output selections into mounted operations."""
+    runtime = ctx.find_root().obj
+    if not isinstance(runtime, Context):
+        return
+    values: dict[str, Any] = {
+        "registry": runtime.registry_path,
+        "edges": runtime.edges_path,
+        "_surface_format": runtime.output,
+    }
+
+    def defaults_for(current: click.Command) -> dict[str, Any]:
+        if isinstance(current, click.Group):
+            return {
+                child_name: defaults_for(child)
+                for child_name in current.list_commands(click.Context(current))
+                if (child := current.get_command(click.Context(current), child_name)) is not None
+            }
+        return {
+            parameter.name: values[parameter.name]
+            for parameter in current.params
+            if isinstance(parameter, click.Option) and parameter.name in values
+        }
+
+    default_map = dict(ctx.default_map or {})
+    default_map[name] = defaults_for(command)
+    ctx.default_map = default_map
+
+
+def _reject_mounted_overrides(argv: list[str]) -> None:
+    """Reject nested flags that would create a second output/source selector."""
+    forbidden = {"--format", "--yaml-style", "--registry", "--edges"}
+    for token in argv:
+        option = token.partition("=")[0]
+        if option in forbidden:
+            raise MountedOverrideUsageError(
+                f"{option} belongs to the root infralink command; provide it before the command path"
+            )
+
+
+class MountedOverrideUsageError(click.UsageError):
+    """A fixed diagnostic for nested flags that would create another selector."""
 
 
 LazyGroup = JsonGroup
@@ -1342,6 +1447,13 @@ def cli(
         click.get_current_context().get_parameter_source("output")
         is not click.core.ParameterSource.DEFAULT
     )
+
+    if click_ctx.invoked_subcommand is not None and _is_external_command(
+        click_ctx.invoked_subcommand
+    ):
+        mounted = _load_command(click_ctx.invoked_subcommand)
+        if mounted is not None:
+            _set_mounted_defaults(click_ctx, click_ctx.invoked_subcommand, mounted)
 
     click_ctx = click.get_current_context()
     if click_ctx.invoked_subcommand is not None:
