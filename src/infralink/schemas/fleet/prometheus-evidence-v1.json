@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://infralink.dev/schemas/fleet/prometheus-evidence-v1.json",
+  "title": "Infralink Fleet Prometheus Evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_revision", "generated_at", "window_seconds", "targets", "signature"],
+  "properties": {
+    "schema_version": {"const": "infralink.fleet-prometheus-evidence/v1"},
+    "registry_revision": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "generated_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "window_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/target"}
+    },
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "observed_at", "detail_code"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
+        "status": {"enum": ["observed", "absent", "query_error"]},
+        "observed_at": {"type": ["string", "null"], "format": "date-time", "pattern": "Z$"},
+        "detail_code": {"enum": ["sample_observed", "sample_missing", "provider_unavailable", "query_timeout", "query_failed"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "observed"}}},
+          "then": {"properties": {"observed_at": {"type": "string", "format": "date-time", "pattern": "Z$"}, "detail_code": {"const": "sample_observed"}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "absent"}}},
+          "then": {"properties": {"observed_at": {"type": "null"}, "detail_code": {"const": "sample_missing"}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "query_error"}}},
+          "then": {"properties": {"observed_at": {"type": "null"}, "detail_code": {"enum": ["provider_unavailable", "query_timeout", "query_failed"]}}}
+        }
+      ]
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "algorithm", "value"],
+      "properties": {
+        "key_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
+        "algorithm": {"const": "ed25519"},
+        "value": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"}
+      }
+    }
+  }
+}

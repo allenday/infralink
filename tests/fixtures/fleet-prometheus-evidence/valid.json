@@ -1,0 +1,31 @@
+{
+  "schema_version": "infralink.fleet-prometheus-evidence/v1",
+  "registry_revision": "0123456789abcdef0123456789abcdef01234567",
+  "generated_at": "2026-08-31T12:00:00Z",
+  "window_seconds": 600,
+  "targets": [
+    {
+      "id": "controller-api",
+      "status": "observed",
+      "observed_at": "2026-08-31T11:59:55Z",
+      "detail_code": "sample_observed"
+    },
+    {
+      "id": "edge-prober",
+      "status": "absent",
+      "observed_at": null,
+      "detail_code": "sample_missing"
+    },
+    {
+      "id": "registry-exporter",
+      "status": "query_error",
+      "observed_at": null,
+      "detail_code": "query_timeout"
+    }
+  ],
+  "signature": {
+    "key_id": "fleet-evidence-v1",
+    "algorithm": "ed25519",
+    "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  }
+}
