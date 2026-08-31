@@ -19,7 +19,7 @@ def test_public_private_runtime_boundary_is_documented() -> None:
     assert "## Start Here" in readme
     assert "[Architecture](docs/architecture.md)" in readme
     assert "[Observable model](docs/observable-model.md)" in readme
-    assert "`infralink-ops`" in readme
+    assert "`cyberstorm-dev/infralink-ops`" in readme
     architecture = (PROJECT_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     release = (PROJECT_ROOT / "docs" / "release-operator-workflow.md").read_text(encoding="utf-8")
 
