@@ -32,6 +32,13 @@ _ROOT_SOURCE_PROPERTIES: dict[str, dict[str, str]] = {
         "description": "Edges YAML path.",
     },
 }
+_NATIVE_OPTION_NAMES: dict[tuple[tuple[str, ...], str], str | None] = {
+    # Analyze predates the root-owned topology selector. Its local registry
+    # override is redundant; its boolean artifact switch is distinct and must
+    # not overload the root edges source path.
+    (("analyze",), "registry"): None,
+    (("analyze",), "edges"): "include_edges",
+}
 
 
 def _arguments(value: Any) -> tuple[list[str], str | None]:
@@ -164,12 +171,15 @@ def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
         if argument.required:
             required.append(argument.name)
     for option in options:
+        native_name = _native_option_name(path, option.name)
+        if native_name is None:
+            continue
         option_parameter = _option_parameter(command, option.name)
-        properties[option.name] = _parameter_schema(option_parameter)
+        properties[native_name] = _parameter_schema(option_parameter)
         if option.required:
-            required.append(option.name)
+            required.append(native_name)
     if path == ("help",):
-        properties = {"path": {"type": "array", "items": {"type": "string"}}}
+        properties["path"] = {"type": "array", "items": {"type": "string"}}
         required = []
     return Tool(
         name=name,
@@ -199,6 +209,9 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
     assert command is not None
     root_sources = _native_root_source_argv(arguments)
     if path == ("help",):
+        unknown = set(arguments) - {"path", *set(_ROOT_SOURCE_PROPERTIES)}
+        if unknown:
+            raise ValueError(f"Unknown tool arguments: {', '.join(sorted(unknown))}")
         help_path = arguments.get("path", [])
         if not isinstance(help_path, list) or any(
             not isinstance(item, str) or not item for item in help_path
@@ -206,11 +219,12 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
             raise ValueError("path must be an array of non-empty strings")
         return [*root_sources, "help", *help_path]
     positional, options = _help_parameters(command)
-    allowed = (
-        set(_ROOT_SOURCE_PROPERTIES)
-        | {item.name for item in positional}
-        | {item.name for item in options}
-    )
+    named_options = {
+        native_name: option
+        for option in options
+        if (native_name := _native_option_name(path, option.name)) is not None
+    }
+    allowed = set(_ROOT_SOURCE_PROPERTIES) | {item.name for item in positional} | set(named_options)
     unknown = set(arguments) - allowed
     if unknown:
         raise ValueError(f"Unknown tool arguments: {', '.join(sorted(unknown))}")
@@ -221,16 +235,39 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
             raise ValueError(f"{argument.name} must be a non-empty string")
         if value is not None:
             argv.append(str(value))
-    for option in options:
-        value = arguments.get(option.name)
+    for native_name, option in named_options.items():
+        value = arguments.get(native_name)
         if option.required and value is None:
-            raise ValueError(f"{option.name} is required")
-        if isinstance(value, bool):
-            if value:
-                argv.append("--" + option.name.replace("_", "-"))
+            raise ValueError(f"{native_name} is required")
+        option_parameter = _option_parameter(command, option.name)
+        if isinstance(option_parameter.type, BoolParamType):
+            if value is None:
+                continue
+            if not isinstance(value, bool):
+                raise ValueError(f"{native_name} must be a boolean")
+            _append_boolean_option(argv, option_parameter, value)
         elif value is not None:
             argv.extend(["--" + option.name.replace("_", "-"), str(value)])
     return argv
+
+
+def _native_option_name(path: tuple[str, ...], name: str) -> str | None:
+    """Return the public MCP name for a command-local option."""
+    return _NATIVE_OPTION_NAMES.get((path, name), name)
+
+
+def _append_boolean_option(argv: list[str], option: click.Option, value: bool) -> None:
+    """Serialize Click's positive/negative boolean flags without changing defaults."""
+    if value:
+        argv.append(_long_option(option.opts, option.name))
+    elif option.secondary_opts:
+        argv.append(_long_option(option.secondary_opts, option.name))
+    elif bool(option.default):
+        raise ValueError(f"{option.name} cannot be set to false")
+
+
+def _long_option(options: list[str], name: str | None) -> str:
+    return next((option for option in options if option.startswith("--")), f"--{name}")
 
 
 def _native_root_source_argv(arguments: dict[str, Any]) -> list[str]:

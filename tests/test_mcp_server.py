@@ -105,6 +105,51 @@ def test_native_mcp_projects_root_topology_sources_before_the_command_path() -> 
     ) == ["--registry", "/registry", "--edges", "/edges.yml", "version"]
 
 
+def test_native_mcp_normalizes_analyze_legacy_source_option_names() -> None:
+    tool = _native_tool("infralink_analyze", ("analyze",))
+
+    assert tool.input_schema["properties"]["registry"]["type"] == "string"
+    assert tool.input_schema["properties"]["edges"]["type"] == "string"
+    assert tool.input_schema["properties"]["include_edges"] == {"type": "boolean"}
+    assert _native_argv(
+        "infralink_analyze",
+        {
+            "registry": "/registry.yml",
+            "edges": "/edges.yml",
+            "output": "artifacts",
+            "include_edges": False,
+        },
+    ) == [
+        "--registry",
+        "/registry.yml",
+        "--edges",
+        "/edges.yml",
+        "analyze",
+        "--output",
+        "artifacts",
+        "--no-edges",
+    ]
+
+
+def test_native_mcp_help_retains_root_topology_sources() -> None:
+    tool = _native_tool("infralink_help", ("help",))
+
+    assert {"path", "registry", "edges"} <= set(tool.input_schema["properties"])
+    assert _native_argv("infralink_help", {"registry": "/registry", "path": ["host"]}) == [
+        "--registry",
+        "/registry",
+        "help",
+        "host",
+    ]
+
+
+def test_native_mcp_never_overloads_root_topology_source_fields() -> None:
+    for name, path in _native_paths().items():
+        properties = _native_tool(name, path).input_schema["properties"]
+        assert properties["registry"]["type"] == "string"
+        assert properties["edges"]["type"] == "string"
+
+
 def test_native_mcp_preserves_every_click_integer_parameter_type() -> None:
     from click.types import IntParamType
 
