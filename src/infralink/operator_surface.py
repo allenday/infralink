@@ -45,6 +45,7 @@ from infralink.cli.operation_contracts import (
     TargetReconcileStatus,
 )
 from infralink.cli.queries import entity_not_found, list_services
+from infralink.fleet.validation import FleetValidationResult, validate_fleet
 from infralink.operator_operations.topology import (
     AppShowRequest,
     EdgeShowRequest,
@@ -112,6 +113,14 @@ class EdgeListRequest(SourceRequest):
 
 class InfoRequest(SourceRequest):
     """Summarize one explicit registry source."""
+
+
+class FleetValidateRequest(SourceRequest):
+    """Validate one declared fleet without host-side operations."""
+
+    host: str | None = Field(default=None, min_length=1)
+    strict: bool = False
+    live: bool = False
 
 
 class HostBootstrapRequest(SourceRequest):
@@ -398,6 +407,16 @@ def info(request: InfoRequest) -> InfoResult:
             service_count=len(list_services(sources.registry, sources.edges).items),
             edge_count=len(sources.edges),
         ),
+    )
+
+
+@operator_surface.operation(
+    "fleet.validate", summary="Validate declared fleet topology", read_only=True
+)  # type: ignore[untyped-decorator]
+def fleet_validate(request: FleetValidateRequest) -> FleetValidationResult:
+    """Return deterministic declared-state diagnostics without repairing anything."""
+    return validate_fleet(
+        load_sources(request), host=request.host, strict=request.strict, live=request.live
     )
 
 
