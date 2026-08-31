@@ -110,6 +110,11 @@ _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", defau
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
 
 
+def current_invocation_argv() -> tuple[str, ...]:
+    """Return the active root invocation for mounted typed command projections."""
+    return tuple(_INVOCATION_ARGS.get() or ())
+
+
 def _configured_registry() -> Path | None:
     """Read a local checkout selector; it is not desired-state input."""
     try:

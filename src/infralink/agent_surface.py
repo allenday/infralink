@@ -6,6 +6,7 @@ import shlex
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+import click
 from pydantic import BaseModel
 
 from infralink import __version__
@@ -13,7 +14,51 @@ from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetai
 from infralink.cli.errors import ErrorCode, ExitCode
 
 if TYPE_CHECKING:
-    from agent_surface import Invocation
+    from agent_surface import App, Invocation
+
+
+def mounted_click_command(app: App) -> click.Group:
+    """Project an external typed app into the canonical Infralink CLI tree.
+
+    The core executable owns the global ``--output`` switch. Mounted typed
+    operations keep YAML as their native default while inheriting an explicit
+    root JSON selection, which is how the MCP transport requests JSON.
+    """
+    from agent_surface.adapters.click import ClickAdapter
+
+    root = ClickAdapter(
+        app,
+        argv_provider=_mounted_invocation_argv,
+        envelope_renderer=InfralinkEnvelopeRenderer(),
+        operation_error_exit_code=operation_error_exit_code,
+    ).command()
+    _inherit_root_output(root)
+    return root
+
+
+def _mounted_invocation_argv() -> tuple[str, ...]:
+    # Import lazily: the primary Click module imports this renderer.
+    from infralink.cli.main import current_invocation_argv
+
+    argv = current_invocation_argv()
+    return ("infralink", *argv) if argv else ("infralink",)
+
+
+def _root_output_default() -> str:
+    context = click.get_current_context(silent=True)
+    root = context.find_root() if context is not None else None
+    output = getattr(getattr(root, "obj", None), "output", "yaml")
+    return output if output in {"yaml", "json"} else "yaml"
+
+
+def _inherit_root_output(command: click.Command) -> None:
+    """Make agent-surface's render option honor Infralink's root contract."""
+    for parameter in command.params:
+        if isinstance(parameter, click.Option) and parameter.name == "_surface_format":
+            parameter.default = _root_output_default
+    if isinstance(command, click.Group):
+        for child in command.commands.values():
+            _inherit_root_output(child)
 
 
 def operation_error_exit_code(code: str) -> int:
@@ -124,9 +169,9 @@ def _command_flags(tokens: tuple[str, ...]) -> list[str]:
 
 def _output_format(tokens: tuple[str, ...], *, mcp: bool) -> str:
     for index, token in enumerate(tokens):
-        if token == "--format" and index + 1 < len(tokens):
+        if token in {"--format", "--output"} and index + 1 < len(tokens):
             return tokens[index + 1]
-        if token.startswith("--format="):
+        if token.startswith(("--format=", "--output=")):
             return token.partition("=")[2]
     return "json" if mcp else "yaml"
 
