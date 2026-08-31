@@ -922,6 +922,8 @@ def _help_parameters(
     arguments: list[ArgumentDescriptor] = []
     options: list[OptionDescriptor] = []
     for parameter in command.params:
+        if getattr(parameter, "hidden", False):
+            continue
         if isinstance(parameter, click.Argument):
             arguments.append(
                 ArgumentDescriptor(
@@ -1156,6 +1158,14 @@ class JsonGroup(click.Group):
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         return _load_command(cmd_name)
 
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        cmd_name, command, remaining = super().resolve_command(ctx, args)
+        if cmd_name in command_plugins.names():
+            _reject_mounted_overrides(remaining)
+        return cmd_name, command, remaining
+
     def main(
         self,
         args: Sequence[str] | None = None,
@@ -1188,7 +1198,7 @@ class JsonGroup(click.Group):
                         failure = internal_failure()
                         _emit(error_envelope(_context_for(incoming), failure))
                         exit_code = failure.exit_code
-            except click.UsageError:
+            except click.UsageError as usage_error:
                 path, _, _ = _parse_invocation(redact_argv(incoming))
                 from infralink.cli.observation import is_observation_argv
 
@@ -1208,7 +1218,11 @@ class JsonGroup(click.Group):
                 )
                 usage_failure = CliFailure(
                     code=ErrorCode.USAGE_ERROR,
-                    message="Invalid command usage",
+                    message=(
+                        str(usage_error)
+                        if isinstance(usage_error, MountedOverrideUsageError)
+                        else "Invalid command usage"
+                    ),
                     exit_code=ExitCode.USAGE_ERROR,
                     fix=(
                         "Provide an explicit safe relative --output directory"
@@ -1265,6 +1279,50 @@ class JsonGroup(click.Group):
         if standalone_mode:
             raise SystemExit(exit_code)
         return exit_code
+
+
+def _set_mounted_defaults(ctx: click.Context, name: str, command: click.Command) -> None:
+    """Pass the root's sole source/output selections into mounted operations."""
+    runtime = ctx.find_root().obj
+    if not isinstance(runtime, Context):
+        return
+    values: dict[str, Any] = {
+        "registry": runtime.registry_path,
+        "edges": runtime.edges_path,
+        "_surface_format": runtime.output,
+    }
+
+    def defaults_for(current: click.Command) -> dict[str, Any]:
+        if isinstance(current, click.Group):
+            return {
+                child_name: defaults_for(child)
+                for child_name in current.list_commands(click.Context(current))
+                if (child := current.get_command(click.Context(current), child_name)) is not None
+            }
+        return {
+            parameter.name: values[parameter.name]
+            for parameter in current.params
+            if isinstance(parameter, click.Option) and parameter.name in values
+        }
+
+    default_map = dict(ctx.default_map or {})
+    default_map[name] = defaults_for(command)
+    ctx.default_map = default_map
+
+
+def _reject_mounted_overrides(argv: list[str]) -> None:
+    """Reject nested flags that would create a second output/source selector."""
+    forbidden = {"--format", "--yaml-style", "--registry", "--edges"}
+    for token in argv:
+        option = token.partition("=")[0]
+        if option in forbidden:
+            raise MountedOverrideUsageError(
+                f"{option} belongs to the root infralink command; provide it before the command path"
+            )
+
+
+class MountedOverrideUsageError(click.UsageError):
+    """A fixed diagnostic for nested flags that would create another selector."""
 
 
 LazyGroup = JsonGroup
@@ -1345,6 +1403,11 @@ def cli(
         click.get_current_context().get_parameter_source("output")
         is not click.core.ParameterSource.DEFAULT
     )
+
+    if click_ctx.invoked_subcommand in command_plugins.names():
+        mounted = _load_command(click_ctx.invoked_subcommand)
+        if mounted is not None:
+            _set_mounted_defaults(click_ctx, click_ctx.invoked_subcommand, mounted)
 
     click_ctx = click.get_current_context()
     if click_ctx.invoked_subcommand is not None:

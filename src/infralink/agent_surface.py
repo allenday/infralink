@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 import click
+from agent_surface.adapters.click import ClickAdapter
 from pydantic import BaseModel
 
 from infralink import __version__
@@ -17,6 +18,20 @@ if TYPE_CHECKING:
     from agent_surface import App, Invocation
 
 
+class _MountedClickAdapter(ClickAdapter):  # type: ignore[misc]
+    """Carry the root's canonical topology selections into mounted operations."""
+
+    def _payload(self, context: click.Context, plan: Any, params: dict[str, Any]) -> dict[str, Any]:
+        payload = super()._payload(context, plan, params)
+        for field in plan.fields:
+            if field.source != "argv" or field.name not in {"registry", "edges"}:
+                continue
+            value = params.get(field.name)
+            if value is not None:
+                payload[field.name] = value
+        return cast(dict[str, Any], payload)
+
+
 def mounted_click_command(app: App) -> click.Group:
     """Project an external typed app into the canonical Infralink CLI tree.
 
@@ -24,9 +39,7 @@ def mounted_click_command(app: App) -> click.Group:
     operations keep YAML as their native default while inheriting an explicit
     root JSON selection, which is how the MCP transport requests JSON.
     """
-    from agent_surface.adapters.click import ClickAdapter
-
-    root = ClickAdapter(
+    root = _MountedClickAdapter(
         app,
         argv_provider=_mounted_invocation_argv,
         envelope_renderer=InfralinkEnvelopeRenderer(),
@@ -51,11 +64,27 @@ def _root_output_default() -> str:
     return output if output in {"yaml", "json"} else "yaml"
 
 
+def _root_source_default(name: str) -> Any:
+    context = click.get_current_context(silent=True)
+    root = context.find_root() if context is not None else None
+    attribute = {"registry": "registry_path", "edges": "edges_path"}.get(name)
+    return getattr(getattr(root, "obj", None), attribute, None) if attribute is not None else None
+
+
 def _inherit_root_output(command: click.Command) -> None:
-    """Make agent-surface's render option honor Infralink's root contract."""
+    """Remove duplicate selector authority from a mounted command tree."""
     for parameter in command.params:
-        if isinstance(parameter, click.Option) and parameter.name == "_surface_format":
+        if not isinstance(parameter, click.Option):
+            continue
+        if parameter.name == "_surface_format":
             parameter.default = _root_output_default
+        elif parameter.name == "_surface_yaml_style":
+            pass
+        elif parameter.name in {"registry", "edges"}:
+            parameter.default = lambda name=parameter.name: _root_source_default(name)
+        else:
+            continue
+        parameter.hidden = True
     if isinstance(command, click.Group):
         for child in command.commands.values():
             _inherit_root_output(child)
