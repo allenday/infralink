@@ -18,6 +18,7 @@ import click
 import yaml
 
 from infralink import __version__
+from infralink.cli import command_plugins
 from infralink.cli.actions import action, redact_argv
 from infralink.cli.contracts import (
     Action,
@@ -299,6 +300,10 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     "registry": {
         "description": "Inspect and author local registry declarations.",
         "usage": "infralink registry host [get|patch] <ref>",
+    },
+    "controller": {
+        "description": "Run typed controller runtime operations.",
+        "usage": "infralink controller [doctor|reconcile|bootstrap]",
     },
 }
 
@@ -1135,12 +1140,13 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.registry_authoring import registry
 
         return registry
-    return None
+    return command_plugins.load(name)
 
 
 class JsonGroup(click.Group):
     def list_commands(self, ctx: click.Context) -> list[str]:
-        return sorted(name for name in COMMAND_METADATA if _load_command(name) is not None)
+        names = set(COMMAND_METADATA) | command_plugins.names()
+        return sorted(name for name in names if _load_command(name) is not None)
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         return _load_command(cmd_name)
