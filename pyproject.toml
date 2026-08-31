@@ -40,6 +40,7 @@ dependencies = [
     "pydantic>=2.11,<3",
     "mcp>=2,<3",
     "agent-surface[mcp]==0.1.6",
+    "cryptography>=42,<51",
 ]
 
 [project.optional-dependencies]
