@@ -124,6 +124,7 @@ protected Woodpecker release step.
 
 ## More Context
 
+- Control-plane ownership and migration path: [Control-plane authority map](control-plane-authority-map.md)
 - Observable topology, resources, metrics, and readiness rollups:
   [Observable model](observable-model.md)
 - Private controller runtime consumer: `cyberstorm-dev/infralink-ops`

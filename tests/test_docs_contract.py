@@ -49,3 +49,28 @@ def test_public_private_runtime_boundary_is_documented() -> None:
         "It does not publish or select the private controller image.",
     ]:
         assert token in release
+
+
+def test_cross_repo_authority_map_is_discoverable() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    architecture = (PROJECT_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    authority_map = (PROJECT_ROOT / "docs" / "control-plane-authority-map.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "[Control-plane authority map](docs/control-plane-authority-map.md)" in readme
+    assert "[Control-plane authority map](control-plane-authority-map.md)" in architecture
+    for token in [
+        "# Control-Plane Authority Map",
+        "## BLUF",
+        "## Authority At A Glance",
+        "## Supported Operator Path",
+        "## Migration Boundary",
+        "`cyberstorm-dev/infralink`",
+        "`cyberstorm-dev/infralink-ops`",
+        "`relax-dot-gg/infra-management`",
+        "`relaxgg/infra-registry`",
+        "Registry is the sole desired-state authority",
+        "do not copy a runbook into this page",
+    ]:
+        assert token in authority_map

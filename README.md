@@ -12,6 +12,7 @@ Current package version: `0.5.8`.
 | If you need to... | Start with... |
 | --- | --- |
 | Understand the public model and repository boundaries | [Architecture](docs/architecture.md) |
+| Find the owner for a control-plane task | [Control-plane authority map](docs/control-plane-authority-map.md) |
 | Inspect topology, evidence, or readiness | [Observable model](docs/observable-model.md) |
 | Install and use the local diagnostic agent | [Local doctor agent](docs/local-doctor-agent.md) |
 | Understand release evidence and adoption | [Release operator workflow](docs/release-operator-workflow.md) |
