@@ -20,6 +20,7 @@ from infralink.observation.models_v2 import (
     ConfigurationSlot,
     ConfigurationValue,
     ConfigurationValueKind,
+    ConnectionCardinality,
     ExternalServiceContract,
     MetricContract,
     ResourceKind,
@@ -289,7 +290,9 @@ class PlannedConfigurationBinding(StrictModel):
     component_id: str | None
     slot_id: str
     slot: ConfigurationSlot
-    value: ConfigurationValue
+    value: ConfigurationValue | None
+    edge_refs: list[str] = Field(default_factory=list)
+    targets: list[Endpoint] = Field(default_factory=list)
 
 
 class PlannedArtifactBinding(StrictModel):
@@ -340,6 +343,11 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
     }
     endpoint_refs: dict[str, Endpoint] = {}
     edges = [edge for document in document_list for edge in document.component_edges]
+    instances_by_identity = {
+        (instance.host_id, instance.id): instance
+        for document in document_list
+        for instance in document.service_instances
+    }
     for document in document_list:
         for instance in document.service_instances:
             profile = profiles.get(instance.profile_id)
@@ -364,6 +372,24 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                         instance.id,
                         configuration_slot_id,
                         "configuration binding references an unknown configuration slot",
+                    )
+                if configuration_slot.kind is ConfigurationValueKind.CONNECTION:
+                    if configuration_binding.edge_refs is not None:
+                        continue
+                    raise V2ConfigurationValidationError(
+                        "service-instance-connection-binding-invalid-source",
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot_id,
+                        "connection configuration slot requires edge_refs",
+                    )
+                if configuration_binding.value is None:
+                    raise V2ConfigurationValidationError(
+                        "service-instance-configuration-binding-invalid-source",
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot_id,
+                        "static configuration slot requires value",
                     )
                 try:
                     _validate_configuration_value(configuration_slot, configuration_binding.value)
@@ -626,6 +652,82 @@ def validate_v2_documents(documents: Iterable[ObservationV2Document]) -> dict[st
                 edge.id,
                 "incompatible component endpoint protocols",
             )
+    edges_by_id = {edge.id: edge for edge in edges}
+    if len(edges_by_id) != len(edges):
+        duplicate_edge_id = next(
+            edge.id for edge in edges if sum(item.id == edge.id for item in edges) > 1
+        )
+        raise V2TopologyValidationError(
+            "duplicate-component-edge-id",
+            duplicate_edge_id,
+            "duplicate component edge id",
+        )
+    for document in document_list:
+        for instance in document.service_instances:
+            profile = profiles[instance.profile_id]
+            configuration_slots = {slot.id: slot for slot in profile.configuration_slots}
+            for configuration_binding in instance.configuration_bindings:
+                configuration_slot = configuration_slots[configuration_binding.slot_id]
+                if configuration_slot.kind is not ConfigurationValueKind.CONNECTION:
+                    continue
+                assert configuration_slot.component_id is not None
+                assert configuration_slot.protocol is not None
+                assert configuration_slot.cardinality is not None
+                assert configuration_binding.edge_refs is not None
+                if (
+                    configuration_slot.cardinality is ConnectionCardinality.ONE
+                    and len(configuration_binding.edge_refs) != 1
+                ):
+                    raise V2ConfigurationValidationError(
+                        "service-instance-connection-cardinality-invalid",
+                        instance.host_id,
+                        instance.id,
+                        configuration_slot.id,
+                        "one connection configuration slot requires exactly one edge reference",
+                    )
+                for edge_ref in configuration_binding.edge_refs:
+                    connection_edge = edges_by_id.get(edge_ref)
+                    if connection_edge is None:
+                        raise V2ConfigurationValidationError(
+                            "service-instance-connection-edge-unknown",
+                            instance.host_id,
+                            instance.id,
+                            configuration_slot.id,
+                            "connection configuration binding references an unknown component edge",
+                        )
+                    source_component_id = connection_edge.source_endpoint_id.split("/")[2]
+                    if source_component_id != configuration_slot.component_id:
+                        raise V2ConfigurationValidationError(
+                            "service-instance-connection-source-component-mismatch",
+                            instance.host_id,
+                            instance.id,
+                            configuration_slot.id,
+                            "connection edge source component does not match configuration slot owner",
+                        )
+                    source_endpoint = endpoint_refs[connection_edge.source_endpoint_id]
+                    target_endpoint = endpoint_refs[connection_edge.target_endpoint_id]
+                    if (
+                        source_endpoint.protocol != configuration_slot.protocol
+                        or target_endpoint.protocol != configuration_slot.protocol
+                    ):
+                        raise V2ConfigurationValidationError(
+                            "service-instance-connection-protocol-mismatch",
+                            instance.host_id,
+                            instance.id,
+                            configuration_slot.id,
+                            "connection edge protocol does not match configuration slot protocol",
+                        )
+                    if configuration_slot.target_profile_id is not None:
+                        target_parts = connection_edge.target_endpoint_id.split("/")
+                        target_instance = instances_by_identity[(target_parts[0], target_parts[1])]
+                        if target_instance.profile_id != configuration_slot.target_profile_id:
+                            raise V2ConfigurationValidationError(
+                                "service-instance-connection-target-profile-mismatch",
+                                instance.host_id,
+                                instance.id,
+                                configuration_slot.id,
+                                "connection edge target profile does not match configuration slot contract",
+                            )
     return endpoint_refs
 
 
@@ -682,17 +784,27 @@ def plan_v2_configuration_bindings(
     """Resolve declared non-secret configuration for generic renderers and materializers."""
 
     document_list = tuple(documents)
-    validate_v2_documents(document_list)
+    endpoint_refs = validate_v2_documents(document_list)
     profiles = {
         profile.id: profile for document in document_list for profile in document.service_profiles
     }
     resolved: list[PlannedConfigurationBinding] = []
+    edges_by_id = {edge.id: edge for document in document_list for edge in document.component_edges}
     for document in document_list:
         for instance in document.service_instances:
             profile = profiles[instance.profile_id]
             slots = {slot.id: slot for slot in profile.configuration_slots}
             for binding in instance.configuration_bindings:
                 slot = slots[binding.slot_id]
+                edge_refs = binding.edge_refs or []
+                targets = (
+                    [
+                        endpoint_refs[edges_by_id[edge_ref].target_endpoint_id]
+                        for edge_ref in edge_refs
+                    ]
+                    if slot.kind is ConfigurationValueKind.CONNECTION
+                    else []
+                )
                 resolved.append(
                     PlannedConfigurationBinding(
                         host_id=instance.host_id,
@@ -702,6 +814,8 @@ def plan_v2_configuration_bindings(
                         slot_id=slot.id,
                         slot=slot,
                         value=binding.value,
+                        edge_refs=edge_refs,
+                        targets=targets,
                     )
                 )
     return tuple(

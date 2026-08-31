@@ -98,6 +98,7 @@ SAFE_DOTTED_TOKENS = {
     "app-database.md",
     "contracts.py",
     "backlog.md",
+    "control-plane-authority-map.md",
     "admission.yml",
     "candidate.json",
     "config.yml",
@@ -873,6 +874,7 @@ def test_boundary_detector_allows_public_examples_and_domain_uuids() -> None:
     files: registry.yml, edges.yml, PRD.md, and BACKLOG.md are public files.
     line_refs: README.md:12, manifest.json:12, and registry.yml:12 are public file references.
     path: docs/reference.md is an unambiguous public file path.
+    link: [Control-plane authority map](control-plane-authority-map.md)
     punctuation: docs/reference.md...);!? Release v0.2.0...,"\']
     observation: AS_OF=2026-08-17T00:00:00Z
     """
