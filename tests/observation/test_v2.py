@@ -158,6 +158,92 @@ def test_connection_configuration_slot_projects_its_declared_edge_target() -> No
     ] == [("100.64.0.10", 5432, "postgresql")]
 
 
+def test_connection_configuration_slot_rejects_another_instance_source_edge() -> None:
+    payload = {
+        "schema_version": "infralink.observation/v2",
+        "service_profiles": [
+            {
+                "id": "application",
+                "components": [
+                    {
+                        "id": "worker",
+                        "endpoints": [{"id": "database", "protocol": "postgresql", "port": 5432}],
+                    },
+                    {
+                        "id": "postgresql",
+                        "endpoints": [{"id": "postgresql", "protocol": "postgresql", "port": 5432}],
+                    },
+                ],
+                "configuration_slots": [
+                    {
+                        "id": "metadata-database",
+                        "component_id": "worker",
+                        "kind": "connection",
+                        "protocol": "postgresql",
+                        "cardinality": "one",
+                        "target_profile_id": "application",
+                        "purpose": "Connect the worker to its metadata database.",
+                    }
+                ],
+            }
+        ],
+        "service_instances": [
+            {
+                "id": "application-one",
+                "host_id": HOST_ID,
+                "profile_id": "application",
+                "components": [
+                    {
+                        "slot_id": "worker",
+                        "endpoint_overrides": [{"endpoint_id": "database", "address": "127.0.0.1"}],
+                    },
+                    {
+                        "slot_id": "postgresql",
+                        "endpoint_overrides": [
+                            {"endpoint_id": "postgresql", "address": "100.64.0.10"}
+                        ],
+                    },
+                ],
+                "configuration_bindings": [
+                    {"slot_id": "metadata-database", "edge_refs": ["two-worker-to-postgresql"]}
+                ],
+            },
+            {
+                "id": "application-two",
+                "host_id": HOST_ID,
+                "profile_id": "application",
+                "components": [
+                    {
+                        "slot_id": "worker",
+                        "endpoint_overrides": [{"endpoint_id": "database", "address": "127.0.0.1"}],
+                    },
+                    {
+                        "slot_id": "postgresql",
+                        "endpoint_overrides": [
+                            {"endpoint_id": "postgresql", "address": "100.64.0.11"}
+                        ],
+                    },
+                ],
+                "configuration_bindings": [
+                    {"slot_id": "metadata-database", "edge_refs": ["two-worker-to-postgresql"]}
+                ],
+            },
+        ],
+        "component_edges": [
+            {
+                "id": "two-worker-to-postgresql",
+                "source_endpoint_id": f"{HOST_ID}/application-two/worker/database",
+                "target_endpoint_id": f"{HOST_ID}/application-two/postgresql/postgresql",
+            }
+        ],
+    }
+
+    with pytest.raises(V2ConfigurationValidationError) as caught:
+        parse_v2_document(payload)
+
+    assert caught.value.code == "service-instance-connection-source-component-mismatch"
+
+
 @pytest.mark.parametrize(
     ("mutate", "code"),
     [
