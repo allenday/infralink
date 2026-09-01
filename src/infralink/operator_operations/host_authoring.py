@@ -42,7 +42,7 @@ def create_host(request: HostCreateRequest) -> dict[str, Any]:
     """Render or explicitly write one host manifest from the selected checkout."""
     address_field, normalized_address = host_address(request.address)
     host_id = str(uuid4())
-    host = {
+    host: dict[str, Any] = {
         "canonical_name": request.name,
         "status": "provisioning",
         address_field: normalized_address,
