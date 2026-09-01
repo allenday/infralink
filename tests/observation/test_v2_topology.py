@@ -96,7 +96,7 @@ def test_projects_a_typed_v2_topology_golden() -> None:
     assert "198.51.100.10" not in json.dumps(rendered)
     assert rendered == {
         "schema_version": "infralink.observation-topology/v2",
-        "filter": {"mode": "full", "host_id": None, "service_instance_id": None},
+        "filter": {"mode": "full", "host_id": None, "service_instance": None},
         "nodes": [
             {
                 "id": f"{HOST_ALPHA}/alpha/api/egress",
@@ -210,7 +210,7 @@ def test_v2_topology_projection_includes_direct_neighbours_for_host_and_service_
 
     full = project_v2_topology((_document(),))
     host = project_v2_topology((_document(),), focal_host_id=HOST_ALPHA)
-    service = project_v2_topology((_document(),), focal_service_instance_id="alpha")
+    service = project_v2_topology((_document(),), focal_service_instance_ref=f"{HOST_ALPHA}/alpha")
 
     assert {node.id for node in full.nodes} == {
         f"{HOST_ALPHA}/alpha/api/egress",
@@ -230,6 +230,57 @@ def test_v2_topology_projection_includes_direct_neighbours_for_host_and_service_
     }
     assert [edge.id for edge in host.edges] == ["api-to-beta", "api-to-database"]
     assert [edge.id for edge in service.edges] == ["api-to-beta", "api-to-database"]
+
+
+@pytest.mark.parametrize(
+    "reference",
+    ["alpha", f"{HOST_BETA}/missing"],
+    ids=["malformed", "unknown"],
+)
+def test_v2_topology_projection_rejects_unknown_or_malformed_focal_service(
+    reference: str,
+) -> None:
+    from infralink.observation.topology import project_v2_topology
+
+    with pytest.raises(ValueError, match="focal service"):
+        project_v2_topology((_document(),), focal_service_instance_ref=reference)
+
+
+def test_v2_topology_projection_qualifies_duplicate_service_instance_ids() -> None:
+    from infralink.observation.topology import project_v2_topology
+
+    duplicate = _source()
+    instances = duplicate["service_instances"]
+    assert isinstance(instances, list)
+    instance = instances[2]
+    assert isinstance(instance, dict)
+    instance["id"] = "alpha"
+    document = ObservationV2Document.model_validate_json(json.dumps(duplicate))
+
+    projection = project_v2_topology((document,), focal_service_instance_ref=f"{HOST_ALPHA}/alpha")
+
+    assert {node.id for node in projection.nodes} == {
+        f"{HOST_ALPHA}/alpha/api/egress",
+        f"{HOST_ALPHA}/alpha/database/ingress",
+        f"{HOST_ALPHA}/alpha/idle/ready",
+        f"{HOST_BETA}/beta/worker/input",
+    }
+
+
+def test_v2_topology_projection_rejects_declarations_over_the_cardinality_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import infralink.observation.topology as topology
+
+    def must_not_materialize(*_args: object) -> None:
+        raise AssertionError("topology models must not materialize before bounds validation")
+
+    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 1)
+    monkeypatch.setattr(topology, "_topology_node", must_not_materialize)
+    monkeypatch.setattr(topology, "_topology_edge", must_not_materialize)
+
+    with pytest.raises(topology.V2TopologyBoundsError, match="topology item bound"):
+        topology.project_v2_topology((_document(),))
 
 
 def test_v2_topology_projection_uses_the_resolver_for_invalid_declarations() -> None:

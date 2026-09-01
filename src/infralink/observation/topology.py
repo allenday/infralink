@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from infralink.observation.models import (
     CanonicalId,
@@ -24,13 +24,19 @@ from infralink.observation.v2 import ObservationV2Document, validate_v2_document
 _MAX_TOPOLOGY_ITEMS = 4096
 
 __all__ = [
+    "V2TopologyBoundsError",
     "V2TopologyEdge",
     "V2TopologyFilter",
     "V2TopologyNode",
     "V2TopologyOwner",
     "V2TopologyProjection",
+    "V2TopologyServiceInstanceRef",
     "project_v2_topology",
 ]
+
+
+class V2TopologyBoundsError(ValueError):
+    """A declaration set exceeds the bounded topology projection contract."""
 
 
 class V2TopologyOwner(StrictModel):
@@ -62,20 +68,27 @@ class V2TopologyEdge(StrictModel):
     scope: EdgeScope
 
 
+class V2TopologyServiceInstanceRef(StrictModel):
+    """The canonical host-qualified identity of one service instance."""
+
+    host_id: HostId
+    service_instance_id: CanonicalId
+
+
 class V2TopologyFilter(StrictModel):
     """One full or focal declaration filter applied before direct-neighbour expansion."""
 
     mode: Literal["full", "host", "service"]
     host_id: HostId | None = None
-    service_instance_id: CanonicalId | None = None
+    service_instance: V2TopologyServiceInstanceRef | None = None
 
     @model_validator(mode="after")
     def require_one_consistent_scope(self) -> V2TopologyFilter:
-        if self.mode == "full" and self.host_id is None and self.service_instance_id is None:
+        if self.mode == "full" and self.host_id is None and self.service_instance is None:
             return self
-        if self.mode == "host" and self.host_id is not None and self.service_instance_id is None:
+        if self.mode == "host" and self.host_id is not None and self.service_instance is None:
             return self
-        if self.mode == "service" and self.host_id is None and self.service_instance_id is not None:
+        if self.mode == "service" and self.host_id is None and self.service_instance is not None:
             return self
         raise ValueError("topology filter mode must match exactly one focal declaration")
 
@@ -93,17 +106,23 @@ def project_v2_topology(
     documents: Iterable[ObservationV2Document],
     *,
     focal_host_id: str | None = None,
-    focal_service_instance_id: str | None = None,
+    focal_service_instance_ref: str | None = None,
 ) -> V2TopologyProjection:
     """Project validated V2 declarations without addresses, resources, or runtime data.
 
-    A focal service is the declaration's ``ServiceInstanceV2.id``. Focal
-    nodes expand only by direct component-edge neighbours.
+    A focal service is the canonical ``<host_uuid>/<service_instance_id>``
+    declaration identity. Focal nodes expand only by direct component-edge
+    neighbours.
     """
 
-    selected_filter = _topology_filter(focal_host_id, focal_service_instance_id)
+    selected_filter = _topology_filter(focal_host_id, focal_service_instance_ref)
     document_list = tuple(documents)
     endpoint_refs = validate_v2_documents(document_list)
+    _resolve_filter(selected_filter, document_list)
+    _enforce_projection_bounds(
+        endpoint_count=len(endpoint_refs),
+        edge_count=sum(len(document.component_edges) for document in document_list),
+    )
     all_nodes = {
         endpoint_ref: _topology_node(endpoint_ref, endpoint)
         for endpoint_ref, endpoint in endpoint_refs.items()
@@ -144,15 +163,57 @@ def project_v2_topology(
 
 
 def _topology_filter(
-    focal_host_id: str | None, focal_service_instance_id: str | None
+    focal_host_id: str | None, focal_service_instance_ref: str | None
 ) -> V2TopologyFilter:
-    if focal_host_id is not None and focal_service_instance_id is not None:
+    if focal_host_id is not None and focal_service_instance_ref is not None:
         raise ValueError("choose a focal host or focal service, not both")
     if focal_host_id is not None:
         return V2TopologyFilter(mode="host", host_id=focal_host_id)
-    if focal_service_instance_id is not None:
-        return V2TopologyFilter(mode="service", service_instance_id=focal_service_instance_id)
+    if focal_service_instance_ref is not None:
+        return V2TopologyFilter(
+            mode="service",
+            service_instance=_parse_focal_service_instance_ref(focal_service_instance_ref),
+        )
     return V2TopologyFilter(mode="full")
+
+
+def _parse_focal_service_instance_ref(value: str) -> V2TopologyServiceInstanceRef:
+    if not isinstance(value, str):
+        raise ValueError("focal service must use <host_uuid>/<service_instance_id>")
+    parts = value.split("/")
+    if len(parts) != 2:
+        raise ValueError("focal service must use <host_uuid>/<service_instance_id>")
+    try:
+        return V2TopologyServiceInstanceRef(host_id=parts[0], service_instance_id=parts[1])
+    except ValidationError as error:
+        raise ValueError("focal service must use <host_uuid>/<service_instance_id>") from error
+
+
+def _resolve_filter(
+    selected_filter: V2TopologyFilter, documents: Iterable[ObservationV2Document]
+) -> None:
+    instances = {
+        (instance.host_id, instance.id)
+        for document in documents
+        for instance in document.service_instances
+    }
+    if selected_filter.mode == "host":
+        if selected_filter.host_id not in {host_id for host_id, _ in instances}:
+            raise ValueError("focal host is not declared")
+        return
+    if selected_filter.mode == "service":
+        service = selected_filter.service_instance
+        assert service is not None
+        if (service.host_id, service.service_instance_id) not in instances:
+            raise ValueError("focal service is not declared")
+
+
+def _enforce_projection_bounds(*, endpoint_count: int, edge_count: int) -> None:
+    if endpoint_count > _MAX_TOPOLOGY_ITEMS or edge_count > _MAX_TOPOLOGY_ITEMS:
+        raise V2TopologyBoundsError(
+            f"topology item bound of {_MAX_TOPOLOGY_ITEMS} exceeded "
+            f"(endpoints={endpoint_count}, edges={edge_count})"
+        )
 
 
 def _topology_node(endpoint_ref: str, endpoint: Endpoint) -> V2TopologyNode:
@@ -202,4 +263,9 @@ def _matches_filter(node: V2TopologyNode, selected_filter: V2TopologyFilter) -> 
         return True
     if selected_filter.mode == "host":
         return node.owner.host_id == selected_filter.host_id
-    return node.owner.service_instance_id == selected_filter.service_instance_id
+    service = selected_filter.service_instance
+    assert service is not None
+    return (
+        node.owner.host_id == service.host_id
+        and node.owner.service_instance_id == service.service_instance_id
+    )
