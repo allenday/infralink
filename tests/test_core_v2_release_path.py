@@ -268,7 +268,8 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
         "infralink.cli.doctor._fetch_gatus_statuses",
         lambda url, token: [
             {
-                "name": "citadel-self-deploy",
+                "key": "gatus-key-for-citadel-self-deploy",
+                "name": "operator-chosen display name",
                 "results": [{"success": True, "timestamp": "2026-08-11T00:00:00Z"}],
             }
         ],

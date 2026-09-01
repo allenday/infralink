@@ -20,6 +20,7 @@ EXPECTED_COMMANDS = [
     "python -m mypy src scripts",
     "python -m pytest",
     "python scripts/generate_cli_schemas.py",
+    "python scripts/generate_adapter_binding_schemas.py",
     "python scripts/generate_observation_schemas.py",
     "python scripts/generate_release_schemas.py",
     "python scripts/check_docs.py",
