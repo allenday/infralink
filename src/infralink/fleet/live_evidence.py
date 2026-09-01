@@ -210,7 +210,7 @@ def _registry_revision(root: Path) -> str | None:
     if git is None:
         return None
     common = _common_git_directory(git)
-    head = _read_git_metadata(git / "HEAD")
+    head = _read_git_metadata(git / "HEAD", permitted_root=git)
     if common is None or head is None:
         return None
     if head.startswith("ref: "):
@@ -225,18 +225,33 @@ def _registry_revision(root: Path) -> str | None:
 
 def _git_directory(root: Path) -> Path | None:
     metadata = root / ".git"
+    if metadata.is_symlink():
+        return None
     if metadata.is_dir():
-        return metadata
+        return metadata if _is_within(metadata, root) else None
     if not metadata.is_file():
         return None
-    line = _read_git_metadata(metadata)
+    line = _read_git_metadata(metadata, permitted_root=root)
     if line is None:
         return None
     if not line.startswith("gitdir: "):
         return None
     configured = Path(line.removeprefix("gitdir: "))
-    candidate = configured if configured.is_absolute() else metadata.parent / configured
-    return candidate if candidate.is_dir() else None
+    candidate = (configured if configured.is_absolute() else metadata.parent / configured).resolve()
+    if not candidate.is_dir() or candidate.parent.name != "worktrees":
+        return None
+    return candidate if _linked_worktree_points_to_selected_checkout(candidate, metadata) else None
+
+
+def _linked_worktree_points_to_selected_checkout(worktree: Path, metadata: Path) -> bool:
+    """Require Git's reciprocal linked-worktree pointer before reading external metadata."""
+
+    declared = _read_git_metadata(worktree / "gitdir", permitted_root=worktree)
+    if declared is None or not declared:
+        return False
+    configured = Path(declared)
+    selected = (configured if configured.is_absolute() else worktree / configured).resolve()
+    return selected == metadata.resolve()
 
 
 def _common_git_directory(git: Path) -> Path | None:
@@ -245,7 +260,7 @@ def _common_git_directory(git: Path) -> Path | None:
     declared = git / "commondir"
     if not declared.is_file():
         return git
-    value = _read_git_metadata(declared)
+    value = _read_git_metadata(declared, permitted_root=git)
     if value is None or not value:
         return None
     configured = Path(value)
@@ -257,10 +272,10 @@ def _common_git_directory(git: Path) -> Path | None:
 
 
 def _read_git_reference(git: Path, reference: str) -> str:
-    direct = _read_git_metadata(git / reference) or ""
+    direct = _read_git_metadata(git / reference, permitted_root=git) or ""
     if direct:
         return direct
-    packed_refs = _read_git_metadata(git / "packed-refs")
+    packed_refs = _read_git_metadata(git / "packed-refs", permitted_root=git)
     if packed_refs is None:
         return ""
     for line in packed_refs.splitlines():
@@ -272,7 +287,9 @@ def _read_git_reference(git: Path, reference: str) -> str:
     return ""
 
 
-def _read_git_metadata(path: Path) -> str | None:
+def _read_git_metadata(path: Path, *, permitted_root: Path) -> str | None:
+    if not _is_within(path, permitted_root):
+        return None
     try:
         with path.open("rb") as metadata:
             raw = metadata.read(_MAX_GIT_METADATA_BYTES + 1)
@@ -281,6 +298,13 @@ def _read_git_metadata(path: Path) -> str | None:
         return raw.decode("ascii").strip()
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(parent.resolve())
+    except OSError:
+        return False
 
 
 def _failure(
