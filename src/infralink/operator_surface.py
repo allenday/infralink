@@ -43,6 +43,7 @@ from infralink.cli.operation_contracts import (
     HostTimer,
     HostVerifierResult,
     LastReconcile,
+    OperationStatusResult,
     OperationSummary,
     TargetReconcileStatus,
 )
@@ -286,6 +287,12 @@ class HostCreateRequest(SourceRequest):
     write: bool = False
 
 
+class OperationStatusRequest(SourceRequest):
+    """Read one declared host-local reconcile operation."""
+
+    operation_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+
+
 class HostCreateAddress(_OperationModel):
     field: Literal["tailscale_ip", "tailscale_name"]
     value: str
@@ -481,6 +488,44 @@ def host_create_operation(request: HostCreateRequest) -> HostCreateResult:
         return HostCreateResult.model_validate(create_host(request))
     except Exception as error:
         _raise_operation_failure(error)
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "operation.status", summary="Read declared host reconcile progress", read_only=True
+)
+def operation_status_operation(request: OperationStatusRequest) -> OperationStatusResult:
+    """Read one host-local reconcile operation through the declared SSH provider."""
+    from infralink.cli.operations import operation_provider, resolve_apply_request
+
+    if request.operation_id.startswith("op_"):
+        raise OperationError(
+            "provider_unavailable",
+            "Legacy control-plane operation status is unavailable",
+            details=({"operation_id": request.operation_id},),
+            fix="Start a new declared host-local apply operation.",
+        )
+    sources = load_registry(request)
+    parts = request.operation_id.split("/", 2)
+    host_ref = parts[1] if len(parts) == 3 and parts[0] == "ssh" else request.operation_id
+    target_host = sources.registry.get(host_ref)
+    if target_host is None:
+        _raise_operation_failure(entity_not_found("host", host_ref))
+    try:
+        record = operation_provider().status(
+            request.operation_id,
+            resolve_apply_request(sources.registry_path / "hosts", target_host),
+        )
+    except Exception as error:
+        _raise_operation_failure(error)
+    target = DoctorTarget.model_validate(record.target) if record.target is not None else None
+    return OperationStatusResult(
+        operation=OperationSummary(
+            id=record.id,
+            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
+        ),
+        target=target,
+        failure=record.failure,
+    )
 
 
 @operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[type-var]

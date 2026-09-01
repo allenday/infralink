@@ -9,7 +9,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, NoReturn
 
 import click
 import yaml
@@ -23,7 +23,6 @@ from infralink.cli.contracts import (
     Binding,
     CommandContext,
     CommandDescriptor,
-    DoctorTarget,
     HelpNavigationAction,
     HelpResult,
     HelpSubcommand,
@@ -35,10 +34,6 @@ from infralink.cli.contracts import (
     VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
-from infralink.cli.operation_contracts import (
-    OperationStatusResult,
-    OperationSummary,
-)
 from infralink.cli.output import (
     command_context,
     error_envelope,
@@ -2414,46 +2409,29 @@ def operation() -> None:
 @pass_context
 def operation_status(ctx: Context, operation_id: str) -> int:
     """Get the current state of one declared host-local reconcile operation."""
-    from infralink.cli.operations import operation_provider, resolve_apply_request
+    from infralink.operator_surface import OperationStatusRequest, operation_status_operation
 
-    if operation_id.startswith("op_"):
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Legacy control-plane operation status is unavailable",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Start a new declared host-local apply operation",
-            details={"operation_id": operation_id},
+    try:
+        result = operation_status_operation(
+            OperationStatusRequest(
+                registry=registry_checkout_root(ctx.registry_path) or ctx.registry_path,
+                edges=ctx.edges_path,
+                operation_id=operation_id,
+            )
         )
-    parts = operation_id.split("/", 2)
-    host_ref = parts[1] if len(parts) == 3 and parts[0] == "ssh" else operation_id
-    target_host = ctx.registry.get(host_ref)
-    if target_host is None:
-        raise entity_not_found("host", host_ref)
-    if ctx.hosts_path is None:
-        raise configuration_required("registry")
-    record = operation_provider().status(
-        operation_id, resolve_apply_request(ctx.hosts_path, target_host)
-    )
-    target = DoctorTarget.model_validate(record.target) if record.target is not None else None
-    result = OperationStatusResult(
-        operation=OperationSummary(
-            id=record.id,
-            state=cast(Literal["queued", "applying", "converged", "failed"], record.state),
-        ),
-        target=target,
-        failure=record.failure,
-    )
+    except Exception as error:
+        _raise_cli_operation_error(error)
     actions = []
-    if record.state in {"queued", "applying"}:
+    if result.operation.state in {"queued", "applying"}:
         actions.append(
             action(
                 "status",
-                [*_root_action_prefix(ctx), "operation", "status", record.id],
+                [*_root_action_prefix(ctx), "operation", "status", result.operation.id],
                 "Check host apply progress",
             )
         )
     _emit(ok_envelope(_context_for(path=["operation", "status"]), result, actions))
-    return 0 if record.state != "failed" else 1
+    return 0 if result.operation.state != "failed" else 1
 
 
 @click.group()

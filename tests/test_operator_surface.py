@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -13,12 +14,15 @@ from mcp import Client
 from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostReadinessResult
 from infralink.cli.errors import CliFailure
 from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_error, cli
+from infralink.cli.operations import OperationRecord
 from infralink.operator_surface import (
     DoctorBootstrapPlanRequest,
     HostBootstrapRequest,
     HostCreateRequest,
+    OperationStatusRequest,
     doctor_host_bootstrap_plan,
     host_create_operation,
+    operation_status_operation,
     operator_click_adapter,
     operator_mcp_adapter,
     operator_surface,
@@ -334,3 +338,70 @@ def test_host_create_refuses_a_generated_host_directory_symlink(
         )
 
     assert not outside.exists()
+
+
+def test_operation_status_uses_one_typed_provider_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    invocation = "a" * 32
+    operation_id = f"ssh/{host_id}/{invocation}"
+    target = SimpleNamespace(uuid=host_id, canonical_name="host-1")
+    sources = SimpleNamespace(
+        registry_path=tmp_path,
+        registry=SimpleNamespace(get=lambda reference: target if reference == host_id else None),
+    )
+    provider = SimpleNamespace(
+        status=lambda requested_id, request: OperationRecord(
+            id=requested_id,
+            state="converged",
+            target={"type": "host", "id": host_id, "canonical_name": "host-1"},
+        )
+    )
+    monkeypatch.setattr("infralink.operator_surface.load_registry", lambda request: sources)
+    monkeypatch.setattr(
+        "infralink.cli.operations.resolve_apply_request", lambda root, host: object()
+    )
+    monkeypatch.setattr("infralink.cli.operations.operation_provider", lambda: provider)
+
+    result = operation_status_operation(
+        OperationStatusRequest(registry=tmp_path, operation_id=operation_id)
+    )
+
+    assert result.operation.id == operation_id
+    assert result.operation.state == "converged"
+    assert result.target == DoctorTarget(type="host", id=host_id, canonical_name="host-1")
+
+    async def invoke_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            response = await client.call_tool(
+                "operation.status",
+                {"registry": str(tmp_path), "operation_id": operation_id},
+            )
+        assert response.is_error is False
+        return response.structured_content
+
+    payload = asyncio.run(invoke_mcp())
+    assert payload["result"]["operation"] == {"id": operation_id, "state": "converged"}
+
+
+def test_operation_status_is_discoverable_through_the_typed_mcp_adapter() -> None:
+    async def list_tools() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+        return {tool.name: tool.input_schema for tool in tools.tools}
+
+    schemas = asyncio.run(list_tools())
+    schema = schemas["operation.status"]
+    assert isinstance(schema, dict)
+    assert schema["type"] == "object"
+    assert schema["required"] == ["operation_id"]
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert properties["operation_id"]["type"] == "string"
+    assert properties["operation_id"]["cli"] == {"kind": "argument"}
+    assert {branch.get("format") for branch in properties["registry"]["anyOf"]} == {
+        "path",
+        None,
+    }
+    assert {branch.get("format") for branch in properties["edges"]["anyOf"]} == {"path", None}
