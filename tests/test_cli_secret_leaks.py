@@ -20,7 +20,7 @@ TARGET_ID = "d1b9e5d5-36b0-459d-a556-96622811fbd5"
 SOURCE_ID = "fa2b9872-d94c-4b20-a73a-57a205560769"
 
 
-def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path, Path]:
+def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path, Path, Path]:
     registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
     for host in registry["hosts"].values():
         host["status"] = "terminated"
@@ -58,7 +58,22 @@ def _write_canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path, Pat
         yaml.safe_dump({"hosts": {TARGET_ID: registry["hosts"][TARGET_ID]}}, sort_keys=False),
         encoding="utf-8",
     )
-    return registry_path, edges_path, authoring_registry
+    checkout = tmp_path / "app-checkout"
+    for host_id, host in registry["hosts"].items():
+        host_manifest = checkout / "hosts" / host_id / "manifest.yml"
+        host_manifest.parent.mkdir(parents=True, exist_ok=True)
+        host_manifest.write_text(
+            yaml.safe_dump({"hosts": {host_id: host}}, sort_keys=False),
+            encoding="utf-8",
+        )
+    (checkout / "hosts" / "applications.yml").write_text(
+        (tmp_path / "applications.yml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    checkout_edges = checkout / "network/main-dev/edges/edges.yml"
+    checkout_edges.parent.mkdir(parents=True, exist_ok=True)
+    checkout_edges.write_text(edges_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return registry_path, edges_path, authoring_registry, checkout
 
 
 def _leaf_paths(group: click.Group, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
@@ -107,7 +122,9 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = "repository-wide-loaded-secret-value-canary"
-    registry_path, edges_path, authoring_registry = _write_canary_topology(tmp_path, canary)
+    registry_path, edges_path, authoring_registry, app_checkout = _write_canary_topology(
+        tmp_path, canary
+    )
 
     loaded_registry = Registry.load(registry_path)
     loaded_edge = EdgeSet.load(edges_path).get(EDGE_ID)
@@ -264,8 +281,8 @@ selection:
             0,
             True,
         ),
-        ("app", "list"): ([*source, "app", "list"], 0, True),
-        ("app", "show"): ([*source, "app", "show", "core"], 0, True),
+        ("app", "list"): (["--registry", str(app_checkout), "app", "list"], 0, True),
+        ("app", "show"): (["--registry", str(app_checkout), "app", "show", "core"], 0, True),
         ("check",): ([*source, "check", "--edge", EDGE_ID], 0, True),
         ("doctor",): ([*source, "doctor", "host", TARGET_ID], 2, False),
         ("diagram",): (

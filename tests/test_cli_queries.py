@@ -299,6 +299,8 @@ def _write_cli_inputs(
 
 
 def _invoke(registry_path: Path, edges_path: Path, *args: str):
+    if args[:1] == ("app",):
+        registry_path, edges_path = _app_checkout(registry_path, edges_path)
     return CliRunner().invoke(
         cli,
         [
@@ -311,6 +313,23 @@ def _invoke(registry_path: Path, edges_path: Path, *args: str):
             *args,
         ],
     )
+
+
+def _app_checkout(registry_path: Path, edges_path: Path) -> tuple[Path, Path]:
+    """Materialize the public app fixture through the checkout-root contract."""
+    checkout = registry_path.parent / "app-checkout"
+    hosts = json.loads(registry_path.read_text())["hosts"]
+    for host_id, manifest in hosts.items():
+        path = checkout / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"hosts": {host_id: manifest}}))
+    applications = registry_path.parent / "applications.yml"
+    (checkout / "hosts").mkdir(parents=True, exist_ok=True)
+    (checkout / "hosts" / "applications.yml").write_text(applications.read_text())
+    checkout_edges = checkout / "network/main-dev/edges/edges.yml"
+    checkout_edges.parent.mkdir(parents=True, exist_ok=True)
+    checkout_edges.write_text(edges_path.read_text())
+    return checkout, checkout_edges
 
 
 def _payload(result) -> dict:
