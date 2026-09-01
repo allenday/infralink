@@ -141,10 +141,13 @@ args = ["mcp", "serve"]
 INFRALINK_REGISTRY = "/var/lib/infralink/registry"
 ```
 
-The server exposes `infralink_command`. Pass an argv array such as
-`["doctor", "host", "cyberstorm-watchtower"]`; its structured result is the
-same `infralink.cli/v1` envelope returned by the CLI. It accepts no shell
-syntax, while existing explicit `--write` and `--apply` gates remain in force.
+The server exposes `infralink_command` plus native typed tools for every public
+operation. Pass an argv array such as `["doctor", "host",
+"cyberstorm-watchtower"]`; its structured result is the same
+`infralink.cli/v1` envelope returned by the CLI. It accepts no shell syntax,
+while existing explicit `--write` and `--apply` gates remain in force. Installed
+typed operation packages are listed in root help and native MCP from their
+build-generated Agent Surface manifests, then verified when invoked.
 
 Useful discovery commands:
 

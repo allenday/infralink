@@ -23,6 +23,7 @@ def _deny_side_effect(*args: object, **kwargs: object) -> None:
 def _pulling_plugin(marker: Path) -> SimpleNamespace:
     return SimpleNamespace(
         name="controller",
+        value="example.controller:build_app",
         load=lambda: (
             marker.write_text("external plugin loaded", encoding="utf-8"),
             subprocess.run(["docker", "pull", "example.invalid/controller:latest"]),
@@ -39,11 +40,7 @@ def deny_discovery_side_effects(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     plugin = _pulling_plugin(marker)
     monkeypatch.setattr(
         "infralink.cli.command_plugins.entry_points",
-        lambda *, group, name=None: (
-            (plugin,)
-            if group == "infralink.commands" and (name is None or name == "controller")
-            else ()
-        ),
+        lambda *, group: (plugin,) if group == "infralink.commands" else (),
     )
     return marker
 

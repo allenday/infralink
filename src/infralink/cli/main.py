@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
@@ -318,6 +318,22 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
         "usage": "infralink controller [doctor|reconcile|bootstrap]",
     },
 }
+
+
+def _command_descriptor(name: str) -> CommandDescriptor:
+    """Describe built-ins and manifest-backed commands in the root contract."""
+    metadata = COMMAND_METADATA.get(name)
+    if metadata is not None:
+        return CommandDescriptor(
+            name=name,
+            description=metadata.get("description", ""),
+            usage=metadata.get("usage", f"infralink {name}"),
+        )
+    return CommandDescriptor(
+        name=name,
+        description=command_plugins.root_summary(name),
+        usage=f"infralink {name}",
+    )
 
 
 HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
@@ -923,7 +939,7 @@ def _output_from_argv(argv: list[str]) -> str:
 def _help_result(path: tuple[str, ...]) -> HelpResult:
     command = _command_for_path(path, allow_external_commands=False)
     if command is None:
-        raise click.UsageError("Unknown command path")
+        return _manifest_help_result(path)
     arguments, options = _help_parameters(command)
     return HelpResult(
         path=list(path),
@@ -933,6 +949,67 @@ def _help_result(path: tuple[str, ...]) -> HelpResult:
         examples=list(HELP_METADATA.get(path, {}).get("examples", [])),
         children=_help_children(path, command),
     )
+
+
+def _manifest_help_result(path: tuple[str, ...]) -> HelpResult:
+    """Render help from an installed Agent Surface manifest without importing it."""
+    operation = command_plugins.operation(path)
+    children = command_plugins.children(path)
+    if operation is None and not children:
+        raise click.UsageError("Unknown command path")
+    if operation is None:
+        return HelpResult(
+            path=list(path),
+            description=command_plugins.root_summary(path[0]),
+            arguments=[],
+            options=[],
+            examples=[],
+            children=_manifest_help_children(path),
+        )
+    input_schema = operation.operation["input_schema"]
+    assert isinstance(input_schema, Mapping)
+    properties = input_schema.get("properties", {})
+    required = input_schema.get("required", [])
+    if not isinstance(properties, Mapping) or not isinstance(required, list):
+        raise RuntimeError("command_plugin_manifest_invalid")
+    return HelpResult(
+        path=list(path),
+        description=operation.summary,
+        arguments=[],
+        options=[
+            OptionDescriptor(
+                name=name,
+                type=_manifest_schema_type(schema),
+                required=name in required,
+            )
+            for name, schema in sorted(properties.items())
+            if isinstance(name, str) and name not in {"registry", "edges"}
+        ],
+        examples=[],
+        children=_manifest_help_children(path),
+    )
+
+
+def _manifest_schema_type(schema: Any) -> str:
+    if not isinstance(schema, Mapping):
+        return "string"
+    value = schema.get("type")
+    return value if isinstance(value, str) else "string"
+
+
+def _manifest_help_children(path: tuple[str, ...]) -> list[HelpSubcommand]:
+    children: list[HelpSubcommand] = []
+    for operation in command_plugins.children(path):
+        name = operation.path[-1]
+        argv = [*_help_argv_prefix(), *path, name]
+        children.append(
+            HelpSubcommand(
+                name=name,
+                summary=operation.summary,
+                action=HelpNavigationAction(command=" ".join(argv), argv=argv),
+            )
+        )
+    return children
 
 
 def _help_parameters(
@@ -982,6 +1059,16 @@ def _help_children(path: tuple[str, ...], command: click.Command) -> list[HelpSu
     context = click.Context(command)
     children: list[HelpSubcommand] = []
     for name in command.list_commands(context):
+        if not path and _is_external_command(name):
+            argv = [*_help_argv_prefix(), name]
+            children.append(
+                HelpSubcommand(
+                    name=name,
+                    summary=command_plugins.root_summary(name),
+                    action=HelpNavigationAction(command=" ".join(argv), argv=argv),
+                )
+            )
+            continue
         child = command.get_command(context, name)
         if child is None:
             continue
@@ -1076,8 +1163,18 @@ def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action
             )
             for child in _help_children(tuple(path), command)
         ]
+    manifest_children = _manifest_help_children(tuple(path))
+    if manifest_children:
+        return [
+            action(
+                f"help-{child.name}",
+                child.action.argv,
+                f"Show {child.name} command help",
+            )
+            for child in manifest_children
+        ]
     help_argv = _help_argv_prefix()
-    if _command_for_path(tuple(path), allow_external_commands=False) is not None:
+    if command is not None or command_plugins.operation(tuple(path)) is not None:
         help_argv = [*help_argv, *path]
     return [action("help", help_argv, "Show command usage")]
 
@@ -1231,11 +1328,12 @@ class JsonGroup(click.Group):
         # Discovery must be offline and side-effect free. In particular, an
         # entry point may import a controller runtime that pulls an image.
         # External commands remain available only through explicit execution.
-        return sorted(
+        builtins = {
             name
             for name in COMMAND_METADATA
             if _load_command_with_policy(name, allow_external_commands=False) is not None
-        )
+        }
+        return sorted(builtins | command_plugins.names())
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         return _load_command(cmd_name)
@@ -1257,6 +1355,8 @@ class JsonGroup(click.Group):
         **extra: Any,
     ) -> Any:
         incoming = list(sys.argv[1:] if args is None else args)
+        discovery_scope = command_plugins.discovery_scope()
+        discovery_scope.__enter__()
         normalized = _normalize_discovery_aliases(incoming)
         invocation_token = _INVOCATION_ARGS.set(incoming)
         emitted_token = _ENVELOPE_EMITTED.set(False)
@@ -1380,6 +1480,7 @@ class JsonGroup(click.Group):
             _DEFER_ENVELOPE.reset(deferred_token)
             _ENVELOPE_EMITTED.reset(emitted_token)
             _INVOCATION_ARGS.reset(invocation_token)
+            discovery_scope.__exit__(None, None, None)
         if pending_envelope is not None:
             click.echo(pending_envelope)
         if standalone_mode:
@@ -1524,15 +1625,7 @@ def cli(
     live_commands = cli.list_commands(click_ctx)
     command_tree = RootResult(
         version=__version__,
-        commands=[
-            CommandDescriptor(
-                name=name,
-                description=meta.get("description", ""),
-                usage=meta.get("usage", f"infralink {name}"),
-            )
-            for name in live_commands
-            if (meta := COMMAND_METADATA.get(name)) is not None
-        ],
+        commands=[_command_descriptor(name) for name in live_commands],
     )
 
     payload = ok_envelope(

@@ -14,6 +14,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent, Tool
 
 from infralink import __version__
+from infralink.cli import command_plugins
 from infralink.cli.main import _command_for_path, _help_parameters, cli
 
 _TOOL_NAME = "infralink_command"
@@ -110,6 +111,10 @@ def _native_paths() -> dict[str, tuple[str, ...]]:
         if isinstance(command, click.Group):
             context = click.Context(command)
             for child_name in command.list_commands(context):
+                if not path and child_name in command_plugins.names():
+                    # External operations are added from their build manifest
+                    # below; loading Click here would import the runtime app.
+                    continue
                 child = command.get_command(context, child_name)
                 if child is not None:
                     visit(child, (*path, child_name))
@@ -117,7 +122,16 @@ def _native_paths() -> dict[str, tuple[str, ...]]:
         if path != ("mcp", "serve"):
             paths[f"infralink_{'_'.join(path).replace('-', '_')}"] = path
 
-    visit(cli, ())
+    with command_plugins.discovery_scope():
+        visit(cli, ())
+        for operation in command_plugins.operations():
+            path = operation.path
+            if path == ("mcp", "serve"):
+                continue
+            name = f"infralink_{'_'.join(path).replace('-', '_')}"
+            if name in paths:
+                raise RuntimeError("command_plugin_path_conflict")
+            paths[name] = path
     return paths
 
 
@@ -152,8 +166,12 @@ def _option_parameter(command: click.Command, name: str) -> click.Option:
 
 
 def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
-    command = _command_for_path(path)
-    assert command is not None
+    command = _command_for_path(path, allow_external_commands=False)
+    if command is None:
+        manifest_operation = command_plugins.operation(path)
+        if manifest_operation is None:
+            raise RuntimeError("command_plugin_operation_missing")
+        return _manifest_native_tool(name, manifest_operation)
     arguments, options = _help_parameters(command)
     arguments_by_name = {
         parameter.name: parameter
@@ -195,8 +213,41 @@ def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
     )
 
 
+def _manifest_native_tool(name: str, operation: command_plugins.ManifestOperation) -> Tool:
+    """Project a generated Agent Surface manifest without importing its app."""
+    input_schema = operation.operation["input_schema"]
+    output_schema = operation.operation["output_schema"]
+    if not isinstance(input_schema, dict) or not isinstance(output_schema, dict):
+        raise RuntimeError("command_plugin_manifest_invalid")
+    raw_properties = input_schema.get("properties", {})
+    raw_required = input_schema.get("required", [])
+    if not isinstance(raw_properties, dict) or not isinstance(raw_required, list):
+        raise RuntimeError("command_plugin_manifest_invalid")
+    properties: dict[str, Any] = dict(_ROOT_SOURCE_PROPERTIES)
+    properties.update(
+        {
+            field: schema
+            for field, schema in raw_properties.items()
+            if field not in _ROOT_SOURCE_PROPERTIES
+        }
+    )
+    return Tool(
+        name=name,
+        title="Infralink " + " ".join(operation.path),
+        description=operation.summary,
+        input_schema={
+            "type": "object",
+            "properties": properties,
+            "required": [field for field in raw_required if field not in _ROOT_SOURCE_PROPERTIES],
+            "additionalProperties": False,
+        },
+        output_schema=_OUTPUT_SCHEMA,
+    )
+
+
 def _native_tools() -> list[Tool]:
-    return [_native_tool(name, path) for name, path in _native_paths().items()]
+    with command_plugins.discovery_scope():
+        return [_native_tool(name, path) for name, path in _native_paths().items()]
 
 
 def _native_argv(name: str, arguments: Any) -> list[str]:
@@ -300,7 +351,10 @@ async def _call_tool(
             argv, stdin = _arguments(params.arguments)
         else:
             argv, stdin = _native_argv(params.name, params.arguments), None
-        payload = invoke_cli(argv, stdin)
+        # Agent Surface Click projections synchronously own their invocation
+        # loop. Run the shared CLI path outside this MCP event loop so native
+        # typed operations and legacy Click commands have identical transport.
+        payload = await asyncio.to_thread(invoke_cli, argv, stdin)
     except (RuntimeError, ValueError) as error:
         return CallToolResult(content=[TextContent(text=str(error))], is_error=True)
     return CallToolResult(

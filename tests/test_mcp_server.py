@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from mcp import Client, ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from infralink.cli import command_plugins
 from infralink.cli.main import cli
 from infralink.mcp_server import (
     _native_argv,
@@ -155,12 +156,17 @@ def test_native_mcp_preserves_every_click_integer_parameter_type() -> None:
 
     from infralink.cli.main import _command_for_path
 
-    for path in _native_paths().values():
-        command = _command_for_path(path)
-        assert command is not None
-        for parameter in command.params:
-            if isinstance(parameter.type, IntParamType):
-                assert _parameter_schema(parameter)["type"] == "integer"
+    with command_plugins.discovery_scope():
+        for path in _native_paths().values():
+            if command_plugins.operation(path) is not None:
+                # External Agent Surface operations are schema-projected from
+                # their wheel manifest and intentionally are not imported here.
+                continue
+            command = _command_for_path(path)
+            assert command is not None
+            for parameter in command.params:
+                if isinstance(parameter.type, IntParamType):
+                    assert _parameter_schema(parameter)["type"] == "integer"
 
 
 def test_native_mcp_returns_a_canonical_usage_envelope_for_invalid_bounded_integer() -> None:
