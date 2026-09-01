@@ -88,7 +88,7 @@ def test_docs_fast_path_is_documented() -> None:
         "## CI Fast Path",
         "`docs-contract`",
         "documentation contract inputs",
-        "full `quality-3.12` gate",
+        "full Python 3.12 quality gate",
         "generated schemas",
         *(f"`{path}`" for path in docs_paths),
     ]:

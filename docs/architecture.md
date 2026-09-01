@@ -124,7 +124,7 @@ Changes limited to the documentation contract inputs (`README.md`, `docs/**`,
 `tests/test_docs_contract.py`, and `.woodpecker.yml`) select Woodpecker's
 `docs-contract` step. It runs the documentation contract test and regenerates
 the CLI, observation, and release schemas before requiring a clean diff. A
-change outside those inputs uses the full `quality-3.12` gate. This keeps
+change outside those inputs uses the full Python 3.12 quality gate. This keeps
 documentation feedback fast without allowing generated schemas to drift.
 
 ## Tests
@@ -136,7 +136,7 @@ logic. Policy tests intentionally inspect configuration files such as
 
 ## Release Tooling
 
-Woodpecker runs the `quality-3.12` gate. Its release job is manual, `main`-only,
+Woodpecker runs the Python 3.12 quality gate. Its release job is manual, `main`-only,
 and depends on that quality gate. Local release helper
 scripts validate versions, exact protected-main commits, toolchain checksums,
 asset names, checksums, and release attestations. They do not replace the
