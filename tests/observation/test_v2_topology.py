@@ -267,17 +267,18 @@ def test_v2_topology_projection_qualifies_duplicate_service_instance_ids() -> No
     }
 
 
-def test_v2_topology_projection_rejects_declarations_over_the_cardinality_bound(
+def test_v2_topology_projection_rejects_oversized_declarations_before_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import infralink.observation.topology as topology
 
-    def must_not_materialize(*_args: object) -> None:
-        raise AssertionError("topology models must not materialize before bounds validation")
+    def must_not_run(*_args: object) -> None:
+        raise AssertionError("topology resolution must not run before bounds validation")
 
-    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 1)
-    monkeypatch.setattr(topology, "_topology_node", must_not_materialize)
-    monkeypatch.setattr(topology, "_topology_edge", must_not_materialize)
+    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 5)
+    monkeypatch.setattr(topology, "validate_v2_documents", must_not_run)
+    monkeypatch.setattr(topology, "_topology_node", must_not_run)
+    monkeypatch.setattr(topology, "_topology_edge", must_not_run)
 
     with pytest.raises(topology.V2TopologyBoundsError, match="topology item bound"):
         topology.project_v2_topology((_document(),))

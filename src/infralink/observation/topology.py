@@ -117,9 +117,10 @@ def project_v2_topology(
 
     selected_filter = _topology_filter(focal_host_id, focal_service_instance_ref)
     document_list = tuple(documents)
+    _enforce_declaration_bounds(document_list)
     endpoint_refs = validate_v2_documents(document_list)
     _resolve_filter(selected_filter, document_list)
-    _enforce_projection_bounds(
+    _enforce_topology_bounds(
         endpoint_count=len(endpoint_refs),
         edge_count=sum(len(document.component_edges) for document in document_list),
     )
@@ -208,8 +209,22 @@ def _resolve_filter(
             raise ValueError("focal service is not declared")
 
 
-def _enforce_projection_bounds(*, endpoint_count: int, edge_count: int) -> None:
-    if endpoint_count > _MAX_TOPOLOGY_ITEMS or edge_count > _MAX_TOPOLOGY_ITEMS:
+def _enforce_declaration_bounds(documents: Iterable[ObservationV2Document]) -> None:
+    """Reject oversized declarations before the resolver allocates endpoint references."""
+
+    _enforce_topology_bounds(
+        endpoint_count=sum(
+            len(component.endpoints)
+            for document in documents
+            for profile in document.service_profiles
+            for component in profile.components
+        ),
+        edge_count=sum(len(document.component_edges) for document in documents),
+    )
+
+
+def _enforce_topology_bounds(*, endpoint_count: int, edge_count: int) -> None:
+    if endpoint_count + edge_count > _MAX_TOPOLOGY_ITEMS:
         raise V2TopologyBoundsError(
             f"topology item bound of {_MAX_TOPOLOGY_ITEMS} exceeded "
             f"(endpoints={endpoint_count}, edges={edge_count})"
