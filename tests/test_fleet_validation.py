@@ -137,6 +137,89 @@ def test_static_validation_extracts_services_from_root_jinja_include(tmp_path: P
     assert result.valid is True
 
 
+def test_static_validation_recursively_expands_safe_literal_includes(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    templates = tmp_path / "hosts" / "_templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "first.yml.j2").write_text("{% include 'second.yml.j2' %}\n", encoding="utf-8")
+    (templates / "second.yml.j2").write_text("services:\n  app: {}\n", encoding="utf-8")
+    _write_compose(tmp_path, "{% include 'first.yml.j2' %}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert result.valid is True
+
+
+def test_static_validation_rejects_literal_include_outside_registry(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    outside = tmp_path.parent / "outside.yml.j2"
+    outside.write_text("services:\n  app: {}\n", encoding="utf-8")
+    _write_compose(tmp_path, "{% include '../../outside.yml.j2' %}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_unsafe", "capability_gap")
+    ]
+
+
+def test_static_validation_reports_unresolved_include_as_capability_gap(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    _write_compose(tmp_path, "{% include 'not-present.yml.j2' %}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_unresolved", "capability_gap")
+    ]
+
+
+def test_static_validation_reports_dynamic_include_as_capability_gap(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    _write_compose(tmp_path, "{% include compose_fragment %}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_unresolved", "capability_gap")
+    ]
+
+
+def test_static_validation_reports_literal_include_cycles_as_capability_gap(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    template = tmp_path / "hosts" / "_templates" / "cycle.yml.j2"
+    template.parent.mkdir(exist_ok=True)
+    template.write_text("{% include 'cycle.yml.j2' %}\n", encoding="utf-8")
+    _write_compose(tmp_path, "{% include 'cycle.yml.j2' %}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_cycle", "capability_gap")
+    ]
+
+
+def test_static_validation_reports_include_depth_as_capability_gap(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    templates = tmp_path / "hosts" / "_templates"
+    templates.mkdir(exist_ok=True)
+    for index in range(17):
+        name = f"depth-{index}.yml.j2"
+        content = (
+            "services:\n  app: {}\n"
+            if index == 16
+            else f"{{% include 'depth-{index + 1}.yml.j2' %}}\n"
+        )
+        (templates / name).write_text(content, encoding="utf-8")
+    _write_compose(tmp_path, "{% include 'depth-0.yml.j2' %}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_depth_exceeded", "capability_gap")
+    ]
+
+
 def test_live_mode_returns_capability_gap_without_probing(tmp_path: Path) -> None:
     edges = _write_registry(tmp_path, role_overrides="workers: 1")
 

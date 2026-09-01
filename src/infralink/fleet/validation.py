@@ -22,12 +22,24 @@ _DB_PROTOCOLS = {"postgres", "postgresql", "mysql", "mariadb"}
 _DB_GLOBAL_USERS = {"admin": "root", "ops": "ops"}
 _DB_SCOPED_ROLES = {"rw", "ro"}
 _DB_ROLES = {*_DB_GLOBAL_USERS, *_DB_SCOPED_ROLES}
+_LITERAL_INCLUDE_PATTERN = re.compile(r"{%\s*include\s+['\"]([^'\"]+)['\"]\s*%}")
+_INCLUDE_PATTERN = re.compile(r"{%\s*include\b[^%]*%}")
+_MAX_LITERAL_INCLUDE_DEPTH = 16
 
 __all__ = ["FleetValidationResult", "validate_fleet"]
 
 
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _ComposeIncludeError(ValueError):
+    """A Compose include cannot be safely resolved by static validation."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 class RoleDefinition(_Model):
@@ -273,12 +285,12 @@ def _compose_services(
         return None
     try:
         return _static_compose_service_names(_expand_literal_includes(path, registry_root))
-    except ValueError:
+    except _ComposeIncludeError as error:
         diagnostics.append(
             FleetValidationDiagnostic(
-                code="compose_include_unavailable",
+                code=error.code,
                 severity="capability_gap",
-                message="Compose template includes cannot be statically resolved",
+                message=error.message,
                 subject_kind="host",
                 subject_id=host.canonical_name,
                 path=f"hosts.{host.uuid}.docker-compose.yml.j2",
@@ -288,33 +300,57 @@ def _compose_services(
 
 
 def _expand_literal_includes(
-    path: Path, registry_root: Path, seen: frozenset[Path] = frozenset()
+    path: Path,
+    registry_root: Path,
+    seen: frozenset[Path] = frozenset(),
 ) -> str:
     """Inline quoted local includes without evaluating Jinja expressions."""
     path = path.resolve()
-    roots = (path.parent.resolve(), (registry_root / "hosts" / "_templates").resolve())
-    if path in seen or len(seen) >= 16:
-        raise ValueError("include cycle or depth limit")
+    template_root = (registry_root / "hosts" / "_templates").resolve()
+    if path in seen:
+        raise _ComposeIncludeError(
+            "compose_template_include_cycle",
+            "Compose template includes contain a cycle",
+        )
+    if len(seen) >= _MAX_LITERAL_INCLUDE_DEPTH:
+        raise _ComposeIncludeError(
+            "compose_template_include_depth_exceeded",
+            "Compose template includes exceed the static expansion depth limit",
+        )
     source = path.read_text(encoding="utf-8")
-    include_pattern = re.compile(r"{%\s*include\s+['\"]([^'\"]+)['\"]\s*%}")
-    template_root = registry_root / "hosts" / "_templates"
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1)
-        candidates = ((path.parent / name).resolve(), (template_root / name).resolve())
-        candidate = next(
-            (
-                item
-                for item in candidates
-                if item.is_file() and any(item.is_relative_to(root) for root in roots)
-            ),
-            None,
+        local_root = path.parent.resolve()
+        candidates = ((local_root / name).resolve(), (template_root / name).resolve())
+        safe_candidates = (
+            candidate
+            for candidate, root in zip(candidates, (local_root, template_root), strict=True)
+            if candidate.is_relative_to(root)
         )
+        candidate = next((item for item in safe_candidates if item.is_file()), None)
         if candidate is None:
-            raise ValueError("include unavailable")
+            if not any(
+                candidate.is_relative_to(root)
+                for candidate, root in zip(candidates, (local_root, template_root), strict=True)
+            ):
+                raise _ComposeIncludeError(
+                    "compose_template_include_unsafe",
+                    "Compose template includes must remain within the including directory or hosts/_templates",
+                )
+            raise _ComposeIncludeError(
+                "compose_template_include_unresolved",
+                "Compose template includes cannot be statically resolved",
+            )
         return _expand_literal_includes(candidate, registry_root, seen | {path})
 
-    return include_pattern.sub(replace, source)
+    expanded = _LITERAL_INCLUDE_PATTERN.sub(replace, source)
+    if _INCLUDE_PATTERN.search(expanded):
+        raise _ComposeIncludeError(
+            "compose_template_include_unresolved",
+            "Compose template includes must use a literal path for static validation",
+        )
+    return expanded
 
 
 def _static_compose_service_names(source: str) -> set[str]:
