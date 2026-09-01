@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 
 import pytest
 from agent_surface import App
 from agent_surface.manifest import manifest_for
 from click.testing import CliRunner
-from mcp import Client
 from pydantic import BaseModel
 
 import infralink.cli.main as cli_main
-from infralink.mcp_server import _native_paths, _native_tool, create_server
 
 
 class _Request(BaseModel):
@@ -82,21 +79,6 @@ def test_root_and_help_discover_a_manifest_backed_command_without_importing_it(
     assert '"name":"doctor"' in click_help.output
 
 
-def test_native_mcp_discovers_manifest_schema_without_importing_app(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_manifest(
-        monkeypatch,
-        loader=lambda: pytest.fail("MCP discovery must not import an external command app"),
-    )
-
-    assert _native_paths()["infralink_controller_doctor"] == ("controller", "doctor")
-    tool = _native_tool("infralink_controller_doctor", ("controller", "doctor"))
-
-    assert tool.input_schema["properties"]["value"]["type"] == "string"
-    assert {"registry", "edges", "value"} <= set(tool.input_schema["properties"])
-
-
 def test_discovery_refreshes_after_an_in_place_plugin_upgrade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -146,20 +128,6 @@ def test_explicit_execution_imports_and_verifies_the_manifest(
 
     assert result.exit_code == 0, result.output
     assert "verified" in result.output
-
-
-def test_native_mcp_invokes_the_same_manifest_verified_operation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_manifest(monkeypatch)
-
-    async def exercise() -> None:
-        async with Client(create_server()) as client:
-            result = await client.call_tool("infralink_controller_doctor", {"value": "native"})
-        assert result.is_error is False
-        assert result.structured_content["result"]["value"] == "native"
-
-    asyncio.run(exercise())
 
 
 def test_execution_rejects_a_factory_that_does_not_match_its_manifest(

@@ -1286,9 +1286,9 @@ def _load_command(
 
         return explain_command
     if name == "app":
-        from infralink.cli.app import app
+        from infralink.operator_surface import app_click_command
 
-        return app
+        return app_click_command()
     if name == "info":
         return info
     if name == "hosts":
@@ -2326,7 +2326,7 @@ def host_verifier(ctx: Context, host_ref: str) -> int:
             [
                 action(
                     "doctor",
-                    [*_root_source_argv(ctx), "doctor", "host", result.target.id],
+                    [*_root_source_argv(ctx), "doctor", "host", str(result.target.id)],
                     "Reinspect the host convergence result",
                 )
             ],
@@ -2378,7 +2378,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         actions = [
             action(
                 "apply",
-                [*_root_source_argv(ctx), "host", "apply", result.target.id],
+                [*_root_source_argv(ctx), "host", "apply", str(result.target.id)],
                 "Submit this host apply",
                 safe=False,
             )
@@ -2387,12 +2387,12 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         actions = [
             action(
                 "status",
-                [*_root_source_argv(ctx), "host", "status", result.target.id],
+                [*_root_source_argv(ctx), "host", "status", str(result.target.id)],
                 "Inspect the target timer and latest reconcile result",
             ),
             action(
                 "logs",
-                [*_root_source_argv(ctx), "host", "logs", result.target.id, "--last-run"],
+                [*_root_source_argv(ctx), "host", "logs", str(result.target.id), "--last-run"],
                 "Inspect bounded evidence from the target's latest reconcile run",
             ),
         ]
@@ -2408,7 +2408,7 @@ def host_apply(ctx: Context, host_ref: str, dry_run: bool, wait: bool, timeout: 
         actions = [
             action(
                 "doctor",
-                [*_root_source_argv(ctx), "doctor", "host", result.target.id],
+                [*_root_source_argv(ctx), "doctor", "host", str(result.target.id)],
                 "Inspect the host convergence result",
             )
         ]
@@ -2441,7 +2441,7 @@ def host_status(ctx: Context, host_ref: str) -> int:
             [
                 action(
                     "logs",
-                    [*_root_source_argv(ctx), "host", "logs", result.target.id, "--last-run"],
+                    [*_root_source_argv(ctx), "host", "logs", str(result.target.id), "--last-run"],
                     "Inspect bounded evidence from the target's latest reconcile run",
                 )
             ],
@@ -2492,7 +2492,7 @@ def host_logs(ctx: Context, host_ref: str, last_run: bool, diagnostic: bool) -> 
             [
                 action(
                     "status",
-                    [*_root_source_argv(ctx), "host", "status", result.target.id],
+                    [*_root_source_argv(ctx), "host", "status", str(result.target.id)],
                     "Inspect target reconcile status",
                 )
             ],

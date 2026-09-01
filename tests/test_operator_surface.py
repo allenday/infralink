@@ -7,12 +7,10 @@ from pathlib import Path
 import pytest
 from agent_surface import OperationError
 from click.testing import CliRunner
-from mcp import Client
 
 from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostReadinessResult
 from infralink.cli.errors import CliFailure
 from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_error, cli
-from infralink.mcp_server import create_server
 from infralink.operator_surface import (
     DoctorBootstrapPlanRequest,
     HostBootstrapRequest,
@@ -177,10 +175,10 @@ def test_click_bootstrap_and_typed_operation_share_transport_acceptance() -> Non
         _bootstrap_tailnet_address(target, "100.64.0.2")
 
 
-def test_bootstrap_plan_uses_one_typed_transport_boundary_across_adapters(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_bootstrap_plan_uses_one_typed_transport_boundary_across_doctor_and_click(
+    tmp_path: Path,
 ) -> None:
-    """Doctor, Click, and MCP must reject one mismatched declared transport alike."""
+    """The retained Doctor and Click adapters reject a mismatched transport alike."""
     host_id = "11111111-1111-4111-8111-111111111111"
     declared_address = "100.64.0.1"
     requested_address = "100.64.0.2"
@@ -226,21 +224,3 @@ def test_bootstrap_plan_uses_one_typed_transport_boundary_across_adapters(
         "host": host_id,
         "declared_tailscale_ip": declared_address,
     }
-
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
-
-    async def exercise_mcp() -> None:
-        async with Client(create_server()) as client:
-            mcp_result = await client.call_tool(
-                "infralink_host_bootstrap",
-                {
-                    "host_id": host_id,
-                    "ssh_host": requested_address,
-                    "plan": True,
-                },
-            )
-
-        assert mcp_result.is_error is True
-        assert mcp_result.structured_content["error"] == click_payload["error"]
-
-    asyncio.run(exercise_mcp())

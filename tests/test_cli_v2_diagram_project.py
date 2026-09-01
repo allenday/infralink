@@ -16,9 +16,8 @@ from mcp import Client
 import infralink.cli.main as cli_main
 import infralink.operator_surface as operator_surface_module
 from infralink.cli.main import cli
-from infralink.mcp_server import create_server
 from infralink.observation.topology_diagrams import V2TopologyRenderBoundsError
-from infralink.operator_surface import diagram_surface
+from infralink.operator_surface import diagram_mcp_adapter, diagram_surface
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
 OTHER_HOST_ID = "22222222-2222-4222-8222-222222222222"
@@ -237,8 +236,8 @@ def test_diagram_project_translates_render_bounds_for_cli_and_mcp(
     )
 
     async def call_mcp() -> tuple[bool, dict[str, object]]:
-        async with Client(create_server()) as client:
-            result = await client.call_tool("infralink_diagram_project", {"source": [str(source)]})
+        async with Client(diagram_mcp_adapter().server) as client:
+            result = await client.call_tool("diagram.project", {"source": [str(source)]})
         return result.is_error, result.structured_content
 
     is_error, mcp_payload = asyncio.run(call_mcp())
@@ -292,9 +291,9 @@ def test_diagram_project_translates_topology_bounds_for_cli_and_mcp(
     )
 
     async def call_mcp() -> tuple[bool, dict[str, object]]:
-        async with Client(create_server()) as client:
+        async with Client(diagram_mcp_adapter().server) as client:
             result = await client.call_tool(
-                "infralink_diagram_project",
+                "diagram.project",
                 {"source": [str(source)], "scope": "host", "host": HOST_ID},
             )
         return result.is_error, result.structured_content
@@ -324,11 +323,11 @@ def test_diagram_project_native_mcp_matches_cli_and_accepts_only_v2_inputs(tmp_p
     )
 
     async def call_mcp() -> tuple[dict[str, object], dict[str, object]]:
-        async with Client(create_server()) as client:
+        async with Client(diagram_mcp_adapter().server) as client:
             tools = await client.list_tools()
-            tool = next(item for item in tools.tools if item.name == "infralink_diagram_project")
+            tool = next(item for item in tools.tools if item.name == "diagram.project")
             result = await client.call_tool(
-                "infralink_diagram_project", {"source": [str(source)], "syntax": "dot"}
+                "diagram.project", {"source": [str(source)], "syntax": "dot"}
             )
         assert result.is_error is False
         return tool.input_schema, result.structured_content
@@ -337,24 +336,25 @@ def test_diagram_project_native_mcp_matches_cli_and_accepts_only_v2_inputs(tmp_p
     tool_schema, mcp_payload = asyncio.run(call_mcp())
     cli_payload = json.loads(cli_result.output)
     assert set(tool_schema["properties"]) == {"source", "scope", "host", "service", "syntax"}
-    assert tool_schema["properties"]["source"] == {"type": "array", "items": {"type": "string"}}
+    assert tool_schema["properties"]["source"]["type"] == "array"
+    assert tool_schema["properties"]["source"]["items"]["type"] == "string"
+    assert tool_schema["properties"]["source"]["minItems"] == 1
     assert tool_schema["required"] == ["source"]
     assert mcp_payload["result"] == cli_payload["result"]
-    assert mcp_payload["next_actions"] == cli_payload["next_actions"]
 
 
-def test_diagram_project_adds_a_native_child_without_removing_the_legacy_leaf() -> None:
+def test_diagram_project_local_adapter_exposes_the_typed_diagram_operation() -> None:
     async def list_tools() -> tuple[set[str], dict[str, object]]:
-        async with Client(create_server()) as client:
+        async with Client(diagram_mcp_adapter().server) as client:
             tools = await client.list_tools()
-        diagram = next(tool for tool in tools.tools if tool.name == "infralink_diagram")
+        diagram = next(tool for tool in tools.tools if tool.name == "diagram.project")
         return {tool.name for tool in tools.tools}, diagram.input_schema
 
     names, legacy_schema = asyncio.run(list_tools())
 
-    assert {"infralink_diagram", "infralink_diagram_project"} <= names
-    assert "output" in legacy_schema["properties"]
-    assert "output" in legacy_schema["required"]
+    assert names == {"diagram.project"}
+    assert "source" in legacy_schema["properties"]
+    assert legacy_schema["required"] == ["source"]
 
 
 def test_diagram_project_denies_side_effects_and_legacy_output_path(

@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+import agent_surface
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -198,12 +199,18 @@ def test_native_mcp_returns_a_canonical_usage_envelope_for_invalid_bounded_integ
 
 def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
     async def exercise_stdio() -> None:
+        agent_surface_source = Path(agent_surface.__file__).resolve().parents[1]
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "infralink", "mcp", "serve"],
             env={
                 **os.environ,
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+                "PYTHONPATH": os.pathsep.join(
+                    (
+                        str(agent_surface_source),
+                        str(Path(__file__).resolve().parents[1] / "src"),
+                    )
+                ),
             },
         )
         async with stdio_client(parameters) as (read_stream, write_stream):
