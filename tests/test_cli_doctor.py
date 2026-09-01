@@ -106,6 +106,43 @@ def test_gatus_evidence_matches_opaque_result_key_without_rendered_artifacts(
     assert payload["result"]["status"] == "healthy"
 
 
+def test_doctor_rejects_cross_source_observer_inputs_before_live_join(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, bindings = _observation_inputs(tmp_path)
+    other_checkout_bindings = tmp_path / "other-checkout" / "adapter-bindings.yml"
+    other_checkout_bindings.parent.mkdir()
+    other_checkout_bindings.write_text(bindings.read_text(encoding="utf-8"), encoding="utf-8")
+    calls: list[tuple[str, str | None]] = []
+
+    def fetch(url: str, token: str | None) -> list[dict[str, object]]:
+        calls.append((url, token))
+        return [
+            {
+                "key": "gatus-key-for-declared-gatus-edge",
+                "results": [{"success": True}],
+            }
+        ]
+
+    monkeypatch.setattr("infralink.cli.doctor._fetch_gatus_statuses", fetch)
+    result = _invoke(
+        "--observation-plan",
+        str(plan),
+        "--adapter-bindings",
+        str(other_checkout_bindings),
+        "--gatus-url",
+        "http://gatus.test",
+        "edge",
+        OBSERVATION_ID,
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 3
+    assert payload["error"]["code"] == "input_load_failed"
+    assert payload["error"]["details"]["source"] == "observation_inputs"
+    assert calls == []
+
+
 def test_gatus_evidence_rejects_name_only_status_when_result_key_does_not_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

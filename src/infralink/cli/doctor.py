@@ -277,6 +277,25 @@ def _load_adapter_bindings(path: Path) -> AdapterBindings:
         ) from None
 
 
+def _require_same_observer_source_directory(observation_plan: Path, adapter_bindings: Path) -> None:
+    """Reject observer inputs that do not originate from one canonical source tree."""
+
+    plan_directory = observation_plan.resolve().parent
+    bindings_directory = adapter_bindings.resolve().parent
+    if plan_directory != bindings_directory:
+        raise CliFailure(
+            code=ErrorCode.INPUT_LOAD_FAILED,
+            message="Observation plan and adapter bindings must share one source directory",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Provide observer inputs from the same registry checkout",
+            details={
+                "source": "observation_inputs",
+                "observation_plan": str(observation_plan),
+                "adapter_bindings": str(adapter_bindings),
+            },
+        )
+
+
 def _dependency_matches(
     dependency: dict[str, Any], target_type: DoctorKind, target_id: str, profile_services: set[str]
 ) -> bool:
@@ -1089,6 +1108,8 @@ def doctor(
     adapter_bindings = adapter_bindings or registry_companion(
         ctx.registry_path, "operations/observation/adapter-bindings.yml"
     )
+    if observation_plan is not None and adapter_bindings is not None:
+        _require_same_observer_source_directory(observation_plan, adapter_bindings)
     v2_observation_source = registry_companion(ctx.registry_path, V2_OBSERVATION_RELATIVE)
     if target_type is None:
         if target_ref is not None:
