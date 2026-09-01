@@ -163,7 +163,10 @@ def test_doctor_derives_standard_sources_from_configured_registry(
     observation = checkout / "operations/observation"
     observation.mkdir(parents=True)
     (observation / "core-plan.json").write_text('{"dependencies": []}', encoding="utf-8")
-    (observation / "adapter-bindings.yml").write_text("bindings: []\n", encoding="utf-8")
+    (observation / "adapter-bindings.yml").write_text(
+        "schema_version: infra-observe.adapter-bindings.v2\nbindings: []\n",
+        encoding="utf-8",
+    )
     config_home = tmp_path / "config"
     (config_home / "infralink").mkdir(parents=True)
     (config_home / "infralink/config.yml").write_text(
