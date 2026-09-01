@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -93,6 +94,7 @@ def validate_fleet(
     host: str | None = None,
     strict: bool = False,
     live: bool = False,
+    now: datetime | None = None,
 ) -> FleetValidationResult:
     """Validate static registry semantics without any host-side operation."""
     catalog = load_role_service_catalog(sources.registry_path)
@@ -112,17 +114,13 @@ def validate_fleet(
     for item in active_hosts:
         _validate_host(item, catalog, diagnostics, sources.registry_path)
     _validate_database_edges(sources, diagnostics)
+    live_evidence = None
     if live:
-        diagnostics.append(
-            FleetValidationDiagnostic(
-                code="live_evidence_unavailable",
-                severity="capability_gap",
-                message="Live fleet evidence is not registered for this operation",
-                subject_kind="fleet",
-                subject_id="fleet",
-                path=None,
-            )
-        )
+        from infralink.fleet.live_evidence import evaluate_live_evidence
+
+        evaluation = evaluate_live_evidence(sources, now=now)
+        diagnostics.extend(evaluation.diagnostics)
+        live_evidence = evaluation.freshness
 
     ordered = tuple(
         sorted(
@@ -143,6 +141,7 @@ def validate_fleet(
             warning_count=warnings,
             capability_gap_count=gaps,
         ),
+        live_evidence=live_evidence,
     )
 
 

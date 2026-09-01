@@ -28,10 +28,25 @@ This command never reads BWS, environment secrets, databases, Docker, SSH, or
 rendered Compose templates. It never renders, reloads, restarts, reconciles, or
 otherwise changes a host. Those actions remain private controller concerns.
 
-`--live` is intentionally fail-closed in the current release. It adds a
-`live_evidence_unavailable` capability-gap diagnostic rather than pretending to
-perform a health check. A future bounded read-only evidence provider must be
-introduced before that mode can report live fleet evidence.
+`--live` reads one controller-produced signed evidence artifact. It does not
+contact Prometheus, a host, or a secret service. The local operator config,
+not the CLI or MCP request, selects both the artifact and trusted public keys:
+
+```yaml
+registry: /srv/infra-registry
+fleet_prometheus_evidence:
+  artifact_path: /var/lib/infralink-ops/fleet-prometheus-evidence.json
+  trusted_public_keys:
+    fleet-evidence-v1: BASE64_RAW_ED25519_PUBLIC_KEY
+```
+
+`artifact_path` must be absolute. `trusted_public_keys` maps bounded signing
+key IDs to base64-encoded raw 32-byte Ed25519 public keys. The reader verifies
+the selected checkout's Git revision, the Registry's exact
+`operations/observation/fleet-prometheus-targets.yml` target set, the
+signature, signed freshness window, and each target outcome. Missing, stale,
+untrusted, incomplete, or provider-failed evidence returns normal negative
+diagnostics; it never queries or repairs anything.
 
 ## Repair Boundary
 
