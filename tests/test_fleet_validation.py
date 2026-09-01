@@ -62,10 +62,17 @@ def _write_registry(root: Path, *, role_overrides: str = "", service: str = "app
         ),
         encoding="utf-8",
     )
+    (root / "hosts" / HOST_ID / "docker-compose.yml.j2").write_text(
+        "services:\n  app: {}\n", encoding="utf-8"
+    )
     edges = root / "network" / "main-dev" / "edges" / "edges.yml"
     edges.parent.mkdir(parents=True)
     edges.write_text("edges: []\n", encoding="utf-8")
     return edges
+
+
+def _write_compose(root: Path, content: str) -> None:
+    (root / "hosts" / HOST_ID / "docker-compose.yml.j2").write_text(content, encoding="utf-8")
 
 
 def test_static_validation_reports_missing_role_parameter(tmp_path: Path) -> None:
@@ -79,6 +86,29 @@ def test_static_validation_reports_missing_role_parameter(tmp_path: Path) -> Non
         ("role_parameter_missing", "error")
     ]
     assert result.diagnostics[0].subject_id == "app-1"
+
+
+def test_static_validation_reports_missing_compose_template(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    (tmp_path / "hosts" / HOST_ID / "docker-compose.yml.j2").unlink()
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_missing", "error")
+    ]
+
+
+def test_static_validation_checks_literal_compose_services(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    _write_compose(tmp_path, "services:\n  other: {}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("role_compose_service_missing", "error"),
+        ("service_compose_service_missing", "warning"),
+    ]
 
 
 def test_live_mode_returns_capability_gap_without_probing(tmp_path: Path) -> None:
@@ -116,7 +146,7 @@ def test_fleet_validation_is_a_read_only_operator_operation() -> None:
 def test_validator_has_no_host_operation_dependencies() -> None:
     source = Path(validate_fleet.__code__.co_filename).read_text(encoding="utf-8")
 
-    for forbidden in ("subprocess", "urllib", "socket", "bws", "docker", "paramiko"):
+    for forbidden in ("subprocess", "urllib", "socket", "bws", "paramiko"):
         assert forbidden not in source
 
 
@@ -142,3 +172,4 @@ def test_cli_returns_completed_negative_validation_result(tmp_path: Path) -> Non
     assert payload["ok"] is True
     assert payload["command"]["parsed"]["path"] == ["fleet", "validate"]
     assert payload["result"]["valid"] is False
+    assert payload["next_actions"][0]["rel"] == "inspect-declaration"

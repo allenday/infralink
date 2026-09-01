@@ -97,7 +97,7 @@ def validate_fleet(
     diagnostics: list[FleetValidationDiagnostic] = []
     _validate_unique_hosts(active_hosts, diagnostics)
     for item in active_hosts:
-        _validate_host(item, catalog, diagnostics)
+        _validate_host(item, catalog, diagnostics, sources.registry_path)
     _validate_database_edges(sources, diagnostics)
     if live:
         diagnostics.append(
@@ -159,13 +159,17 @@ def _validate_unique_hosts(hosts: list[Host], diagnostics: list[FleetValidationD
 
 
 def _validate_host(
-    host: Host, catalog: RoleServiceCatalog, diagnostics: list[FleetValidationDiagnostic]
+    host: Host,
+    catalog: RoleServiceCatalog,
+    diagnostics: list[FleetValidationDiagnostic],
+    registry_root: Path,
 ) -> None:
     roles = host.roles
     overrides = host.role_overrides
     services = set(host.services)
     name = host.canonical_name
     host_id = host.uuid
+    compose_services = _compose_services(host, registry_root, diagnostics)
     for role_name in roles:
         role = catalog.roles.get(role_name)
         if role is None:
@@ -205,7 +209,11 @@ def _validate_host(
                         role_name,
                     )
                 )
-        if role.compose_service and role.compose_service not in services:
+        if (
+            compose_services is not None
+            and role.compose_service
+            and role.compose_service not in compose_services
+        ):
             diagnostics.append(
                 _host_diagnostic(
                     "role_compose_service_missing",
@@ -229,7 +237,11 @@ def _validate_host(
                     service_name,
                 )
             )
-        elif definition.compose_service and definition.compose_service not in services:
+        elif (
+            compose_services is not None
+            and definition.compose_service
+            and definition.compose_service not in compose_services
+        ):
             diagnostics.append(
                 _host_diagnostic(
                     "service_compose_service_missing",
@@ -240,6 +252,30 @@ def _validate_host(
                     service_name,
                 )
             )
+
+
+def _compose_services(
+    host: Host, registry_root: Path, diagnostics: list[FleetValidationDiagnostic]
+) -> set[str] | None:
+    path = registry_root / "hosts" / host.uuid / "docker-compose.yml.j2"
+    if not path.is_file():
+        diagnostics.append(
+            FleetValidationDiagnostic(
+                code="compose_template_missing",
+                severity="error",
+                message="Active host has no declared Compose template",
+                subject_kind="host",
+                subject_id=host.canonical_name,
+                path=f"hosts.{host.uuid}.docker-compose.yml.j2",
+            )
+        )
+        return None
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        document = {}
+    services = document.get("services", {}) if isinstance(document, dict) else {}
+    return set(services) if isinstance(services, dict) else set()
 
 
 def _host_diagnostic(
