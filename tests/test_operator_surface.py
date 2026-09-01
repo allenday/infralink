@@ -237,9 +237,7 @@ def test_host_create_operation_uses_checkout_root_and_refuses_runtime_cache(
     checkout = tmp_path / "authoring"
     (checkout / "hosts").mkdir(parents=True)
 
-    dry_run = host_create_operation(
-        HostCreateRequest(name="new-node", address="100.64.1.9")
-    )
+    dry_run = host_create_operation(HostCreateRequest(name="new-node", address="100.64.1.9"))
     assert dry_run.mode == "dry_run"
     assert dry_run.manifest_path is None
     assert dry_run.manifest["hosts"][dry_run.host_id]["tailscale_ip"] == "100.64.1.9"
@@ -323,9 +321,7 @@ def test_host_create_refuses_a_generated_host_directory_symlink(
     hosts.mkdir(parents=True)
     outside = tmp_path / "outside" / host_id
     (hosts / host_id).symlink_to(outside, target_is_directory=True)
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_authoring.uuid4", lambda: UUID(host_id)
-    )
+    monkeypatch.setattr("infralink.operator_operations.host_authoring.uuid4", lambda: UUID(host_id))
 
     with pytest.raises(OperationError, match="must not resolve inside the managed runtime"):
         host_create_operation(

@@ -191,9 +191,7 @@ def test_host_create_refuses_an_existing_generated_uuid_directory(
     registry_root = _registry_root(tmp_path)
     host_id = "11111111-1111-4111-8111-111111111111"
     (registry_root / "hosts" / host_id).mkdir()
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_authoring.uuid4", lambda: UUID(host_id)
-    )
+    monkeypatch.setattr("infralink.operator_operations.host_authoring.uuid4", lambda: UUID(host_id))
 
     result = CliRunner().invoke(
         cli,
