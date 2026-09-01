@@ -635,11 +635,18 @@ class FleetValidationSummary(ContractModel):
     capability_gap_count: int
 
 
+class FleetLiveEvidence(ContractModel):
+    status: Literal["unavailable", "invalid", "stale", "fresh"]
+    generated_at: str | None
+    max_age_seconds: int | None
+
+
 class FleetValidationResult(ContractModel):
     valid: bool
     mode: Literal["static", "live"]
     diagnostics: tuple[FleetValidationDiagnostic, ...]
     summary: FleetValidationSummary
+    live_evidence: FleetLiveEvidence | None = None
 
 
 class ResolveResult(ContractModel):

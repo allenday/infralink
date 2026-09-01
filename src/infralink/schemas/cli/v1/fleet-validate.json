@@ -140,6 +140,50 @@
       "title": "ErrorDetail",
       "type": "object"
     },
+    "FleetLiveEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Generated At"
+        },
+        "max_age_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Max Age Seconds"
+        },
+        "status": {
+          "enum": [
+            "unavailable",
+            "invalid",
+            "stale",
+            "fresh"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "generated_at",
+        "max_age_seconds"
+      ],
+      "title": "FleetLiveEvidence",
+      "type": "object"
+    },
     "FleetValidationDiagnostic": {
       "additionalProperties": false,
       "properties": {
@@ -205,6 +249,17 @@
           },
           "title": "Diagnostics",
           "type": "array"
+        },
+        "live_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FleetLiveEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "mode": {
           "enum": [

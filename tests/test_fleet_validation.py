@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
+import base64
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from pydantic import ValidationError
 
 from infralink.cli.main import cli
+from infralink.fleet.live_evidence import FleetPrometheusTargets
+from infralink.fleet.prometheus_evidence import FleetPrometheusEvidence
 from infralink.fleet.validation import validate_fleet
-from infralink.mcp_server import _native_paths
+from infralink.mcp_server import _native_paths, _native_tool
+from infralink.operator_config import FleetPrometheusEvidenceConfig
 from infralink.operator_sources import SourceRequest, load_sources
 from infralink.operator_surface import operator_surface
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
 EDGE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+REGISTRY_REVISION = "0123456789abcdef0123456789abcdef01234567"
+TARGET_ID = "prometheus-service-app-metrics-up"
 
 
 def _write_registry(root: Path, *, role_overrides: str = "", service: str = "app") -> Path:
@@ -235,16 +246,392 @@ def test_static_validation_reports_include_depth_as_capability_gap(tmp_path: Pat
     ]
 
 
-def test_live_mode_returns_capability_gap_without_probing(tmp_path: Path) -> None:
-    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+def _live_config(tmp_path: Path, evidence_path: Path) -> Path:
+    private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    public_key = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    other_private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33)))
+    other_public_key = other_private_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    config = tmp_path / "operator.yml"
+    config.write_text(
+        "\n".join(
+            [
+                f"registry: {tmp_path}",
+                "fleet_prometheus_evidence:",
+                f"  artifact_path: {evidence_path}",
+                "  trusted_public_keys:",
+                f"    fleet-evidence-v1: {base64.b64encode(public_key).decode('ascii')}",
+                f"    other-evidence-v1: {base64.b64encode(other_public_key).decode('ascii')}",
+                "  signing_binding_key_ids:",
+                "    infralink-ops/fleet-prometheus-evidence-signing:",
+                "      - fleet-evidence-v1",
+                "    infralink-ops/other-signing-binding:",
+                "      - other-evidence-v1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config
 
-    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)), live=True)
+
+def _write_live_declaration(root: Path) -> None:
+    path = root / "operations" / "observation" / "fleet-prometheus-targets.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "\n".join(
+            [
+                "schema_version: infralink.fleet-prometheus-targets/v1",
+                "controller_bindings:",
+                "  prometheus_credential_binding_ref: infralink-ops/fleet-prometheus-readonly",
+                "  signing_binding_ref: infralink-ops/fleet-prometheus-evidence-signing",
+                "targets:",
+                f"  - id: {TARGET_ID}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_registry_revision(root: Path) -> None:
+    git_dir = root / ".git"
+    reference = git_dir / "refs" / "heads" / "main"
+    reference.parent.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+    reference.write_text(f"{REGISTRY_REVISION}\n", encoding="ascii")
+
+
+def _write_linked_worktree_revision(root: Path, *, packed_refs: bool) -> tuple[Path, Path]:
+    common = root.parent / f"common-git-{root.name}"
+    worktree = common / "worktrees" / "registry"
+    worktree.mkdir(parents=True)
+    (root / ".git").write_text(f"gitdir: {worktree}\n", encoding="utf-8")
+    (worktree / "gitdir").write_text(f"{root / '.git'}\n", encoding="utf-8")
+    (worktree / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+    (worktree / "commondir").write_text("../..\n", encoding="ascii")
+    if packed_refs:
+        (common / "packed-refs").write_text(
+            f"{REGISTRY_REVISION} refs/heads/main\n", encoding="ascii"
+        )
+    else:
+        reference = common / "refs" / "heads" / "main"
+        reference.parent.mkdir(parents=True)
+        reference.write_text(f"{REGISTRY_REVISION}\n", encoding="ascii")
+    return common, worktree
+
+
+def _write_live_evidence(
+    path: Path,
+    *,
+    key_id: str = "fleet-evidence-v1",
+    private_key: Ed25519PrivateKey | None = None,
+    **overrides: object,
+) -> None:
+    private_key = private_key or Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    payload: dict[str, object] = {
+        "schema_version": "infralink.fleet-prometheus-evidence/v1",
+        "registry_revision": REGISTRY_REVISION,
+        "generated_at": "2026-09-01T12:00:00Z",
+        "window_seconds": 600,
+        "max_age_seconds": 900,
+        "targets": {
+            TARGET_ID: {
+                "status": "observed",
+                "observed_at": "2026-09-01T11:59:55Z",
+                "detail_code": "sample_observed",
+            }
+        },
+        "signature": {
+            "key_id": key_id,
+            "algorithm": "ed25519",
+            "value": base64.b64encode(bytes(64)).decode("ascii"),
+        },
+    }
+    payload.update(overrides)
+    evidence = FleetPrometheusEvidence.model_validate(payload)
+    signature = base64.b64encode(private_key.sign(evidence.canonical_signed_bytes())).decode(
+        "ascii"
+    )
+    path.write_text(
+        evidence.model_copy(
+            update={"signature": evidence.signature.model_copy(update={"value": signature})}
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+
+def _live_result(tmp_path: Path, monkeypatch, evidence_path: Path):
+    edges = tmp_path / "network" / "main-dev" / "edges" / "edges.yml"
+    if not edges.exists():
+        edges = _write_registry(tmp_path, role_overrides="workers: 1")
+        _write_registry_revision(tmp_path)
+        _write_live_declaration(tmp_path)
+    monkeypatch.setenv("INFRALINK_CONFIG", str(_live_config(tmp_path, evidence_path)))
+    return validate_fleet(
+        load_sources(SourceRequest(registry=tmp_path, edges=edges)),
+        live=True,
+        now=datetime(2026, 9, 1, 12, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_live_evidence_contract_is_strict_and_registry_only() -> None:
+    with pytest.raises(ValidationError):
+        FleetPrometheusTargets.model_validate(
+            {"schema_version": "infralink.fleet-prometheus-targets/v1", "targets": []}
+        )
+
+
+def test_live_evidence_operator_config_is_strict_and_local() -> None:
+    trusted_key = base64.b64encode(bytes(range(32))).decode("ascii")
+    with pytest.raises(ValidationError):
+        FleetPrometheusEvidenceConfig.model_validate(
+            {
+                "artifact_path": "evidence.json",
+                "trusted_public_keys": {"fleet-evidence-v1": trusted_key},
+                "signing_binding_key_ids": {
+                    "infralink-ops/fleet-prometheus-evidence-signing": ["fleet-evidence-v1"]
+                },
+            }
+        )
+    with pytest.raises(ValidationError):
+        FleetPrometheusEvidenceConfig.model_validate(
+            {
+                "artifact_path": "/var/lib/infralink/evidence.json",
+                "trusted_public_keys": {"fleet-evidence-v1": "not-a-public-key"},
+                "signing_binding_key_ids": {
+                    "infralink-ops/fleet-prometheus-evidence-signing": ["fleet-evidence-v1"]
+                },
+                "unexpected": "rejected",
+            }
+        )
+
+
+def test_live_validation_has_no_public_provider_or_artifact_inputs() -> None:
+    native = _native_tool("infralink_fleet_validate", ("fleet", "validate"))
+    properties = native.input_schema["properties"]
+
+    for forbidden in (
+        "artifact_path",
+        "evidence_path",
+        "prometheus_url",
+        "query",
+        "token",
+        "credential",
+        "trusted_public_keys",
+    ):
+        assert forbidden not in properties
+
+    source = Path(FleetPrometheusTargets.__module__.replace(".", "/") + ".py")
+    implementation = (Path(__file__).parents[1] / "src" / source).read_text(encoding="utf-8")
+    for forbidden in ("subprocess", "urllib", "socket", "requests", "httpx"):
+        assert forbidden not in implementation
+
+
+def test_live_cli_rejects_artifact_and_provider_options() -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["fleet", "validate", "--live", "--artifact-path", "/tmp/evidence.json"],
+    )
+
+    assert result.exit_code == 2
+
+
+def test_static_mode_does_not_read_configured_live_evidence(tmp_path: Path, monkeypatch) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    monkeypatch.setenv("INFRALINK_CONFIG", str(_live_config(tmp_path, tmp_path / "absent.json")))
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert result.valid is True
+    assert result.mode == "static"
+    assert result.live_evidence is None
+
+
+def test_live_mode_reports_unavailable_configured_evidence(tmp_path: Path, monkeypatch) -> None:
+    result = _live_result(tmp_path, monkeypatch, tmp_path / "absent.json")
 
     assert result.valid is False
     assert result.mode == "live"
-    assert [(item.code, item.severity) for item in result.diagnostics] == [
-        ("live_evidence_unavailable", "capability_gap")
-    ]
+    assert result.live_evidence is not None
+    assert result.live_evidence.status == "unavailable"
+    assert {item.code for item in result.diagnostics} == {"live_evidence_unavailable"}
+
+
+def test_live_mode_rejects_an_unbounded_configured_artifact(tmp_path: Path, monkeypatch) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_bytes(b"{" + b" " * 1_048_576)
+
+    result = _live_result(tmp_path, monkeypatch, evidence_path)
+
+    assert result.valid is False
+    assert {item.code for item in result.diagnostics} == {"live_evidence_unavailable"}
+
+
+def test_live_mode_accepts_fresh_signed_complete_evidence(tmp_path: Path, monkeypatch) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(evidence_path)
+    result = _live_result(tmp_path, monkeypatch, evidence_path)
+
+    assert result.valid is True
+    assert result.live_evidence is not None
+    assert result.live_evidence.status == "fresh"
+    assert result.live_evidence.generated_at == "2026-09-01T12:00:00Z"
+
+
+@pytest.mark.parametrize("packed_refs", [False, True], ids=["direct-ref", "packed-ref"])
+def test_live_mode_accepts_evidence_from_a_linked_worktree_symbolic_head(
+    tmp_path: Path, monkeypatch, packed_refs: bool
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(evidence_path)
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    _write_linked_worktree_revision(tmp_path, packed_refs=packed_refs)
+    _write_live_declaration(tmp_path)
+    monkeypatch.setenv("INFRALINK_CONFIG", str(_live_config(tmp_path, evidence_path)))
+
+    result = validate_fleet(
+        load_sources(SourceRequest(registry=tmp_path, edges=edges)),
+        live=True,
+        now=datetime(2026, 9, 1, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is True
+    assert result.live_evidence is not None
+    assert result.live_evidence.status == "fresh"
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["foreign-gitdir", "malicious-commondir", "direct-ref-symlink", "packed-refs-symlink"],
+)
+def test_live_mode_rejects_git_metadata_outside_the_selected_checkout_layout(
+    tmp_path: Path, monkeypatch, layout: str
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(evidence_path)
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    if layout == "foreign-gitdir":
+        foreign = tmp_path.parent / "foreign-gitdir"
+        foreign.mkdir()
+        (foreign / "HEAD").write_text(f"{REGISTRY_REVISION}\n", encoding="ascii")
+        (tmp_path / ".git").write_text(f"gitdir: {foreign}\n", encoding="utf-8")
+    else:
+        common, worktree = _write_linked_worktree_revision(
+            tmp_path, packed_refs=layout == "packed-refs-symlink"
+        )
+        foreign = tmp_path.parent / f"foreign-{layout}"
+        foreign.write_text(f"{REGISTRY_REVISION}\n", encoding="ascii")
+        if layout == "malicious-commondir":
+            (worktree / "commondir").write_text("../../foreign\n", encoding="ascii")
+        elif layout == "direct-ref-symlink":
+            reference = common / "refs" / "heads" / "main"
+            reference.unlink()
+            reference.symlink_to(foreign)
+        else:
+            packed = common / "packed-refs"
+            packed.unlink()
+            packed.symlink_to(foreign)
+    _write_live_declaration(tmp_path)
+    monkeypatch.setenv("INFRALINK_CONFIG", str(_live_config(tmp_path, evidence_path)))
+
+    result = validate_fleet(
+        load_sources(SourceRequest(registry=tmp_path, edges=edges)),
+        live=True,
+        now=datetime(2026, 9, 1, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is False
+    assert {item.code for item in result.diagnostics} == {"live_evidence_revision_unavailable"}
+
+
+def test_live_mode_rejects_key_trusted_for_a_different_signing_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(
+        evidence_path,
+        key_id="other-evidence-v1",
+        private_key=Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33))),
+    )
+
+    result = _live_result(tmp_path, monkeypatch, evidence_path)
+
+    assert result.valid is False
+    assert {item.code for item in result.diagnostics} == {"live_evidence_key_unauthorized"}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "code"),
+    [
+        (
+            {
+                "generated_at": "2026-09-01T10:00:00Z",
+                "targets": {
+                    TARGET_ID: {
+                        "status": "observed",
+                        "observed_at": "2026-09-01T09:59:55Z",
+                        "detail_code": "sample_observed",
+                    }
+                },
+            },
+            "live_evidence_stale",
+        ),
+        ({"registry_revision": "f" * 40}, "live_evidence_revision_mismatch"),
+    ],
+)
+def test_live_mode_rejects_stale_or_wrong_revision_evidence(
+    tmp_path: Path, monkeypatch, overrides: dict[str, object], code: str
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(evidence_path, **overrides)
+    result = _live_result(tmp_path, monkeypatch, evidence_path)
+
+    assert result.valid is False
+    assert code in {item.code for item in result.diagnostics}
+
+
+def test_live_mode_rejects_invalid_signature_incomplete_coverage_and_provider_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(evidence_path)
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    payload["signature"]["value"] = base64.b64encode(bytes(64)).decode("ascii")
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+    invalid_signature = _live_result(tmp_path, monkeypatch, evidence_path)
+    assert "live_evidence_signature_invalid" in {
+        item.code for item in invalid_signature.diagnostics
+    }
+
+    _write_live_evidence(
+        evidence_path,
+        targets={
+            "other-target": {
+                "status": "observed",
+                "observed_at": "2026-09-01T11:59:55Z",
+                "detail_code": "sample_observed",
+            }
+        },
+    )
+    incomplete = _live_result(tmp_path, monkeypatch, evidence_path)
+    assert "live_evidence_coverage_incomplete" in {item.code for item in incomplete.diagnostics}
+
+    _write_live_evidence(
+        evidence_path,
+        targets={
+            TARGET_ID: {
+                "status": "query_error",
+                "observed_at": None,
+                "detail_code": "query_timeout",
+            }
+        },
+    )
+    provider_failure = _live_result(tmp_path, monkeypatch, evidence_path)
+    assert "live_evidence_provider_failure" in {item.code for item in provider_failure.diagnostics}
 
 
 def test_static_validation_reports_unknown_role_and_is_deterministic(tmp_path: Path) -> None:
