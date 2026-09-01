@@ -163,6 +163,21 @@ def test_static_validation_rejects_literal_include_outside_registry(tmp_path: Pa
     ]
 
 
+def test_static_validation_rejects_whitespace_control_include_outside_registry(
+    tmp_path: Path,
+) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    outside = tmp_path.parent / "outside.yml.j2"
+    outside.write_text("services:\n  app: {}\n", encoding="utf-8")
+    _write_compose(tmp_path, "{%- include '../../outside.yml.j2' -%}\n")
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_unsafe", "capability_gap")
+    ]
+
+
 def test_static_validation_reports_unresolved_include_as_capability_gap(tmp_path: Path) -> None:
     edges = _write_registry(tmp_path, role_overrides="workers: 1")
     _write_compose(tmp_path, "{% include 'not-present.yml.j2' %}\n")
@@ -257,6 +272,8 @@ def test_validator_has_no_host_operation_dependencies() -> None:
 
     for forbidden in ("subprocess", "urllib", "socket", "bws", "paramiko"):
         assert forbidden not in source
+    assert '"docker"' not in source
+    assert "'docker'" not in source
 
 
 def test_cli_returns_completed_negative_validation_result(tmp_path: Path) -> None:

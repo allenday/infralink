@@ -22,8 +22,8 @@ _DB_PROTOCOLS = {"postgres", "postgresql", "mysql", "mariadb"}
 _DB_GLOBAL_USERS = {"admin": "root", "ops": "ops"}
 _DB_SCOPED_ROLES = {"rw", "ro"}
 _DB_ROLES = {*_DB_GLOBAL_USERS, *_DB_SCOPED_ROLES}
-_LITERAL_INCLUDE_PATTERN = re.compile(r"{%\s*include\s+['\"]([^'\"]+)['\"]\s*%}")
-_INCLUDE_PATTERN = re.compile(r"{%\s*include\b[^%]*%}")
+_LITERAL_INCLUDE_PATTERN = re.compile(r"{%-?\s*include\s+['\"]([^'\"]+)['\"]\s*-?%}")
+_INCLUDE_PATTERN = re.compile(r"{%-?\s*include\b[^%]*?-?%}")
 _MAX_LITERAL_INCLUDE_DEPTH = 16
 
 __all__ = ["FleetValidationResult", "validate_fleet"]
