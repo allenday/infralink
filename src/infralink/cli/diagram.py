@@ -215,6 +215,8 @@ def project(
         code = (
             ErrorCode.DIAGRAM_RENDER_BOUNDS_EXCEEDED
             if error.code == "diagram_render_bounds_exceeded"
+            else ErrorCode.DIAGRAM_TOPOLOGY_BOUNDS_EXCEEDED
+            if error.code == "diagram_topology_bounds_exceeded"
             else ErrorCode.DIAGRAM_SOURCE_INVALID
         )
         raise CliFailure(

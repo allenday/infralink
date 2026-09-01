@@ -49,6 +49,7 @@ from infralink.cli.queries import entity_not_found, list_services
 from infralink.fleet.validation import FleetValidationResult, validate_fleet
 from infralink.observation.api import ProjectValidationError, project_v2_topology_diagram
 from infralink.observation.models import CanonicalId, HostId
+from infralink.observation.topology import V2TopologyBoundsError
 from infralink.observation.topology_diagrams import (
     V2TopologyRenderBoundsError,
     render_v2_dot,
@@ -472,6 +473,13 @@ def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
             focal_host_id=request.host,
             focal_service_instance_ref=request.service,
         )
+    except V2TopologyBoundsError as error:
+        raise OperationError(
+            "diagram_topology_bounds_exceeded",
+            "V2 topology declaration exceeds the projection item limit",
+            details=(),
+            fix="Reduce or split the full declaration; narrowing diagram focus does not reduce this bound.",
+        ) from error
     except ProjectValidationError as error:
         first = error.report.diagnostics.diagnostics[0]
         raise OperationError(

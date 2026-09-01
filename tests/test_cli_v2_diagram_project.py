@@ -233,6 +233,39 @@ def test_diagram_project_translates_render_bounds_for_cli_and_mcp(
     assert mcp_payload["error"] == cli_payload["error"]
 
 
+def test_diagram_project_translates_topology_bounds_for_cli_and_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import infralink.observation.topology as topology
+
+    source = _source(tmp_path)
+    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 1)
+    cli_result = CliRunner().invoke(
+        cli, ["--output", "json", "diagram", "project", "--source", str(source)]
+    )
+
+    async def call_mcp() -> tuple[bool, dict[str, object]]:
+        async with Client(create_server()) as client:
+            result = await client.call_tool("infralink_diagram_project", {"source": [str(source)]})
+        return result.is_error, result.structured_content
+
+    is_error, mcp_payload = asyncio.run(call_mcp())
+    cli_payload = json.loads(cli_result.output)
+    assert cli_result.exit_code == 3
+    assert cli_payload["error"] == {
+        "code": "diagram_topology_bounds_exceeded",
+        "message": "V2 topology declaration exceeds the projection item limit",
+        "details": {},
+    }
+    assert (
+        cli_payload["fix"]
+        == "Reduce or split the full declaration; narrowing diagram focus does not reduce this bound."
+    )
+    assert is_error is True
+    assert mcp_payload["error"] == cli_payload["error"]
+    assert mcp_payload["fix"] == cli_payload["fix"]
+
+
 def test_diagram_project_native_mcp_matches_cli_and_accepts_only_v2_inputs(tmp_path: Path) -> None:
     source = _source(tmp_path)
     cli_result = CliRunner().invoke(

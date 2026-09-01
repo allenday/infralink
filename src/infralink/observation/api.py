@@ -19,7 +19,11 @@ from infralink.observation.loader import (
     load_observation_documents_from_bytes,
 )
 from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
-from infralink.observation.topology import V2TopologyProjection, project_v2_topology
+from infralink.observation.topology import (
+    V2TopologyBoundsError,
+    V2TopologyProjection,
+    project_v2_topology,
+)
 from infralink.observation.v2 import (
     ObservationV2Document,
     PlannedArtifactBinding,
@@ -426,6 +430,8 @@ def project_v2_topology_diagram(
             focal_host_id=focal_host_id,
             focal_service_instance_ref=focal_service_instance_ref,
         )
+    except V2TopologyBoundsError:
+        raise
     except ValueError as error:
         diagnostic = _argument_diagnostic(
             "v2-diagram-focus-invalid",
