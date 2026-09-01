@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from scripts.check_docs import check_markdown_links, slugify_heading
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +75,24 @@ def test_cross_repo_authority_map_is_discoverable() -> None:
         "do not copy a runbook into this page",
     ]:
         assert token in authority_map
+
+
+def test_docs_fast_path_is_documented() -> None:
+    architecture = (PROJECT_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    workflow = yaml.safe_load((PROJECT_ROOT / ".woodpecker.yml").read_text(encoding="utf-8"))
+    docs_paths = workflow["steps"]["docs-contract"]["when"][0]["path"]["include"]
+    quality_paths = workflow["steps"]["quality-3.12"]["when"][0]["path"]["exclude"]
+
+    assert docs_paths == quality_paths
+    for token in [
+        "## CI Fast Path",
+        "`docs-contract`",
+        "documentation contract inputs",
+        "full `quality-3.12` gate",
+        "generated schemas",
+        *(f"`{path}`" for path in docs_paths),
+    ]:
+        assert token in architecture
 
 
 def test_safe_cli_workflow_is_discoverable_and_preserves_deployment_boundary() -> None:
