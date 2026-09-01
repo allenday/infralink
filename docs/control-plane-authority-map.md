@@ -53,6 +53,10 @@ When a task spans this boundary, preserve a single authoritative input and make
 the compatibility relationship explicit in the issue and review. Do not add a
 parallel deployment path merely to avoid a migration.
 
+The [legacy command ledger](legacy-command-ledger.md) records the disposition
+and removal gate for every audited legacy script and deployed `infralink-*`
+executable. It is an execution inventory, not deployment authority.
+
 ## Fast Routing
 
 | If the task is... | Use... |
