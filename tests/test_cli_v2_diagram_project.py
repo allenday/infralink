@@ -21,6 +21,7 @@ from infralink.observation.topology_diagrams import V2TopologyRenderBoundsError
 from infralink.operator_surface import diagram_surface
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
+OTHER_HOST_ID = "22222222-2222-4222-8222-222222222222"
 
 SOURCE = f"""\
 schema_version: infralink.observation/v2
@@ -50,6 +51,21 @@ component_edges:
 def _source(tmp_path: Path) -> Path:
     path = tmp_path / "topology.yml"
     path.write_text(SOURCE, encoding="utf-8")
+    return path
+
+
+def _source_with_nonfocal_service(tmp_path: Path) -> Path:
+    document = yaml.safe_load(SOURCE)
+    document["service_instances"].append(
+        {
+            "id": "other",
+            "host_id": OTHER_HOST_ID,
+            "profile_id": "relay",
+            "components": [{"slot_id": "api"}, {"slot_id": "database"}],
+        }
+    )
+    path = tmp_path / "oversized-topology.yml"
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     return path
 
 
@@ -238,15 +254,49 @@ def test_diagram_project_translates_topology_bounds_for_cli_and_mcp(
 ) -> None:
     import infralink.observation.topology as topology
 
-    source = _source(tmp_path)
-    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 1)
+    source = _source_with_nonfocal_service(tmp_path)
+    focused_result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "diagram",
+            "project",
+            "--source",
+            str(source),
+            "--scope",
+            "host",
+            "--host",
+            HOST_ID,
+        ],
+    )
+    assert focused_result.exit_code == 0, focused_result.output
+    assert json.loads(focused_result.output)["result"]["node_count"] == 2
+
+    # The full declaration contains nine projected items; the valid host focus has five.
+    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 8)
     cli_result = CliRunner().invoke(
-        cli, ["--output", "json", "diagram", "project", "--source", str(source)]
+        cli,
+        [
+            "--output",
+            "json",
+            "diagram",
+            "project",
+            "--source",
+            str(source),
+            "--scope",
+            "host",
+            "--host",
+            HOST_ID,
+        ],
     )
 
     async def call_mcp() -> tuple[bool, dict[str, object]]:
         async with Client(create_server()) as client:
-            result = await client.call_tool("infralink_diagram_project", {"source": [str(source)]})
+            result = await client.call_tool(
+                "infralink_diagram_project",
+                {"source": [str(source)], "scope": "host", "host": HOST_ID},
+            )
         return result.is_error, result.structured_content
 
     is_error, mcp_payload = asyncio.run(call_mcp())
