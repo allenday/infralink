@@ -45,9 +45,19 @@ def validate(ctx: Context, host: str | None, strict: bool, live: bool) -> int:
         next_actions.append(
             action(
                 "inspect-declaration",
-                ["infralink", "--registry", str(ctx.registry_path), *command_argv],
+                [
+                    "infralink",
+                    "--registry",
+                    str(ctx.registry_path),
+                    *(["--edges", str(ctx.edges_path)] if ctx.edges_path is not None else []),
+                    *command_argv,
+                ],
                 "Inspect the bounded declaration diagnostics before controller reconciliation",
             )
         )
-    _emit(ok_envelope(_context_for(command_argv), result, next_actions))
+    context_argv = ["--registry", str(ctx.registry_path)]
+    if ctx.edges_path is not None:
+        context_argv.extend(("--edges", str(ctx.edges_path)))
+    context_argv.extend(command_argv)
+    _emit(ok_envelope(_context_for(context_argv), result, next_actions))
     return 0 if result.valid else 1

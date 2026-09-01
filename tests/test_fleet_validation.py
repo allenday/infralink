@@ -111,6 +111,18 @@ def test_static_validation_checks_literal_compose_services(tmp_path: Path) -> No
     ]
 
 
+def test_static_validation_extracts_services_from_jinja_compose_template(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    _write_compose(
+        tmp_path,
+        "services:\n  app:\n    image: {{ app_image | default('example/app:latest') }}\n",
+    )
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert result.valid is True
+
+
 def test_live_mode_returns_capability_gap_without_probing(tmp_path: Path) -> None:
     edges = _write_registry(tmp_path, role_overrides="workers: 1")
 
@@ -173,3 +185,25 @@ def test_cli_returns_completed_negative_validation_result(tmp_path: Path) -> Non
     assert payload["command"]["parsed"]["path"] == ["fleet", "validate"]
     assert payload["result"]["valid"] is False
     assert payload["next_actions"][0]["rel"] == "inspect-declaration"
+
+
+def test_cli_replay_action_preserves_nondefault_edges(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "--registry",
+            str(tmp_path),
+            "--edges",
+            str(edges),
+            "fleet",
+            "validate",
+        ],
+    )
+
+    payload = json.loads(result.output)
+
+    assert "--edges" in payload["next_actions"][0]["command"]
+    assert str(edges) in payload["next_actions"][0]["command"]

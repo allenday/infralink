@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -270,12 +271,23 @@ def _compose_services(
             )
         )
         return None
-    try:
-        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
-        document = {}
-    services = document.get("services", {}) if isinstance(document, dict) else {}
-    return set(services) if isinstance(services, dict) else set()
+    return _static_compose_service_names(path.read_text(encoding="utf-8"))
+
+
+def _static_compose_service_names(source: str) -> set[str]:
+    """Extract literal service keys without evaluating Jinja template expressions."""
+    names: set[str] = set()
+    in_services = False
+    for line in source.splitlines():
+        if re.fullmatch(r"\s*services:\s*", line):
+            in_services = True
+            continue
+        if in_services and line and not line[0].isspace():
+            break
+        match = re.fullmatch(r"\s{2}([A-Za-z0-9_-]+):.*", line)
+        if in_services and match:
+            names.add(match.group(1))
+    return names
 
 
 def _host_diagnostic(
