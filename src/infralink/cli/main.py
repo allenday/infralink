@@ -580,6 +580,7 @@ def _context_for(
     path: list[str] | None = None,
     *,
     allow_external_commands: bool = True,
+    ignore_root_sources: bool = False,
 ) -> CommandContext:
     active_argv = argv
     if active_argv is None:
@@ -595,6 +596,11 @@ def _context_for(
     if isinstance(runtime_ctx, Context):
         effective_registry = runtime_ctx.registry_path or effective_registry
         effective_edges = runtime_ctx.edges_path or effective_edges
+    if ignore_root_sources:
+        root_values["registry"] = None
+        root_values["edges"] = None
+        effective_registry = None
+        effective_edges = None
     resolved = {
         "version": __version__,
         "cwd": os.getcwd(),

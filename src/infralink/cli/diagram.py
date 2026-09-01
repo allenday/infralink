@@ -237,7 +237,7 @@ def project(
         argv.extend(("--syntax", syntax))
     _emit(
         ok_envelope(
-            _context_for(argv),
+            _context_for(argv, ignore_root_sources=True),
             result,
             [
                 action(

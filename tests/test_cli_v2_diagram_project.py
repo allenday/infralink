@@ -126,6 +126,11 @@ def test_diagram_project_ignores_ambient_root_sources_but_rejects_explicit_sourc
     )
 
     assert ambient_result.exit_code == 0, ambient_result.output
+    ambient_payload = yaml.safe_load(ambient_result.output)
+    assert ambient_payload["command"]["resolved"]["registry"] is None
+    assert ambient_payload["command"]["resolved"]["edges"] is None
+    assert str(ambient) not in json.dumps(ambient_payload)
+    assert str(source) in ambient_payload["command"]["raw"]
     explicit_payload = json.loads(explicit_result.output)
     assert explicit_result.exit_code == 2
     assert explicit_payload["error"]["code"] == "diagram_project_forbidden_input"
@@ -170,9 +175,11 @@ def test_diagram_project_rejects_invalid_scope_selector_combinations(
     ("scope", "option", "value"),
     [
         ("host", "--host", "not-a-uuid"),
+        ("host", "--host", "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF"),
         ("service", "--service", "not-a-uuid/relay"),
         ("service", "--service", f"{HOST_ID}/"),
         ("service", "--service", f"{HOST_ID}/relay/extra"),
+        ("service", "--service", f"{HOST_ID}/Relay"),
     ],
 )
 def test_diagram_project_requires_uuid_qualified_focus_selectors(
