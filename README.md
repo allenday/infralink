@@ -182,6 +182,14 @@ local config. Gatus URL and token remain process configuration, so an MCP may
 set `INFRALINK_REGISTRY` and its Gatus environment without duplicating CLI
 logic. The local config never selects a registry revision or desired state.
 
+`analyze` is checkout-backed: it accepts only the repository root, never a
+standalone registry YAML file or the nested `hosts/` directory. Its artifact
+flags remain command-local:
+
+```bash
+infralink --registry /srv/infra-registry analyze --output ./artifacts
+```
+
 Offline observation examples:
 
 ```bash

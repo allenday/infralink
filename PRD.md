@@ -62,7 +62,7 @@ infralink
 |-- validate
 |-- check
 |-- resolve <edge-id>
-|-- analyze --output <directory>
+|-- --registry <checkout-root> analyze --output <directory>
 |-- diagram --output <directory>
 |-- docs --output <directory>
 |-- secrets inspect|audit

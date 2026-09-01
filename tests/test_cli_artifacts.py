@@ -66,6 +66,30 @@ edges:
     return registry, edges
 
 
+def _analyze_checkout(registry: Path, edges: Path) -> tuple[Path, Path]:
+    """Materialize legacy topology fixture data as an Analyze checkout root."""
+    checkout = registry.parent / "analyze-checkout"
+    hosts = yaml.safe_load(registry.read_text(encoding="utf-8"))["hosts"]
+    for host_id, host in hosts.items():
+        manifest = checkout / "hosts" / host_id / "manifest.yml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            yaml.safe_dump({"hosts": {host_id: host}}, sort_keys=False),
+            encoding="utf-8",
+        )
+    checkout_edges = checkout / "network/main-dev/edges/edges.yml"
+    checkout_edges.parent.mkdir(parents=True, exist_ok=True)
+    checkout_edges.write_text(edges.read_text(encoding="utf-8"), encoding="utf-8")
+    return checkout, checkout_edges
+
+
+def _artifact_sources(command: str, registry: Path, edges: Path) -> tuple[Path, Path]:
+    """Return source paths matching each artifact command's input contract."""
+    if command == "analyze":
+        return _analyze_checkout(registry, edges)
+    return registry, edges
+
+
 def _invoke(root: Path, *args: str):
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=root):
@@ -85,6 +109,7 @@ def _payload(result) -> dict:
 @pytest.mark.parametrize("command", ["analyze", "diagram", "docs"])
 def test_artifact_commands_require_explicit_output(tmp_path: Path, command: str) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources(command, registry, edges)
     args = ["--registry", str(registry), "--edges", str(edges), command]
     result = CliRunner().invoke(cli, ["--output", "json", *args])
     payload = _payload(result)
@@ -128,6 +153,21 @@ def test_artifact_help_marks_output_required_and_does_not_advertise_stdout(
 
     assert options["output"]["required"] is True
     assert "stdout" not in options
+
+
+def test_analyze_accepts_only_root_registry_selection(tmp_path: Path) -> None:
+    registry, edges = _write_topology(tmp_path)
+    checkout, _ = _analyze_checkout(registry, edges)
+
+    help_result = CliRunner().invoke(cli, ["--output", "json", "help", "analyze"])
+    options = {option["name"] for option in _payload(help_result)["result"]["options"]}
+    local_selector = CliRunner().invoke(
+        cli,
+        ["--registry", str(checkout), "analyze", "--registry", str(checkout), "--output", "out"],
+    )
+
+    assert "registry" not in options
+    assert local_selector.exit_code == 2
 
 
 @pytest.mark.parametrize(
@@ -174,6 +214,7 @@ def test_artifact_commands_return_typed_byte_exact_metadata(
     expected: dict[str, str],
 ) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources(command, registry, edges)
     result, files = _invoke(
         tmp_path,
         "--registry",
@@ -227,7 +268,7 @@ def test_analyze_load_failure_creates_no_output(tmp_path: Path) -> None:
     with CliRunner().isolated_filesystem(temp_dir=tmp_path):
         result = CliRunner().invoke(
             cli,
-            ["analyze", "--registry", str(malformed), "--output", "generated"],
+            ["--registry", str(malformed), "analyze", "--output", "generated"],
         )
         assert not Path("generated").exists()
     payload = _payload(result)
@@ -241,7 +282,7 @@ def test_input_canary_is_not_disclosed(tmp_path: Path) -> None:
     malformed.write_text(f"hosts: [\n  {canary}", encoding="utf-8")
     result = CliRunner().invoke(
         cli,
-        ["analyze", "--registry", str(malformed), "--output", "generated"],
+        ["--registry", str(malformed), "analyze", "--output", "generated"],
     )
     payload = _payload(result)
 
@@ -255,6 +296,7 @@ def test_artifact_commands_reject_unsafe_output_locations(
     tmp_path: Path, command: str, output: str
 ) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources(command, registry, edges)
     result = CliRunner().invoke(
         cli,
         [
@@ -276,6 +318,7 @@ def test_artifact_commands_reject_unsafe_output_locations(
 @pytest.mark.parametrize("command", ["analyze", "diagram", "docs"])
 def test_artifact_commands_reject_preexisting_output_symlink(tmp_path: Path, command: str) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources(command, registry, edges)
     with CliRunner().isolated_filesystem(temp_dir=tmp_path):
         Path("target").mkdir()
         Path("generated").symlink_to("target", target_is_directory=True)
@@ -370,15 +413,16 @@ def test_artifact_continuation_action_is_executable_and_source_preserving(
 
 
 def test_analyze_cursor_requires_explicit_collection(tmp_path: Path) -> None:
-    registry, _ = _write_topology(tmp_path)
+    registry, edges = _write_topology(tmp_path)
+    registry, _ = _analyze_checkout(registry, edges)
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):
         first = runner.invoke(
             cli,
             [
-                "analyze",
                 "--registry",
                 str(registry),
+                "analyze",
                 "--output",
                 "generated",
                 "--limit",
@@ -389,9 +433,9 @@ def test_analyze_cursor_requires_explicit_collection(tmp_path: Path) -> None:
         replay = runner.invoke(
             cli,
             [
-                "analyze",
                 "--registry",
                 str(registry),
+                "analyze",
                 "--output",
                 "generated",
                 "--cursor",
@@ -403,6 +447,45 @@ def test_analyze_cursor_requires_explicit_collection(tmp_path: Path) -> None:
     payload = _payload(replay)
     assert replay.exit_code == 2
     assert payload["error"]["code"] == "invalid_cursor"
+
+
+def test_analyze_continuation_replays_root_checkout_source(tmp_path: Path) -> None:
+    registry, edges = _write_topology(tmp_path)
+    checkout, _ = _analyze_checkout(registry, edges)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        first = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(checkout),
+                "analyze",
+                "--output",
+                "generated",
+                "--limit",
+                "1",
+            ],
+        )
+        first_payload = _payload(first)
+        continuation = next(
+            item
+            for item in first_payload["next_actions"]
+            if item["rel"] == "continue"
+            and item["bindings"]["cursor"]["source"] == "result.artifacts.page.next_cursor"
+        )
+        cursor = first_payload["result"]["artifacts"]["page"]["next_cursor"]
+        replay = [
+            cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])
+        ]
+        second = runner.invoke(cli, ["--output", "json", *replay[1:]])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert replay.count("--registry") == 1
+    assert replay.index("--registry") < replay.index("analyze")
+    second_payload = _payload(second)
+    assert second_payload["result"]["artifacts"]["page"]["returned"] == 1
 
 
 @pytest.mark.parametrize(
@@ -429,6 +512,7 @@ def test_invalid_paging_never_creates_or_overwrites_artifacts(
     error_code: str,
 ) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources(command, registry, edges)
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):
         output = Path("generated")
@@ -544,14 +628,13 @@ def test_descriptor_relative_writer_contains_parent_symlink_swap(
     assert Path("detached/nested/result.txt").read_bytes() == b"bounded"
 
 
-def test_analyze_context_requires_explicit_registry_and_allows_command_override(
+def test_analyze_context_requires_a_root_checkout_and_rejects_local_override(
     tmp_path: Path,
 ) -> None:
     from infralink.cli.main import _context_for
 
     root_registry, edges = _write_topology(tmp_path)
-    override = tmp_path / "override.yml"
-    override.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
+    root_registry, edges = _analyze_checkout(root_registry, edges)
     assert _context_for(path=["analyze"]).resolved["registry"] is None
 
     runner = CliRunner()
@@ -568,7 +651,7 @@ def test_analyze_context_requires_explicit_registry_and_allows_command_override(
                 "root-output",
             ],
         )
-        override_result = runner.invoke(
+        local_override = runner.invoke(
             cli,
             [
                 "--registry",
@@ -577,22 +660,22 @@ def test_analyze_context_requires_explicit_registry_and_allows_command_override(
                 str(edges),
                 "analyze",
                 "--registry",
-                str(override),
+                str(root_registry),
                 "--output",
                 "override-output",
             ],
         )
 
     assert _payload(root_result)["command"]["resolved"]["registry"] == str(root_registry)
-    assert _payload(override_result)["command"]["resolved"]["registry"] == str(override)
+    assert local_override.exit_code == 2
+    assert _payload(local_override)["error"]["code"] == "usage_error"
 
 
-def test_analyze_invalid_cursor_context_resolves_command_registry_override(
+def test_analyze_invalid_cursor_context_resolves_root_checkout(
     tmp_path: Path,
 ) -> None:
     root_registry, edges = _write_topology(tmp_path)
-    override = tmp_path / "override.yml"
-    override.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
+    root_registry, edges = _analyze_checkout(root_registry, edges)
 
     result = CliRunner().invoke(
         cli,
@@ -602,8 +685,6 @@ def test_analyze_invalid_cursor_context_resolves_command_registry_override(
             "--edges",
             str(edges),
             "analyze",
-            "--registry",
-            str(override),
             "--output",
             "generated",
             "--cursor",
@@ -614,25 +695,29 @@ def test_analyze_invalid_cursor_context_resolves_command_registry_override(
 
     assert result.exit_code == 2
     assert payload["error"]["code"] == "invalid_cursor"
-    assert payload["command"]["resolved"]["registry"] == str(override)
+    assert payload["command"]["resolved"]["registry"] == str(root_registry)
 
 
-def test_analyze_input_failure_context_resolves_command_registry_override(
+@pytest.mark.parametrize("invalid_source", ["standalone.yml", "hosts"])
+def test_analyze_rejects_non_checkout_root_sources(
     tmp_path: Path,
+    invalid_source: str,
 ) -> None:
     root_registry, edges = _write_topology(tmp_path)
-    missing_override = tmp_path / "command-missing.yml"
+    invalid = tmp_path / invalid_source
+    if invalid_source == "hosts":
+        invalid.mkdir()
+    else:
+        invalid.write_text(root_registry.read_text(encoding="utf-8"), encoding="utf-8")
 
     result = CliRunner().invoke(
         cli,
         [
             "--registry",
-            str(root_registry),
+            str(invalid),
             "--edges",
             str(edges),
             "analyze",
-            "--registry",
-            str(missing_override),
             "--output",
             "generated",
         ],
@@ -641,7 +726,9 @@ def test_analyze_input_failure_context_resolves_command_registry_override(
 
     assert result.exit_code == 3
     assert payload["error"]["code"] == "input_load_failed"
-    assert payload["command"]["resolved"]["registry"] == str(missing_override)
+    assert payload["command"]["resolved"]["registry"] == str(invalid)
+    assert payload["error"]["details"]["reason"] == "checkout_root_required"
+    assert "repository root" in payload["fix"]
 
 
 def test_analyze_public_registry_artifact_allowlists_nested_topology(
@@ -666,7 +753,6 @@ hosts:
       api:
         port: 8443
         protocol: https
-        password: {canary}
     service_dependencies:
       api:
         - host: 22222222-2222-4222-8222-222222222222
@@ -678,14 +764,17 @@ ansible_defaults:
 """.lstrip(),
         encoding="utf-8",
     )
+    edges = tmp_path / "edges.yml"
+    edges.write_text("edges: []\n", encoding="utf-8")
+    registry, _ = _analyze_checkout(registry, edges)
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):
         result = runner.invoke(
             cli,
             [
-                "analyze",
                 "--registry",
                 str(registry),
+                "analyze",
                 "--output",
                 "generated",
             ],
@@ -702,9 +791,33 @@ ansible_defaults:
     assert host["status"] == "active"
     assert host["group"] == "core"
     assert host["roles"] == ["api"]
-    assert host["services"]["api"] == {"port": 8443, "protocol": "https"}
+    assert host["services"]["api"] == {
+        "port": 8443,
+        "protocol": "https",
+        "exposure": "internal",
+    }
     assert "provider_metadata" not in host
     assert "ansible_defaults" not in public_registry
+
+
+def test_analyze_checkout_supports_typed_epitaph_dates(tmp_path: Path) -> None:
+    registry, edges = _write_topology(tmp_path)
+    topology = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    host = topology["hosts"]["11111111-1111-4111-8111-111111111111"]
+    host["status"] = "terminated"
+    host["epitaph"] = {"retired_at": "2026-09-01", "reason": "superseded"}
+    registry.write_text(yaml.safe_dump(topology), encoding="utf-8")
+    checkout, _ = _analyze_checkout(registry, edges)
+
+    with CliRunner().isolated_filesystem(temp_dir=tmp_path):
+        result = CliRunner().invoke(
+            cli,
+            ["--registry", str(checkout), "analyze", "--output", "generated"],
+        )
+        public_registry = yaml.safe_load(Path("generated/registry.yml").read_text())
+
+    assert result.exit_code == 0, result.output
+    assert public_registry["hosts"]["11111111-1111-4111-8111-111111111111"]["group"] == "core"
 
 
 @pytest.mark.parametrize(
@@ -1492,6 +1605,7 @@ def test_artifact_outputs_are_deterministic(
     tmp_path: Path, command: str, extra: tuple[str, ...]
 ) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources(command, registry, edges)
     common = [
         "--registry",
         str(registry),
