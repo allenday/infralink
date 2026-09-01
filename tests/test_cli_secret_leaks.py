@@ -342,7 +342,10 @@ selection:
         ("service", "show"): ([*source, "service", "show", "postgresql"], 0, True),
         ("service", "list"): ([*source, "service", "list"], 0, True),
         ("validate",): ([*source, "validate", "--check-resolution"], 0, True),
-        ("fleet", "validate"): ([*source, "fleet", "validate"], 70, False),
+        # Fleet validation consumes the typed checkout-only Registry source.
+        # A legacy standalone YAML input must be a declared input failure, not
+        # the historical internal-error path.
+        ("fleet", "validate"): ([*source, "fleet", "validate"], 3, False),
         ("version",): ([*source, "version"], 0, True),
         ("capabilities",): (["--output", "json", "capabilities"], 0, True),
         ("explain",): (["--output", "json", "explain", "schema-version-unsupported"], 0, True),
