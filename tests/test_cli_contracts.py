@@ -87,6 +87,7 @@ SCHEMA_NAMES = (
     "app-show",
     "analyze",
     "diagram",
+    "diagram-project",
     "docs",
     "secrets-inspect",
     "secrets-audit",

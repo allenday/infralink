@@ -58,6 +58,9 @@ class ErrorCode(str, Enum):
     RELEASE_PUBLISHER_REQUEST_INVALID = "release_publisher_request_invalid"
     RELEASE_PUBLISHER_UNAVAILABLE = "release_publisher_unavailable"
     RELEASE_ATTESTATION_INVALID = "release_attestation_invalid"
+    DIAGRAM_SCOPE_SELECTOR_INVALID = "diagram_scope_selector_invalid"
+    DIAGRAM_PROJECT_FORBIDDEN_INPUT = "diagram_project_forbidden_input"
+    DIAGRAM_SOURCE_INVALID = "diagram_source_invalid"
     INTERNAL_ERROR = "internal_error"
 
 

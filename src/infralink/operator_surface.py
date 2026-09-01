@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from infralink.cli.contracts import (
     AppListResult,
     AppShowResult,
+    DiagramProjectResult,
     DoctorTarget,
     EdgeListResult,
     EdgeShowResult,
@@ -46,6 +47,8 @@ from infralink.cli.operation_contracts import (
 )
 from infralink.cli.queries import entity_not_found, list_services
 from infralink.fleet.validation import FleetValidationResult, validate_fleet
+from infralink.observation.api import ProjectValidationError, project_v2_topology_diagram
+from infralink.observation.topology_diagrams import render_v2_dot, render_v2_mermaid
 from infralink.operator_operations.topology import (
     AppShowRequest,
     EdgeShowRequest,
@@ -79,6 +82,9 @@ class DoctorBootstrapPlanResult(_OperationModel):
 
 
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
+# Diagram projection owns explicit observation sources and therefore cannot
+# inherit the Registry/edge selector shared by topology operations.
+diagram_surface = App("infralink-diagram")
 
 
 def operator_click_adapter() -> ClickAdapter:
@@ -121,6 +127,27 @@ class FleetValidateRequest(SourceRequest):
     host: str | None = Field(default=None, min_length=1)
     strict: bool = False
     live: bool = False
+
+
+class DiagramProjectRequest(_OperationModel):
+    """Explicit V2 declaration sources for one read-only inline diagram."""
+
+    source: tuple[Path, ...] = Field(min_length=1)
+    scope: Literal["full", "host", "service"] = "full"
+    host: str | None = Field(default=None, min_length=1)
+    service: str | None = Field(default=None, min_length=1)
+    syntax: Literal["mermaid", "dot"] = "mermaid"
+
+    @model_validator(mode="after")
+    def require_exact_scope_selector(self) -> DiagramProjectRequest:
+        if self.scope == "full" and self.host is None and self.service is None:
+            return self
+        if self.scope == "host" and self.host is not None and self.service is None:
+            return self
+        if self.scope == "service" and self.host is None and self.service is not None:
+            if len(self.service.split("/")) == 2:
+                return self
+        raise ValueError("scope requires its exact selector combination")
 
 
 class HostBootstrapRequest(SourceRequest):
@@ -417,6 +444,46 @@ def fleet_validate(request: FleetValidateRequest) -> FleetValidationResult:
     """Return deterministic declared-state diagnostics without repairing anything."""
     return validate_fleet(
         load_sources(request), host=request.host, strict=request.strict, live=request.live
+    )
+
+
+@diagram_surface.operation(
+    "diagram.project", summary="Project a declared V2 topology diagram", read_only=True
+)  # type: ignore[untyped-decorator]
+def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
+    """Render declared V2 topology inline without selecting or changing host state."""
+    try:
+        projection_result = project_v2_topology_diagram(
+            request.source,
+            focal_host_id=request.host,
+            focal_service_instance_ref=request.service,
+        )
+    except ProjectValidationError as error:
+        first = error.report.diagnostics.diagnostics[0]
+        raise OperationError(
+            "diagram_source_invalid",
+            "V2 topology source could not be projected",
+            details=(
+                {
+                    "code": first.code,
+                    "path": first.location.path,
+                    "pointer": first.location.pointer,
+                },
+            ),
+            fix="Supply valid infralink.observation/v2 source declarations.",
+        ) from None
+    projection = projection_result.projection
+    source = (
+        render_v2_mermaid(projection) if request.syntax == "mermaid" else render_v2_dot(projection)
+    )
+    focus = request.host if request.scope == "host" else request.service
+    return DiagramProjectResult(
+        syntax=request.syntax,
+        scope=request.scope,
+        resolved_focus=focus,
+        node_count=len(projection.nodes),
+        edge_count=len(projection.edges),
+        source=source,
     )
 
 

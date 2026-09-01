@@ -19,6 +19,7 @@ from infralink.observation.loader import (
     load_observation_documents_from_bytes,
 )
 from infralink.observation.planner import Plan, PlanValidationError, resolve_observation_documents
+from infralink.observation.topology import V2TopologyProjection, project_v2_topology
 from infralink.observation.v2 import (
     ObservationV2Document,
     PlannedArtifactBinding,
@@ -114,6 +115,20 @@ class V2ArtifactProjectResult:
             "artifact_bindings": [
                 binding.model_dump(mode="json") for binding in self.artifact_bindings
             ],
+            "sources": [asdict(source) for source in self.sources],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class V2TopologyDiagramProjectResult:
+    """One V2 topology projection with source provenance for an inline renderer."""
+
+    projection: V2TopologyProjection
+    sources: tuple[SourceProvenance, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "projection": self.projection.model_dump(mode="json"),
             "sources": [asdict(source) for source in self.sources],
         }
 
@@ -377,6 +392,85 @@ def project_v2_artifact_bindings_from_bytes(
     )
 
 
+def project_v2_topology_diagram(
+    paths: Sequence[Path],
+    *,
+    focal_host_id: str | None = None,
+    focal_service_instance_ref: str | None = None,
+    limit: int = 50,
+) -> V2TopologyDiagramProjectResult:
+    """Load only V2 declarations and return one bounded renderer-neutral topology."""
+
+    loaded = load_observation_documents(paths, diagnostic_limit=limit)
+    documents, provenance, version_findings = _v2_documents_for_projection(
+        loaded, projection="diagram"
+    )
+    if not documents and not version_findings and not loaded.diagnostics.error_count:
+        version_findings.append(
+            _argument_diagnostic(
+                "no-usable-v2-diagram-document",
+                "/source",
+                "source",
+                "Supply at least one infralink.observation/v2 source document.",
+            )
+        )
+    combined = _combine_diagnostics(
+        [loaded.diagnostics, DiagnosticSet.from_diagnostics(version_findings, limit=limit)],
+        limit=limit,
+    )
+    if combined.error_count:
+        raise ProjectValidationError(ValidationReport(combined, loaded.attempted_document_count))
+    try:
+        projection = project_v2_topology(
+            documents,
+            focal_host_id=focal_host_id,
+            focal_service_instance_ref=focal_service_instance_ref,
+        )
+    except ValueError as error:
+        diagnostic = _argument_diagnostic(
+            "v2-diagram-focus-invalid",
+            "/focus",
+            "focus",
+            "Use a declared host UUID or <host_uuid>/<service_instance_id> service selector.",
+        )
+        raise ProjectValidationError(
+            ValidationReport(
+                DiagnosticSet.from_diagnostics([diagnostic], limit=limit),
+                loaded.attempted_document_count,
+            )
+        ) from error
+    return V2TopologyDiagramProjectResult(
+        projection=projection,
+        sources=_source_provenance(tuple(provenance)),
+    )
+
+
+def _v2_documents_for_projection(
+    loaded: LoadReport, *, projection: str
+) -> tuple[list[ObservationV2Document], list[ObservationDocument], list[Diagnostic]]:
+    documents: list[ObservationV2Document] = []
+    provenance: list[ObservationDocument] = []
+    findings: list[Diagnostic] = []
+    for document in loaded.documents:
+        if document.schema_version != V2_SCHEMA_VERSION:
+            findings.append(
+                Diagnostic(
+                    code=f"v2-{projection}-source-version-invalid",
+                    severity="error",
+                    message=f"V2 {projection} projection accepts only infralink.observation/v2 sources.",
+                    location=SourceLocation(
+                        document.source_path, "/schema_version", document.document_index
+                    ),
+                    identity=document.schema_version,
+                    next_actions=("Supply only infralink.observation/v2 source documents.",),
+                )
+            )
+            continue
+        documents.append(ObservationV2Document.model_validate_json(json.dumps(document.to_dict())))
+        provenance.append(document)
+    return documents, provenance, findings
+
+
 def _project_v2_artifact_bindings(loaded: LoadReport, *, limit: int) -> V2ArtifactProjectResult:
     version_findings: list[Diagnostic] = []
     documents: list[ObservationV2Document] = []
@@ -539,8 +633,10 @@ __all__ = [
     "ValidationReport",
     "V2ConfigurationProjectResult",
     "V2MetricProjectResult",
+    "V2TopologyDiagramProjectResult",
     "project",
     "project_v2_configuration_bindings",
     "project_v2_metric_contracts",
+    "project_v2_topology_diagram",
     "validate",
 ]

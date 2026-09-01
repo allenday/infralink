@@ -69,6 +69,8 @@ def _leaf_paths(group: click.Group, prefix: tuple[str, ...] = ()) -> set[tuple[s
         assert command is not None
         path = (*prefix, name)
         if isinstance(command, click.Group):
+            if command.invoke_without_command:
+                paths.add(path)
             paths.update(_leaf_paths(command, path))
         else:
             paths.add(path)
@@ -279,6 +281,7 @@ selection:
             0,
             True,
         ),
+        ("diagram", "project"): (["diagram", "project", "--source", "missing-v2.yml"], 3, False),
         ("docs",): (
             [
                 *source,

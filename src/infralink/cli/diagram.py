@@ -1,10 +1,13 @@
-"""Diagram generation CLI command."""
+"""Legacy artifact diagrams and read-only V2 topology projection."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal, cast
 
 import click
+from agent_surface import OperationError
+from pydantic import ValidationError
 
 from infralink.cli.actions import action
 from infralink.cli.artifacts import (
@@ -16,6 +19,7 @@ from infralink.cli.artifacts import (
     write_artifacts,
 )
 from infralink.cli.contracts import ArtifactResult, ArtifactSummary
+from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
 from infralink.cli.main import (
     Context,
     _context_for,
@@ -25,9 +29,16 @@ from infralink.cli.main import (
     pass_context,
 )
 from infralink.cli.output import ok_envelope
+from infralink.operator_surface import DiagramProjectRequest, diagram_project
 
 
-@click.command()
+class _LegacyDiagramOutputOption(click.Option):
+    """Expose legacy requiredness without imposing it on V2 child parsing."""
+
+    required_for_projection = True
+
+
+@click.group(invoke_without_command=True)
 @click.option(
     "--format",
     "-f",
@@ -36,7 +47,13 @@ from infralink.cli.output import ok_envelope
     default="mermaid",
     help="Output format",
 )
-@click.option("--output", "-o", type=click.Path(path_type=Path), required=True)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    required=False,
+    cls=_LegacyDiagramOutputOption,
+)
 @click.option("--group", "-g", "filter_group")
 @click.option("--include-terminated", is_flag=True)
 @_page_options
@@ -51,7 +68,32 @@ def diagram(
     cursor: str | None,
     collection: str | None,
 ) -> None:
-    """Generate infrastructure diagrams."""
+    """Generate legacy artifacts or project a read-only V2 topology graph."""
+    if click.get_current_context().invoked_subcommand is not None:
+        if output is not None or filter_group is not None or include_terminated:
+            raise CliFailure(
+                code=ErrorCode.DIAGRAM_PROJECT_FORBIDDEN_INPUT,
+                message="diagram project accepts no legacy artifact inputs",
+                exit_code=ExitCode.USAGE_ERROR,
+                fix="Use only --source, --scope, --host, --service, and --syntax with diagram project.",
+            )
+        return
+    _legacy_diagram(
+        ctx, output_format, output, filter_group, include_terminated, limit, cursor, collection
+    )
+
+
+def _legacy_diagram(
+    ctx: Context,
+    output_format: str,
+    output: Path | None,
+    filter_group: str | None,
+    include_terminated: bool,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> None:
+    """Preserve the legacy artifact-writing diagram callback without alteration."""
     output = require_output(output)
     from infralink.generators.d2 import generate_d2
     from infralink.generators.dot import generate_dot
@@ -127,3 +169,76 @@ def diagram(
     payload = ok_envelope(_context_for(path=["diagram"]), result, actions)
     payload["meta"]["truncated"] = pages["artifacts"].page.next_cursor is not None
     _emit(payload)
+
+
+@diagram.command(name="project")
+@click.option("--source", "source", type=click.Path(path_type=Path), required=True, multiple=True)
+@click.option("--scope", type=click.Choice(["full", "host", "service"]), default="full")
+@click.option("--host", default=None)
+@click.option("--service", default=None)
+@click.option("--syntax", type=click.Choice(["mermaid", "dot"]), default="mermaid")
+@pass_context
+def project(
+    ctx: Context,
+    source: tuple[Path, ...],
+    scope: str,
+    host: str | None,
+    service: str | None,
+    syntax: str,
+) -> int:
+    """Project declared V2 topology as bounded inline Mermaid or DOT source."""
+    if ctx.registry_path is not None or ctx.edges_path is not None:
+        raise CliFailure(
+            code=ErrorCode.DIAGRAM_PROJECT_FORBIDDEN_INPUT,
+            message="diagram project accepts no registry or edge inputs",
+            exit_code=ExitCode.USAGE_ERROR,
+            fix="Use explicit --source declarations without --registry or --edges.",
+        )
+    try:
+        request = DiagramProjectRequest(
+            source=source,
+            scope=cast(Literal["full", "host", "service"], scope),
+            host=host,
+            service=service,
+            syntax=cast(Literal["mermaid", "dot"], syntax),
+        )
+    except ValidationError as error:
+        raise CliFailure(
+            code=ErrorCode.DIAGRAM_SCOPE_SELECTOR_INVALID,
+            message="diagram project scope requires its exact selector combination",
+            exit_code=ExitCode.USAGE_ERROR,
+            fix="Use full with no selector, host with --host, or service with --service <host_uuid>/<service_instance_id>.",
+        ) from error
+    try:
+        result = diagram_project(request)
+    except OperationError as error:
+        raise CliFailure(
+            code=ErrorCode.DIAGRAM_SOURCE_INVALID,
+            message=error.message,
+            exit_code=ExitCode.INPUT_ERROR,
+            fix=error.fix or "Supply valid V2 observation source declarations.",
+            details=error.details[0] if error.details else {},
+        ) from None
+    argv = ["diagram", "project"]
+    for path in source:
+        argv.extend(("--source", str(path)))
+    if scope != "full":
+        argv.extend(("--scope", scope))
+    if host is not None:
+        argv.extend(("--host", host))
+    if service is not None:
+        argv.extend(("--service", service))
+    if syntax != "mermaid":
+        argv.extend(("--syntax", syntax))
+    _emit(
+        ok_envelope(
+            _context_for(argv),
+            result,
+            [
+                action(
+                    "help", ["infralink", "help", "diagram", "project"], "Show diagram project help"
+                )
+            ],
+        )
+    )
+    return 0

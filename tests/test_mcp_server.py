@@ -146,6 +146,10 @@ def test_native_mcp_help_retains_root_topology_sources() -> None:
 def test_native_mcp_never_overloads_root_topology_source_fields() -> None:
     for name, path in _native_paths().items():
         properties = _native_tool(name, path).input_schema["properties"]
+        if path == ("diagram", "project"):
+            assert "registry" not in properties
+            assert "edges" not in properties
+            continue
         assert properties["registry"]["type"] == "string"
         assert properties["edges"]["type"] == "string"
 

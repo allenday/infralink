@@ -39,6 +39,8 @@ _NATIVE_OPTION_NAMES: dict[tuple[tuple[str, ...], str], str | None] = {
     (("analyze",), "registry"): None,
     (("analyze",), "edges"): "include_edges",
 }
+_NATIVE_GROUP_PATHS = frozenset({("diagram",)})
+_SOURCE_INDEPENDENT_PATHS = frozenset({("diagram", "project")})
 
 
 def _arguments(value: Any) -> tuple[list[str], str | None]:
@@ -108,6 +110,8 @@ def _native_paths() -> dict[str, tuple[str, ...]]:
 
     def visit(command: click.Command, path: tuple[str, ...]) -> None:
         if isinstance(command, click.Group):
+            if path in _NATIVE_GROUP_PATHS:
+                paths[f"infralink_{'_'.join(path).replace('-', '_')}"] = path
             context = click.Context(command)
             for child_name in command.list_commands(context):
                 child = command.get_command(context, child_name)
@@ -124,17 +128,21 @@ def _native_paths() -> dict[str, tuple[str, ...]]:
 def _parameter_schema(parameter: click.Parameter) -> dict[str, Any]:
     """Project Click's parameter type, including bounded integers, to JSON Schema."""
     parameter_type = parameter.type
+    schema: dict[str, Any]
     if isinstance(parameter_type, BoolParamType):
-        return {"type": "boolean"}
-    if isinstance(parameter_type, IntParamType):
-        schema: dict[str, Any] = {"type": "integer"}
+        schema = {"type": "boolean"}
+    elif isinstance(parameter_type, IntParamType):
+        schema = {"type": "integer"}
         if isinstance(parameter_type, click.IntRange):
             if parameter_type.min is not None:
                 schema["minimum"] = parameter_type.min
             if parameter_type.max is not None:
                 schema["maximum"] = parameter_type.max
-        return schema
-    return {"type": "string"}
+    else:
+        schema = {"type": "string"}
+    if isinstance(parameter, click.Option) and parameter.multiple:
+        return {"type": "array", "items": schema}
+    return schema
 
 
 def _option_parameter(command: click.Command, name: str) -> click.Option:
@@ -163,7 +171,7 @@ def _native_tool(name: str, path: tuple[str, ...]) -> Tool:
     # Every native projection may use the root-owned topology sources. They
     # must remain in the MCP schema even when a mounted child hides its local
     # adapter fields, otherwise MCP would lose a supported CLI capability.
-    properties: dict[str, Any] = dict(_ROOT_SOURCE_PROPERTIES)
+    properties: dict[str, Any] = dict(_native_root_source_properties(path))
     required: list[str] = []
     for argument in arguments:
         argument_parameter = arguments_by_name[argument.name]
@@ -207,9 +215,9 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
         raise ValueError(f"Unknown tool: {name}")
     command = _command_for_path(path)
     assert command is not None
-    root_sources = _native_root_source_argv(arguments)
+    root_sources = _native_root_source_argv(arguments, path)
     if path == ("help",):
-        unknown = set(arguments) - {"path", *set(_ROOT_SOURCE_PROPERTIES)}
+        unknown = set(arguments) - {"path", *set(_native_root_source_properties(path))}
         if unknown:
             raise ValueError(f"Unknown tool arguments: {', '.join(sorted(unknown))}")
         help_path = arguments.get("path", [])
@@ -224,7 +232,11 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
         for option in options
         if (native_name := _native_option_name(path, option.name)) is not None
     }
-    allowed = set(_ROOT_SOURCE_PROPERTIES) | {item.name for item in positional} | set(named_options)
+    allowed = (
+        set(_native_root_source_properties(path))
+        | {item.name for item in positional}
+        | set(named_options)
+    )
     unknown = set(arguments) - allowed
     if unknown:
         raise ValueError(f"Unknown tool arguments: {', '.join(sorted(unknown))}")
@@ -240,6 +252,16 @@ def _native_argv(name: str, arguments: Any) -> list[str]:
         if option.required and value is None:
             raise ValueError(f"{native_name} is required")
         option_parameter = _option_parameter(command, option.name)
+        if option_parameter.multiple:
+            if (
+                not isinstance(value, list)
+                or not value
+                or any(not isinstance(item, str) or not item for item in value)
+            ):
+                raise ValueError(f"{native_name} must be a non-empty array of strings")
+            for item in value:
+                argv.extend(["--" + option.name.replace("_", "-"), item])
+            continue
         if isinstance(option_parameter.type, BoolParamType):
             if value is None:
                 continue
@@ -270,10 +292,14 @@ def _long_option(options: list[str], name: str | None) -> str:
     return next((option for option in options if option.startswith("--")), f"--{name}")
 
 
-def _native_root_source_argv(arguments: dict[str, Any]) -> list[str]:
+def _native_root_source_properties(path: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    return {} if path in _SOURCE_INDEPENDENT_PATHS else _ROOT_SOURCE_PROPERTIES
+
+
+def _native_root_source_argv(arguments: dict[str, Any], path: tuple[str, ...] = ()) -> list[str]:
     """Emit the sole CLI topology selectors before the native command path."""
     argv: list[str] = []
-    for name in _ROOT_SOURCE_PROPERTIES:
+    for name in _native_root_source_properties(path):
         value = arguments.get(name)
         if value is None:
             continue

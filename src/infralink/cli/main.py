@@ -960,7 +960,8 @@ def _help_parameters(
                 OptionDescriptor(
                     name=long_option.removeprefix("--").replace("-", "_"),
                     type=parameter.type.name,
-                    required=parameter.required,
+                    required=parameter.required
+                    or bool(getattr(parameter, "required_for_projection", False)),
                 )
             )
     return arguments, options
@@ -1495,6 +1496,13 @@ def cli(
     """
     click_ctx = click.get_current_context()
     source_independent = {None, "help", "version", "capabilities", "explain"}
+    # ``diagram project`` consumes only explicit V2 observation sources. It
+    # must not select the ambient Registry used by the legacy diagram writer.
+    incoming = _INVOCATION_ARGS.get() or []
+    if any(
+        incoming[index : index + 2] == ["diagram", "project"] for index in range(len(incoming) - 1)
+    ):
+        source_independent.add("diagram")
     selected_registry = registry
     if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
         selected_registry = _configured_registry()
