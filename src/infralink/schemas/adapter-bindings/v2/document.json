@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "GatusAdapterBinding": {
+      "additionalProperties": false,
+      "description": "One Gatus result lookup with distinct declaration and API identities.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "observation_backend_id": {
+          "minLength": 1,
+          "title": "Observation Backend Id",
+          "type": "string"
+        },
+        "output_identity": {
+          "minLength": 1,
+          "title": "Output Identity",
+          "type": "string"
+        },
+        "renderer_kind": {
+          "const": "gatus",
+          "title": "Renderer Kind",
+          "type": "string"
+        },
+        "result_identity": {
+          "minLength": 1,
+          "title": "Result Identity",
+          "type": "string"
+        },
+        "signal_ref": {
+          "minLength": 1,
+          "title": "Signal Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "renderer_kind",
+        "observation_backend_id",
+        "output_identity",
+        "result_identity",
+        "signal_ref"
+      ],
+      "title": "GatusAdapterBinding",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The complete strict binding projection consumed by Doctor.",
+  "properties": {
+    "bindings": {
+      "items": {
+        "$ref": "#/$defs/GatusAdapterBinding"
+      },
+      "title": "Bindings",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "infra-observe.adapter-bindings.v2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "bindings"
+  ],
+  "title": "AdapterBindings",
+  "type": "object"
+}

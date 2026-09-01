@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
 from ipaddress import ip_network
 from pathlib import Path
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import click
 import yaml
 from agent_surface import OperationError
+from pydantic import ValidationError
 
 from infralink.cli.actions import action
+from infralink.cli.adapter_bindings import AdapterBindings
 from infralink.cli.contracts import (
     DoctorCoverage,
     DoctorEvidence,
@@ -50,109 +51,6 @@ GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
 V2_OBSERVATION_RELATIVE = "service-catalog/v2"
 
 
-def gatus_display_names(observation_plan: Path, adapter_bindings: Path) -> dict[str, str]:
-    """Read the rendered Gatus identity map beside selected observer inputs.
-
-    Gatus exposes its human-readable endpoint name, while dependency evidence is
-    keyed by the registry's stable check ID.  The rendered artifact is the sole
-    projection that joins those identities; Doctor must not recreate that
-    presentation logic.
-    """
-    plan_directory = observation_plan.resolve().parent
-    bindings_directory = adapter_bindings.resolve().parent
-    if plan_directory != bindings_directory:
-        _gatus_identity_failure(
-            "Observation plan and adapter bindings must be from the same directory",
-            "Provide observer inputs from one registry checkout",
-            {
-                "source": "gatus_rendered_identities",
-                "observation_plan": str(observation_plan),
-                "adapter_bindings": str(adapter_bindings),
-            },
-        )
-    directory = plan_directory / "rendered" / "gatus"
-    if not directory.is_dir():
-        _gatus_identity_failure(
-            "Rendered Gatus identity artifacts could not be loaded",
-            "Render the selected registry observation artifacts before running live Doctor",
-            {"source": "gatus_rendered_identities", "path": str(directory)},
-        )
-    result: dict[str, str] = {}
-    display_ids: dict[str, str] = {}
-    for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
-        try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            _gatus_identity_failure(
-                "Rendered Gatus identity artifacts could not be loaded",
-                "Render valid Gatus artifacts from the selected registry checkout",
-                {"source": "gatus_rendered_identities", "path": str(path)},
-            )
-        if (
-            not isinstance(document, dict)
-            or document.get("schema_version") != "infra-observe.gatus-fragment.v1"
-        ):
-            _gatus_identity_failure(
-                "Rendered Gatus identity artifacts are invalid",
-                "Render valid Gatus artifacts from the selected registry checkout",
-                {"source": "gatus_rendered_identities", "path": str(path)},
-            )
-        checks = document.get("checks") if isinstance(document, dict) else None
-        if not isinstance(checks, list):
-            _gatus_identity_failure(
-                "Rendered Gatus identity artifacts are invalid",
-                "Render valid Gatus artifacts from the selected registry checkout",
-                {"source": "gatus_rendered_identities", "path": str(path)},
-            )
-        for check in checks:
-            if not isinstance(check, dict):
-                _gatus_identity_failure(
-                    "Rendered Gatus identity artifacts are invalid",
-                    "Render valid Gatus artifacts from the selected registry checkout",
-                    {"source": "gatus_rendered_identities", "path": str(path)},
-                )
-            check_id = check.get("id")
-            display_name = check.get("display_name")
-            if (
-                not isinstance(check_id, str)
-                or not check_id
-                or not isinstance(display_name, str)
-                or not display_name
-            ):
-                _gatus_identity_failure(
-                    "Rendered Gatus identity artifacts are invalid",
-                    "Render valid Gatus artifacts from the selected registry checkout",
-                    {"source": "gatus_rendered_identities", "path": str(path)},
-                )
-            prior = result.get(check_id)
-            if prior is not None and prior != display_name:
-                _gatus_identity_failure(
-                    "Rendered Gatus identity artifacts conflict",
-                    "Resolve duplicate Gatus check IDs in the selected registry checkout",
-                    {"source": "gatus_rendered_identities", "path": str(path)},
-                )
-            prior_id = display_ids.get(display_name)
-            if prior_id is not None and prior_id != check_id:
-                _gatus_identity_failure(
-                    "Rendered Gatus identity artifacts conflict",
-                    "Resolve duplicate Gatus display names in the selected registry checkout",
-                    {"source": "gatus_rendered_identities", "path": str(path)},
-                )
-            result[check_id] = display_name
-            display_ids[display_name] = check_id
-    return result
-
-
-def _gatus_identity_failure(message: str, fix: str, details: dict[str, str]) -> NoReturn:
-    raise CliFailure(
-        code=ErrorCode.INPUT_LOAD_FAILED,
-        message=message,
-        exit_code=ExitCode.INPUT_ERROR,
-        fix=fix,
-        details=details,
-    )
-
-
 def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
     request = Request(f"{url.rstrip('/')}/api/v1/endpoints/statuses")
     if token:
@@ -169,10 +67,9 @@ def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
 
 def _gatus_evidence(
     evidence: list[DoctorEvidence],
-    bindings: dict[str, Any] | None,
+    bindings: AdapterBindings,
     url: str | None,
     token: str | None,
-    display_names: Mapping[str, str] | None = None,
 ) -> list[DoctorEvidence]:
     if not url:
         return evidence
@@ -185,21 +82,23 @@ def _gatus_evidence(
             else item
             for item in evidence
         ]
-    binding_by_identity = {
-        item.get("output_identity"): item
-        for item in (bindings or {}).get("bindings", [])
-        if isinstance(item, dict) and item.get("renderer_kind") == "gatus"
-    }
-    by_identity = {item.get("name"): item for item in statuses if isinstance(item.get("name"), str)}
+    by_result_identity: dict[str, dict[str, Any]] = {}
+    duplicate_result_identities: set[str] = set()
+    for status_entry in statuses:
+        key = status_entry.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        if key in by_result_identity:
+            duplicate_result_identities.add(key)
+            continue
+        by_result_identity[key] = status_entry
     updated: list[DoctorEvidence] = []
     for item in evidence:
-        binding = binding_by_identity.get(item.id)
-        display_name = display_names.get(item.id) if display_names is not None else None
+        binding = bindings.by_output_identity.get(item.id)
+        result_identity = binding.result_identity if binding is not None else None
         status = (
-            by_identity.get(display_name)
-            if display_name is not None
-            else by_identity.get(binding.get("output_identity"))
-            if isinstance(binding, dict)
+            by_result_identity.get(result_identity)
+            if result_identity is not None and result_identity not in duplicate_result_identities
             else None
         )
         if item.adapter != "gatus" or item.reason != "no_live_observation_evidence":
@@ -208,11 +107,11 @@ def _gatus_evidence(
             updated.append(
                 item.model_copy(
                     update={
-                        "status": "unavailable" if display_names is not None else "unknown",
+                        "status": "unknown",
                         "reason": (
-                            "gatus_rendered_identity_missing"
-                            if display_names is not None
-                            else "gatus_output_identity_missing"
+                            "gatus_result_identity_duplicate"
+                            if result_identity in duplicate_result_identities
+                            else "gatus_result_identity_missing"
                         ),
                     }
                 )
@@ -361,6 +260,40 @@ def _load_mapping(path: Path, label: str) -> dict[str, Any]:
             details={"source": label, "path": str(path)},
         )
     return value
+
+
+def _load_adapter_bindings(path: Path) -> AdapterBindings:
+    """Load the strict renderer projection without reading rendered artifacts."""
+
+    try:
+        return AdapterBindings.model_validate(_load_mapping(path, "adapter_bindings"))
+    except ValidationError:
+        raise CliFailure(
+            code=ErrorCode.INPUT_LOAD_FAILED,
+            message="Adapter Bindings could not be loaded",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Provide valid strict adapter bindings",
+            details={"source": "adapter_bindings", "path": str(path)},
+        ) from None
+
+
+def _require_same_observer_source_directory(observation_plan: Path, adapter_bindings: Path) -> None:
+    """Reject observer inputs that do not originate from one canonical source tree."""
+
+    plan_directory = observation_plan.resolve().parent
+    bindings_directory = adapter_bindings.resolve().parent
+    if plan_directory != bindings_directory:
+        raise CliFailure(
+            code=ErrorCode.INPUT_LOAD_FAILED,
+            message="Observation plan and adapter bindings must share one source directory",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Provide observer inputs from the same registry checkout",
+            details={
+                "source": "observation_inputs",
+                "observation_plan": str(observation_plan),
+                "adapter_bindings": str(adapter_bindings),
+            },
+        )
 
 
 def _dependency_matches(
@@ -521,7 +454,7 @@ def _observer_dependency_id(edge: Any, plan: dict[str, Any] | None) -> str | Non
 
 def _coverage(
     plan: dict[str, Any],
-    bindings: dict[str, Any] | None,
+    bindings: AdapterBindings,
     target_type: DoctorKind | None,
     target_id: str,
 ) -> tuple[DoctorCoverage, list[DoctorEvidence]]:
@@ -574,11 +507,7 @@ def _coverage(
             )
         )
     ]
-    binding_by_identity = {
-        item.get("output_identity"): item
-        for item in (bindings or {}).get("bindings", [])
-        if isinstance(item, dict) and isinstance(item.get("output_identity"), str)
-    }
+    binding_by_identity = bindings.by_output_identity
     evidence: list[DoctorEvidence] = []
     required = bound = unbound = unsupported = 0
     for dependency in sorted(dependencies, key=lambda item: str(item.get("id", ""))):
@@ -589,10 +518,8 @@ def _coverage(
         adapter = dependency.get("execution_adapter")
         signals = dependency.get("health_signal_refs", [])
         signal_refs = [value for value in signals if isinstance(value, str)]
-        binding = binding_by_identity.get(identity)
-        supported = (
-            adapter == "gatus" and binding is not None and binding.get("renderer_kind") == "gatus"
-        )
+        binding = binding_by_identity.get(identity) if isinstance(identity, str) else None
+        supported = adapter == "gatus" and binding is not None
         if supported:
             if required_dependency:
                 bound += 1
@@ -622,20 +549,12 @@ def _coverage(
     }
     for signal_ref in sorted(logical_service_signal_refs - observed_signal_refs):
         required += 1
-        signal_bindings = [
-            binding
-            for binding in (bindings or {}).get("bindings", [])
-            if isinstance(binding, dict)
-            and binding.get("renderer_kind") == "gatus"
-            and binding.get("signal_ref") == signal_ref
-            and isinstance(binding.get("output_identity"), str)
-        ]
-        if len(signal_bindings) == 1:
-            binding = signal_bindings[0]
+        binding = bindings.by_signal_ref.get(signal_ref)
+        if binding is not None:
             bound += 1
             evidence.append(
                 DoctorEvidence(
-                    id=binding["output_identity"],
+                    id=binding.output_identity,
                     adapter="gatus",
                     signal_refs=[signal_ref],
                     status="unknown",
@@ -1189,6 +1108,8 @@ def doctor(
     adapter_bindings = adapter_bindings or registry_companion(
         ctx.registry_path, "operations/observation/adapter-bindings.yml"
     )
+    if observation_plan is not None and adapter_bindings is not None:
+        _require_same_observer_source_directory(observation_plan, adapter_bindings)
     v2_observation_source = registry_companion(ctx.registry_path, V2_OBSERVATION_RELATIVE)
     if target_type is None:
         if target_ref is not None:
@@ -1200,7 +1121,8 @@ def doctor(
         if adapter_bindings is None:
             raise _configuration_required(ctx, "adapter_bindings")
         plan = _load_mapping(observation_plan, "observation_plan") if observation_plan else None
-        bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
+        assert adapter_bindings is not None
+        bindings = _load_adapter_bindings(adapter_bindings)
         coverage, evidence = _coverage(plan, bindings, None, "") if plan is not None else (None, [])
         if (
             not declaration_only
@@ -1210,18 +1132,12 @@ def doctor(
             raise _configuration_required(ctx, "gatus_url")
         if not declaration_only:
             assert observation_plan is not None
-            assert adapter_bindings is not None
-            display_names = (
-                gatus_display_names(observation_plan, adapter_bindings)
-                if any(item.adapter == "gatus" for item in evidence)
-                else None
-            )
+            assert bindings is not None
             evidence = _gatus_evidence(
                 evidence,
                 bindings,
                 gatus_url,
                 os.environ.get(gatus_token_env),
-                display_names,
             )
         status, reason = _result_status(coverage, evidence, gatus_url)
 
@@ -1270,7 +1186,14 @@ def doctor(
         raise _configuration_required(ctx, "adapter_bindings")
 
     plan = _load_mapping(observation_plan, "observation_plan") if observation_plan else {}
-    bindings = _load_mapping(adapter_bindings, "adapter_bindings") if adapter_bindings else None
+    bindings = (
+        _load_adapter_bindings(adapter_bindings)
+        if adapter_bindings
+        else AdapterBindings(
+            schema_version="infra-observe.adapter-bindings.v2",
+            bindings=[],
+        )
+    )
     target, declared, target_id = _target(
         ctx,
         target_type,
@@ -1289,17 +1212,11 @@ def doctor(
     if not declaration_only:
         assert observation_plan is not None
         assert adapter_bindings is not None
-        display_names = (
-            gatus_display_names(observation_plan, adapter_bindings)
-            if any(item.adapter == "gatus" for item in evidence)
-            else None
-        )
         evidence = _gatus_evidence(
             evidence,
             bindings,
             gatus_url,
             os.environ.get(gatus_token_env),
-            display_names,
         )
     status, reason = _result_status(coverage, evidence, gatus_url)
     result = DoctorResult(
