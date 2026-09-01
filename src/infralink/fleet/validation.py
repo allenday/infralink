@@ -304,7 +304,13 @@ def _expand_literal_includes(
     seen: frozenset[Path] = frozenset(),
 ) -> str:
     """Inline quoted local includes without evaluating Jinja expressions."""
+    registry_root = registry_root.resolve()
     path = path.resolve()
+    if not path.is_relative_to(registry_root):
+        raise _ComposeIncludeError(
+            "compose_template_include_unsafe",
+            "Compose template includes must remain within the selected Registry",
+        )
     template_root = (registry_root / "hosts" / "_templates").resolve()
     if path in seen:
         raise _ComposeIncludeError(
