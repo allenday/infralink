@@ -14,10 +14,18 @@ import re
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 CONFIG_ENVVAR = "INFRALINK_CONFIG"
 _EVIDENCE_KEY_ID = re.compile(r"^[a-z][a-z0-9-]{0,127}$")
+_SIGNING_BINDING_REF = re.compile(r"^[a-z][a-z0-9-]{0,127}/[a-z][a-z0-9-]{0,127}$")
 
 
 class OperatorConfigError(ValueError):
@@ -31,6 +39,7 @@ class FleetPrometheusEvidenceConfig(BaseModel):
 
     artifact_path: str = Field(min_length=1)
     trusted_public_keys: dict[str, str] = Field(min_length=1)
+    signing_binding_key_ids: dict[str, list[str]] = Field(min_length=1)
 
     @field_validator("artifact_path")
     @classmethod
@@ -52,6 +61,32 @@ class FleetPrometheusEvidenceConfig(BaseModel):
             if len(raw) != 32:
                 raise ValueError("trusted_public_keys values must be raw Ed25519 public keys")
         return value
+
+    @field_validator("signing_binding_key_ids")
+    @classmethod
+    def require_signing_binding_key_ids(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        seen_key_ids: set[str] = set()
+        for binding_ref, key_ids in value.items():
+            if _SIGNING_BINDING_REF.fullmatch(binding_ref) is None or not key_ids:
+                raise ValueError("signing_binding_key_ids entries must be nonempty opaque bindings")
+            for key_id in key_ids:
+                if _EVIDENCE_KEY_ID.fullmatch(key_id) is None or key_id in seen_key_ids:
+                    raise ValueError("signing_binding_key_ids key IDs must be unique and bounded")
+                seen_key_ids.add(key_id)
+        return value
+
+    @model_validator(mode="after")
+    def require_key_binding_coverage(self) -> FleetPrometheusEvidenceConfig:
+        associated = {
+            key_id for key_ids in self.signing_binding_key_ids.values() for key_id in key_ids
+        }
+        if associated != set(self.trusted_public_keys):
+            raise ValueError("each trusted_public_key must have one signing binding association")
+        return self
+
+    def authorizes_signing_key(self, binding_ref: str, key_id: str) -> bool:
+        """Return whether one Registry binding is allowed to use one configured key."""
+        return key_id in self.signing_binding_key_ids.get(binding_ref, [])
 
 
 def operator_config_path() -> Path:

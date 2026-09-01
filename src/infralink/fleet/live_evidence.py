@@ -110,6 +110,14 @@ def evaluate_live_evidence(
             "Live evidence does not match the selected registry revision",
             freshness=freshness,
         )
+    if not config.authorizes_signing_key(
+        declaration.controller_bindings.signing_binding_ref, evidence.signature.key_id
+    ):
+        return _failure(
+            "live_evidence_key_unauthorized",
+            "Live evidence key is not authorized for the Registry signing binding",
+            freshness=freshness,
+        )
     public_key = _trusted_public_key(config, evidence.signature.key_id)
     if public_key is None or not evidence.verify_signature(public_key):
         return _failure(

@@ -251,6 +251,10 @@ def _live_config(tmp_path: Path, evidence_path: Path) -> Path:
     public_key = private_key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
+    other_private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33)))
+    other_public_key = other_private_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
     config = tmp_path / "operator.yml"
     config.write_text(
         "\n".join(
@@ -260,6 +264,12 @@ def _live_config(tmp_path: Path, evidence_path: Path) -> Path:
                 f"  artifact_path: {evidence_path}",
                 "  trusted_public_keys:",
                 f"    fleet-evidence-v1: {base64.b64encode(public_key).decode('ascii')}",
+                f"    other-evidence-v1: {base64.b64encode(other_public_key).decode('ascii')}",
+                "  signing_binding_key_ids:",
+                "    infralink-ops/fleet-prometheus-evidence-signing:",
+                "      - fleet-evidence-v1",
+                "    infralink-ops/other-signing-binding:",
+                "      - other-evidence-v1",
                 "",
             ]
         ),
@@ -293,8 +303,14 @@ def _write_registry_revision(root: Path) -> None:
     (git_dir / "HEAD").write_text(f"{REGISTRY_REVISION}\n", encoding="ascii")
 
 
-def _write_live_evidence(path: Path, **overrides: object) -> None:
-    private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+def _write_live_evidence(
+    path: Path,
+    *,
+    key_id: str = "fleet-evidence-v1",
+    private_key: Ed25519PrivateKey | None = None,
+    **overrides: object,
+) -> None:
+    private_key = private_key or Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
     payload: dict[str, object] = {
         "schema_version": "infralink.fleet-prometheus-evidence/v1",
         "registry_revision": REGISTRY_REVISION,
@@ -309,7 +325,7 @@ def _write_live_evidence(path: Path, **overrides: object) -> None:
             }
         },
         "signature": {
-            "key_id": "fleet-evidence-v1",
+            "key_id": key_id,
             "algorithm": "ed25519",
             "value": base64.b64encode(bytes(64)).decode("ascii"),
         },
@@ -355,6 +371,9 @@ def test_live_evidence_operator_config_is_strict_and_local() -> None:
             {
                 "artifact_path": "evidence.json",
                 "trusted_public_keys": {"fleet-evidence-v1": trusted_key},
+                "signing_binding_key_ids": {
+                    "infralink-ops/fleet-prometheus-evidence-signing": ["fleet-evidence-v1"]
+                },
             }
         )
     with pytest.raises(ValidationError):
@@ -362,6 +381,9 @@ def test_live_evidence_operator_config_is_strict_and_local() -> None:
             {
                 "artifact_path": "/var/lib/infralink/evidence.json",
                 "trusted_public_keys": {"fleet-evidence-v1": "not-a-public-key"},
+                "signing_binding_key_ids": {
+                    "infralink-ops/fleet-prometheus-evidence-signing": ["fleet-evidence-v1"]
+                },
                 "unexpected": "rejected",
             }
         )
@@ -437,6 +459,22 @@ def test_live_mode_accepts_fresh_signed_complete_evidence(tmp_path: Path, monkey
     assert result.live_evidence is not None
     assert result.live_evidence.status == "fresh"
     assert result.live_evidence.generated_at == "2026-09-01T12:00:00Z"
+
+
+def test_live_mode_rejects_key_trusted_for_a_different_signing_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(
+        evidence_path,
+        key_id="other-evidence-v1",
+        private_key=Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33))),
+    )
+
+    result = _live_result(tmp_path, monkeypatch, evidence_path)
+
+    assert result.valid is False
+    assert {item.code for item in result.diagnostics} == {"live_evidence_key_unauthorized"}
 
 
 @pytest.mark.parametrize(

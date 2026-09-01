@@ -38,15 +38,20 @@ fleet_prometheus_evidence:
   artifact_path: /var/lib/infralink-ops/fleet-prometheus-evidence.json
   trusted_public_keys:
     fleet-evidence-v1: BASE64_RAW_ED25519_PUBLIC_KEY
+  signing_binding_key_ids:
+    infralink-ops/fleet-prometheus-evidence-signing:
+      - fleet-evidence-v1
 ```
 
 `artifact_path` must be absolute. `trusted_public_keys` maps bounded signing
 key IDs to base64-encoded raw 32-byte Ed25519 public keys. The reader verifies
 the selected checkout's Git revision, the Registry's exact
 `operations/observation/fleet-prometheus-targets.yml` target set, the
-signature, signed freshness window, and each target outcome. Missing, stale,
-untrusted, incomplete, or provider-failed evidence returns normal negative
-diagnostics; it never queries or repairs anything.
+signature, signed freshness window, and each target outcome.
+`signing_binding_key_ids` binds each opaque Registry signing reference to its
+allowed key IDs, so a trusted key for another binding is rejected. Missing,
+stale, untrusted, incomplete, or provider-failed evidence returns normal
+negative diagnostics; it never queries or repairs anything.
 
 ## Repair Boundary
 
