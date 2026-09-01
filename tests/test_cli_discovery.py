@@ -586,7 +586,9 @@ def test_commands_delegate_missing_registry_to_json_boundary(
     payload = json.loads(result.output)
     assert result.exit_code == 3
     assert result.stderr == ""
-    assert result.output.count("\n") == 1
+    # Generated Agent Surface projections retain the canonical envelope but
+    # render JSON as a complete formatted document rather than a one-line blob.
+    assert result.output.endswith("\n")
     assert payload["error"]["code"] == "input_load_failed"
     assert payload["error"]["details"] == {
         "source": "registry",

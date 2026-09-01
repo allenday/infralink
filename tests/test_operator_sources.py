@@ -14,7 +14,7 @@ from infralink.cli.errors import ExitCode
 from infralink.cli.main import cli
 from infralink.operator_operations.topology import HostShowRequest, show_declared_host
 from infralink.operator_sources import SourceRequest, load_registry, load_sources
-from infralink.operator_surface import operator_click_adapter, operator_surface
+from infralink.operator_surface import app_surface, operator_click_adapter, operator_surface
 
 
 def test_load_sources_resolves_registry_root_and_default_edge_companion(tmp_path: Path) -> None:
@@ -184,9 +184,10 @@ def test_topology_reads_are_registered_once_and_preserve_bounded_host_continuati
         "host.show",
         "service.show",
         "edge.show",
-        "app.list",
-        "app.show",
     } <= registered
+    assert "app.list" not in registered
+    assert "app.show" not in registered
+    assert {"app.list", "app.show"} == {item.name for item in app_surface.operations.list()}
 
     first = show_declared_host(HostShowRequest(registry=tmp_path, host_id=host_id, limit=1))
     assert first.services.items == ["alpha"]

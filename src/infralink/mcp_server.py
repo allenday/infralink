@@ -26,7 +26,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
 _ROOT_SOURCE_PROPERTIES: dict[str, dict[str, str]] = {
     "registry": {
         "type": "string",
-        "description": "Registry checkout root or legacy registry YAML path.",
+        "description": "Registry checkout root.",
     },
     "edges": {
         "type": "string",

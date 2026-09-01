@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from mcp import Client
 from pydantic import ValidationError
 
 from infralink.cli.main import cli
 from infralink.fleet.live_evidence import FleetPrometheusTargets
 from infralink.fleet.prometheus_evidence import FleetPrometheusEvidence
 from infralink.fleet.validation import validate_fleet
-from infralink.mcp_server import _native_paths, _native_tool
 from infralink.operator_config import FleetPrometheusEvidenceConfig
 from infralink.operator_sources import SourceRequest, load_sources
-from infralink.operator_surface import operator_surface
+from infralink.operator_surface import operator_mcp_adapter, operator_surface
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
 EDGE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -428,8 +430,12 @@ def test_live_evidence_operator_config_is_strict_and_local() -> None:
 
 
 def test_live_validation_has_no_public_provider_or_artifact_inputs() -> None:
-    native = _native_tool("infralink_fleet_validate", ("fleet", "validate"))
-    properties = native.input_schema["properties"]
+    async def schema() -> dict[str, Any]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+        return next(tool.input_schema for tool in tools.tools if tool.name == "fleet.validate")
+
+    properties = asyncio.run(schema())["properties"]
 
     for forbidden in (
         "artifact_path",
@@ -668,7 +674,6 @@ def test_static_validation_reports_unknown_role_and_is_deterministic(tmp_path: P
 
 def test_fleet_validation_is_a_read_only_operator_operation() -> None:
     assert operator_surface.operations.describe("fleet.validate").read_only is True
-    assert _native_paths()["infralink_fleet_validate"] == ("fleet", "validate")
 
 
 def test_validator_has_no_host_operation_dependencies() -> None:

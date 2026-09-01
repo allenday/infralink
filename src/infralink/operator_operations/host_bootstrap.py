@@ -18,7 +18,7 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 import yaml
@@ -247,20 +247,16 @@ def _bootstrap_tailnet_address(target: Any, ssh_host: str) -> str:
 
     from infralink.operator_surface import (
         DoctorBootstrapPlanRequest,
-        DoctorBootstrapPlanResult,
         doctor_host_bootstrap_plan,
     )
 
     try:
-        operation = cast(
-            DoctorBootstrapPlanResult,
-            doctor_host_bootstrap_plan(
-                DoctorBootstrapPlanRequest(
-                    host_ref=str(target.uuid),
-                    ssh_host=ssh_host,
-                    declared_ssh_host=str(target.tailscale_ip),
-                )
-            ),
+        operation = doctor_host_bootstrap_plan(
+            DoctorBootstrapPlanRequest(
+                host_ref=str(target.uuid),
+                ssh_host=ssh_host,
+                declared_ssh_host=str(target.tailscale_ip),
+            )
         )
         return operation.ssh_host
     except OperationError as error:

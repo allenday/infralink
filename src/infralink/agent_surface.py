@@ -2,23 +2,47 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shlex
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+import agent_surface.adapters.click as agent_surface_click
 import click
 from agent_surface.adapters.click import ClickAdapter
+from agent_surface.budgets import OutputBudget
+from agent_surface.outcomes import ActionProvider
+from agent_surface.rendering import RenderOptions
 from pydantic import BaseModel
 
 from infralink import __version__
-from infralink.cli.contracts import Action, CommandContext, Envelope, ErrorDetail
+from infralink.cli.contracts import Action, Binding, CommandContext, Envelope, ErrorDetail
 from infralink.cli.errors import ErrorCode, ExitCode
+from infralink.operator_config import OperatorConfigError, configured_registry
 
 if TYPE_CHECKING:
     from agent_surface import App, Invocation
 
 
-class _MountedClickAdapter(ClickAdapter):  # type: ignore[misc]
+_compact_mounted_json: ContextVar[bool] = ContextVar("compact_mounted_json", default=False)
+_agent_surface_render = agent_surface_click.render  # type: ignore[attr-defined]
+
+
+def _render_mounted_cli(value: Any, *, options: Any = None) -> str:
+    """Preserve Infralink's one-line JSON CLI envelope for mounted operations."""
+    rendered = _agent_surface_render(value, options=options)
+    if _compact_mounted_json.get() and options is not None and options.format == "json":
+        return json.dumps(json.loads(rendered), separators=(",", ":")) + "\n"
+    return rendered
+
+
+agent_surface_click.render = _render_mounted_cli  # type: ignore[attr-defined]
+
+
+class _MountedClickAdapter(ClickAdapter):
     """Carry the root's canonical topology selections into mounted operations."""
 
     def _payload(self, context: click.Context, plan: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -29,10 +53,24 @@ class _MountedClickAdapter(ClickAdapter):  # type: ignore[misc]
             value = params.get(field.name)
             if value is not None:
                 payload[field.name] = value
-        return cast(dict[str, Any], payload)
+        return payload
+
+    def _invoke(self, context: click.Context, plan: Any, params: dict[str, Any]) -> None:
+        token = _compact_mounted_json.set(True)
+        try:
+            super()._invoke(context, plan, params)
+        finally:
+            _compact_mounted_json.reset(token)
 
 
-def mounted_click_command(app: App) -> click.Group:
+def mounted_click_command(
+    app: App,
+    *,
+    action_provider: ActionProvider | None = None,
+    envelope_renderer: InfralinkEnvelopeRenderer | None = None,
+    render_options: RenderOptions | None = None,
+    operation_error_exit_code_override: Callable[[str], int] | None = None,
+) -> click.Group:
     """Project an external typed app into the canonical Infralink CLI tree.
 
     The core executable owns the global ``--output`` switch. Mounted typed
@@ -42,11 +80,18 @@ def mounted_click_command(app: App) -> click.Group:
     root = _MountedClickAdapter(
         app,
         argv_provider=_mounted_invocation_argv,
-        envelope_renderer=InfralinkEnvelopeRenderer(),
-        operation_error_exit_code=operation_error_exit_code,
+        action_provider=action_provider,
+        envelope_renderer=envelope_renderer or InfralinkEnvelopeRenderer(),
+        render_options=render_options,
+        operation_error_exit_code=operation_error_exit_code_override or operation_error_exit_code,
     ).command()
     _inherit_root_output(root)
-    return cast(click.Group, root)
+    return root
+
+
+def app_render_options() -> RenderOptions:
+    """Preserve the legacy bounded application query response capacity."""
+    return RenderOptions(budget=OutputBudget(max_items=1000))
 
 
 def _mounted_invocation_argv() -> tuple[str, ...]:
@@ -100,6 +145,13 @@ def operation_error_exit_code(code: str) -> int:
     same ``configuration_required`` label for both categories are not part of
     this adapter boundary.
     """
+    if code in {
+        "configuration_required",
+        "input_load_failed",
+        "source_invalid",
+        "source_not_found",
+    }:
+        return int(ExitCode.INPUT_ERROR)
     try:
         error_code = ErrorCode(code)
     except ValueError:
@@ -126,19 +178,23 @@ def operation_error_exit_code(code: str) -> int:
 class InfralinkEnvelopeRenderer:
     """Render typed operations in the published ``infralink.cli/v1`` normal form."""
 
-    output_model = Envelope[Any]
+    output_model: type[BaseModel] = Envelope[Any]
 
     def render(self, invocation: Invocation) -> BaseModel:
-        next_actions = _project_actions(invocation.next_actions, invocation.request)
+        next_actions = _project_actions(
+            invocation.next_actions,
+            self._action_sources(invocation.request),
+            allow_templates=self._allow_action_templates(),
+        )
         command = _command_context(invocation)
         if invocation.error is not None:
             return Envelope[Any](
                 ok=False,
                 command=command,
                 error=ErrorDetail(
-                    code=invocation.error.code,
+                    code=self._error_code(invocation),
                     message=invocation.error.message,
-                    details=_error_details(invocation.error.details),
+                    details=self._error_details(invocation),
                 ),
                 fix=invocation.error.fix,
                 next_actions=next_actions,
@@ -149,6 +205,45 @@ class InfralinkEnvelopeRenderer:
             result=invocation.result,
             next_actions=next_actions,
         )
+
+    @staticmethod
+    def _error_code(invocation: Invocation) -> str:
+        assert invocation.error is not None
+        return invocation.error.code
+
+    @staticmethod
+    def _error_details(invocation: Invocation) -> dict[str, Any]:
+        assert invocation.error is not None
+        return _error_details(invocation.error.details)
+
+    @staticmethod
+    def _action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        return request
+
+    @staticmethod
+    def _allow_action_templates() -> bool:
+        return False
+
+
+class AppEnvelopeRenderer(InfralinkEnvelopeRenderer):
+    """Preserve the legacy source-load envelope for the public app family only."""
+
+    @staticmethod
+    def _error_code(invocation: Invocation) -> str:
+        assert invocation.error is not None
+        return _canonical_error_code(invocation.error.code)
+
+    @staticmethod
+    def _error_details(invocation: Invocation) -> dict[str, Any]:
+        return _canonical_error_details(invocation)
+
+    @staticmethod
+    def _action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        return _effective_source_values(request)
+
+    @staticmethod
+    def _allow_action_templates() -> bool:
+        return True
 
 
 def _command_context(invocation: Invocation) -> CommandContext:
@@ -163,14 +258,17 @@ def _command_context(invocation: Invocation) -> CommandContext:
     else:
         raw_tokens = _canonical_mcp_command(path, request, source_fields)
         arguments = {name: value for name, value in request.items() if name not in source_fields}
+    effective_sources = _effective_source_values(request)
     resolved: dict[str, Any] = {
         "version": __version__,
+        "cwd": os.getcwd(),
         "output": _output_format(raw_tokens, mcp=invocation.command is None),
+        "verbose": "--verbose" in raw_tokens or "-v" in raw_tokens,
     }
     for name in source_fields:
-        value = request.get(name)
+        value = effective_sources.get(name)
         if value is not None:
-            resolved[name] = value
+            resolved[name] = str(value)
     return CommandContext(
         raw=shlex.join(raw_tokens),
         parsed={"path": path, "args": arguments, "flags": _command_flags(raw_tokens)},
@@ -213,17 +311,47 @@ def _error_details(details: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     return {"items": list(details)}
 
 
-def _project_actions(actions: Any, request: Mapping[str, Any] | None) -> list[Action]:
+def _canonical_error_code(code: str) -> str:
+    """Keep typed source failures within the established CLI error taxonomy."""
+    if code in {"source_not_found", "source_invalid"}:
+        return ErrorCode.INPUT_LOAD_FAILED.value
+    return code
+
+
+def _canonical_error_details(invocation: Invocation) -> dict[str, Any]:
+    """Retain the caller-selected source spelling in the public CLI envelope."""
+    assert invocation.error is not None
+    details = _error_details(invocation.error.details)
+    request = invocation.request or {}
+    if invocation.error.code in {"source_not_found", "source_invalid"}:
+        source = details.get("source")
+        selected = request.get(source) if isinstance(source, str) else None
+        if selected is not None:
+            details["path"] = str(selected)
+    return details
+
+
+def _project_actions(
+    actions: Any,
+    request: Mapping[str, Any] | None,
+    *,
+    allow_templates: bool,
+) -> list[Action]:
     """Project only concrete Agent Surface actions into the v1 action normal form."""
     if actions.truncated:
         raise ValueError("Infralink cannot publish a truncated action frontier")
     projected: list[Action] = []
     for action_value in actions.items:
-        if action_value.command is None:
+        template = action_value.command is None
+        if template and not allow_templates:
             raise ValueError("Infralink cannot publish an unresolved action template")
-        command = _inherit_declared_sources(list(action_value.command), request)
+        source_command = action_value.command_template if template else action_value.command
+        if source_command is None:
+            raise ValueError("Infralink action has no command")
+        command = _inherit_declared_sources(list(source_command), request)
         _validate_action_operation(action_value.operation, command)
         argv = ["infralink", *_declared_source_argv(request), *command]
+        bindings = _project_action_bindings(action_value.slots) if template else {}
         projected.append(
             Action(
                 rel=action_value.rel,
@@ -231,6 +359,8 @@ def _project_actions(actions: Any, request: Mapping[str, Any] | None) -> list[Ac
                 command=shlex.join(argv),
                 description=action_value.description,
                 safe=_action_is_read_only(action_value.operation),
+                templated=template,
+                bindings=bindings,
             )
         )
     return projected
@@ -278,11 +408,52 @@ def _declared_source_argv(request: Mapping[str, Any] | None) -> list[str]:
     return argv
 
 
+def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Resolve the selected registry companion paths for public provenance."""
+    if request is None:
+        return {}
+    registry = request.get("registry")
+    edges = request.get("edges")
+    if registry is None:
+        try:
+            registry = configured_registry()
+        except OperatorConfigError:
+            return {"edges": edges} if edges is not None else {}
+        if registry is None:
+            return {"edges": edges} if edges is not None else {}
+    registry_path = Path(str(registry)).expanduser().resolve()
+    if edges is None:
+        edges = registry_path / "network/main-dev/edges/edges.yml"
+    else:
+        edges = Path(str(edges)).expanduser().resolve()
+    return {"registry": registry_path, "edges": edges}
+
+
+def _project_action_bindings(slots: Mapping[str, Any]) -> dict[str, Binding]:
+    """Render Agent Surface template slots in Infralink's established binding contract."""
+    bindings: dict[str, Binding] = {}
+    for name, slot in slots.items():
+        if not isinstance(slot, Mapping):
+            raise ValueError("Infralink action template slot is invalid")
+        slot_type = slot.get("type", "string")
+        if slot_type not in {"string", "integer", "boolean"}:
+            raise ValueError("Infralink action template slot type is invalid")
+        source = slot.get("source")
+        if not isinstance(source, str) or not source:
+            raise ValueError("Infralink action template slot source is required")
+        bindings[name] = Binding(
+            type=slot_type,
+            required=bool(slot.get("required", False)),
+            source=source,
+        )
+    return bindings
+
+
 def _validate_action_operation(operation: str | None, argv: list[str]) -> None:
     if operation is None:
         return
     expected = operation.split(".")
-    if argv[: len(expected)] != expected:
+    if argv[: len(expected)] != expected and argv != ["help", *expected]:
         raise ValueError("Infralink action command does not match its registered operation")
 
 
@@ -291,12 +462,14 @@ def _action_is_read_only(operation: str | None) -> bool:
         return False
     from agent_surface.operations import UnknownOperationError
 
-    from infralink.operator_surface import operator_surface
+    from infralink.operator_surface import app_surface, operator_surface
 
-    try:
-        return bool(operator_surface.operations.describe(operation).read_only)
-    except UnknownOperationError:
-        return False
+    for surface in (app_surface, operator_surface):
+        try:
+            return bool(surface.operations.describe(operation).read_only)
+        except UnknownOperationError:
+            continue
+    return False
 
 
 __all__ = ["InfralinkEnvelopeRenderer"]

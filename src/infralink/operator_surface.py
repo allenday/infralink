@@ -12,6 +12,7 @@ from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Literal, NoReturn, cast
 
+import click
 from agent_surface import App, OperationError
 from agent_surface.adapters.click import ClickAdapter
 from agent_surface.adapters.mcp import MCPAdapter
@@ -88,6 +89,9 @@ class DoctorBootstrapPlanResult(_OperationModel):
 
 
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
+# The public MCP entrypoint starts with only the low-risk application reads.
+# This registry is the sole authority for their CLI and MCP projections.
+app_surface = App("infralink", shared_input_model=OperatorInputs)
 # Diagram projection owns explicit observation sources and therefore cannot
 # inherit the Registry/edge selector shared by topology operations.
 diagram_surface = App("infralink-diagram")
@@ -111,6 +115,56 @@ def operator_mcp_adapter() -> MCPAdapter:
     from infralink.agent_surface import InfralinkEnvelopeRenderer
 
     return MCPAdapter(operator_surface, envelope_renderer=InfralinkEnvelopeRenderer())
+
+
+def app_click_command() -> click.Group:
+    """Return the generated application subtree mounted under the root CLI."""
+    from infralink.agent_surface import (
+        AppEnvelopeRenderer,
+        app_render_options,
+        mounted_click_command,
+    )
+    from infralink.app_actions import AppActionProvider
+
+    root = mounted_click_command(
+        app_surface,
+        action_provider=AppActionProvider(),
+        envelope_renderer=AppEnvelopeRenderer(),
+        render_options=app_render_options(),
+        operation_error_exit_code_override=_app_operation_error_exit_code,
+    )
+    command = root.get_command(click.Context(root), "app")
+    assert isinstance(command, click.Group)
+    return command
+
+
+def _app_operation_error_exit_code(code: str) -> int:
+    """Keep the migrated app family's missing-source usage exit stable."""
+    if code == "configuration_required":
+        return 2
+    from infralink.agent_surface import operation_error_exit_code
+
+    return operation_error_exit_code(code)
+
+
+def app_mcp_adapter() -> MCPAdapter:
+    """Project the one public application registry through native MCP."""
+    from infralink.agent_surface import AppEnvelopeRenderer, app_render_options
+    from infralink.app_actions import AppActionProvider
+
+    return MCPAdapter(
+        app_surface,
+        action_provider=AppActionProvider(),
+        envelope_renderer=AppEnvelopeRenderer(),
+        render_options=app_render_options(),
+    )
+
+
+def diagram_mcp_adapter() -> MCPAdapter:
+    """Build the diagram-local MCP adapter used by its adapter contract tests."""
+    from infralink.agent_surface import InfralinkEnvelopeRenderer
+
+    return MCPAdapter(diagram_surface, envelope_renderer=InfralinkEnvelopeRenderer())
 
 
 class HostListRequest(SourceRequest):
@@ -229,9 +283,9 @@ class HostBootstrapOperationResult(_OperationModel):
     succeeded: bool
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True
-)  # type: ignore[untyped-decorator]
+)
 def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOperationResult:
     """Execute bootstrap from an explicit source, without a Click parse context."""
     from infralink.cli.main import Context
@@ -246,9 +300,9 @@ def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOper
     return HostBootstrapOperationResult(result=result, succeeded=succeeded)
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "host.logs", summary="Read bounded evidence from a host reconcile run", read_only=True
-)  # type: ignore[untyped-decorator]
+)
 def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
     """Execute the one typed target-log query shared by all public transports."""
     from infralink.cli.operations import (
@@ -276,9 +330,9 @@ def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
     )
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "host.status", summary="Read a host timer and latest reconcile status", read_only=True
-)  # type: ignore[untyped-decorator]
+)
 def host_status_operation(request: HostTargetRequest) -> HostStatusResult:
     """Read the declared target's status through the sole SSH provider."""
     from infralink.cli.operations import inspect_target_status, resolve_apply_request
@@ -299,9 +353,9 @@ def host_status_operation(request: HostTargetRequest) -> HostStatusResult:
     )
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "host.verifier", summary="Inspect public host verifier facts", read_only=True
-)  # type: ignore[untyped-decorator]
+)
 def host_verifier_operation(request: HostTargetRequest) -> HostVerifierResult:
     """Read the declared target's V2 signature verifier facts."""
     from infralink.cli.operations import inspect_verifier, resolve_apply_request
@@ -320,9 +374,9 @@ def host_verifier_operation(request: HostTargetRequest) -> HostVerifierResult:
     )
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "host.apply", summary="Plan or submit declared host reconciliation", idempotent=True
-)  # type: ignore[untyped-decorator]
+)
 def host_apply_operation(request: HostApplyRequest) -> HostApplyResult:
     """Use the only declared SSH provider for a host-local reconcile request."""
     from infralink.cli.errors import CliFailure
@@ -390,55 +444,55 @@ def host_apply_operation(request: HostApplyRequest) -> HostApplyResult:
         _raise_operation_failure(error)
 
 
-@operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[type-var]
 def host_list(request: HostListRequest) -> HostListResult:
     """Return the registry host list without a Click context."""
     return list_declared_hosts(request)
 
 
-@operator_surface.operation("host.show", summary="Show one declared host", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("host.show", summary="Show one declared host", read_only=True)  # type: ignore[type-var]
 def host_show(request: HostShowRequest) -> HostShowResult:
     """Return one bounded host view without a Click context."""
     return show_declared_host(request)
 
 
-@operator_surface.operation("service.list", summary="List declared services", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("service.list", summary="List declared services", read_only=True)  # type: ignore[type-var]
 def service_list(request: ServiceListRequest) -> ServiceListResult:
     """Return the registry service list without a Click context."""
     return list_declared_services(request)
 
 
-@operator_surface.operation("service.show", summary="Show one declared service", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("service.show", summary="Show one declared service", read_only=True)  # type: ignore[type-var]
 def service_show(request: ServiceShowRequest) -> ServiceShowResult:
     """Return one bounded service view without a Click context."""
     return show_declared_service(request)
 
 
-@operator_surface.operation("edge.list", summary="List declared edges", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("edge.list", summary="List declared edges", read_only=True)  # type: ignore[type-var]
 def edge_list(request: EdgeListRequest) -> EdgeListResult:
     """Return the selected registry edge list without a Click context."""
     return list_declared_edges(request)
 
 
-@operator_surface.operation("edge.show", summary="Show one declared edge", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("edge.show", summary="Show one declared edge", read_only=True)  # type: ignore[type-var]
 def edge_show(request: EdgeShowRequest) -> EdgeShowResult:
     """Return one bounded edge view without a Click context."""
     return show_declared_edge(request)
 
 
-@operator_surface.operation("app.list", summary="List declared applications", read_only=True)  # type: ignore[untyped-decorator]
+@app_surface.operation("app.list", summary="List declared applications", read_only=True)  # type: ignore[type-var]
 def app_list(request: SourceRequest) -> AppListResult:
     """Return application IDs without a Click context."""
     return list_declared_apps(request)
 
 
-@operator_surface.operation("app.show", summary="Show one declared application", read_only=True)  # type: ignore[untyped-decorator]
+@app_surface.operation("app.show", summary="Show one declared application", read_only=True)  # type: ignore[type-var]
 def app_show(request: AppShowRequest) -> AppShowResult:
     """Return one bounded application view without a Click context."""
     return show_declared_app(request)
 
 
-@operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[untyped-decorator]
+@operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[type-var]
 def info(request: InfoRequest) -> InfoResult:
     """Return topology counts and the exact resolved declaration sources."""
     sources = load_sources(request)
@@ -452,9 +506,9 @@ def info(request: InfoRequest) -> InfoResult:
     )
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "fleet.validate", summary="Validate declared fleet topology", read_only=True
-)  # type: ignore[untyped-decorator]
+)
 def fleet_validate(request: FleetValidateRequest) -> FleetValidationResult:
     """Return deterministic declared-state diagnostics without repairing anything."""
     return validate_fleet(
@@ -462,9 +516,9 @@ def fleet_validate(request: FleetValidateRequest) -> FleetValidationResult:
     )
 
 
-@diagram_surface.operation(
+@diagram_surface.operation(  # type: ignore[type-var]
     "diagram.project", summary="Project a declared V2 topology diagram", read_only=True
-)  # type: ignore[untyped-decorator]
+)
 def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
     """Render declared V2 topology inline without selecting or changing host state."""
     try:
@@ -539,11 +593,11 @@ def _is_canonical_id(value: str | None) -> bool:
     return True
 
 
-@operator_surface.operation(
+@operator_surface.operation(  # type: ignore[type-var]
     "doctor.host.bootstrap_plan",
     summary="Plan declared host bootstrap prerequisites",
     read_only=True,
-)  # type: ignore[untyped-decorator]
+)
 def doctor_host_bootstrap_plan(request: DoctorBootstrapPlanRequest) -> DoctorBootstrapPlanResult:
     """Validate and build the only executable bootstrap-plan transition."""
     if not _is_tailnet_ipv4(request.declared_ssh_host):

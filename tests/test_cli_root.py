@@ -11,6 +11,38 @@ from infralink.cli.main import cli
 from tests.cli_helpers import source_checkout_env
 
 
+def _examples_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    root = Path(__file__).resolve().parents[1]
+    checkout = tmp_path / "checkout"
+    registry = yaml.safe_load((root / "examples/registry.yml").read_text(encoding="utf-8"))
+    for host_id, manifest in registry["hosts"].items():
+        path = checkout / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False),
+            encoding="utf-8",
+        )
+    applications = root / "examples/applications.yml"
+    if applications.exists():
+        (checkout / "hosts" / "applications.yml").write_text(
+            applications.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    else:
+        first_host = next(iter(registry["hosts"]))
+        (checkout / "hosts" / "applications.yml").write_text(
+            yaml.safe_dump(
+                {"applications": {"example": {"members": [{"host": first_host}]}}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+    edges = checkout / "network/main-dev/edges/edges.yml"
+    edges.parent.mkdir(parents=True, exist_ok=True)
+    edges.write_text((root / "examples/edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    return checkout, edges
+
+
 def test_root_command_defaults_to_yaml_and_json_remains_explicit() -> None:
     runner = CliRunner()
     yaml_result = runner.invoke(cli, [])
@@ -407,8 +439,11 @@ def test_root_help_is_a_compact_generated_command_index() -> None:
     assert "{rel:" not in result.output
 
 
-def test_all_list_commands_have_uniform_executable_prefixed_actions(monkeypatch) -> None:
+def test_all_list_commands_have_uniform_executable_prefixed_actions(
+    monkeypatch, tmp_path: Path
+) -> None:
     root = Path(__file__).resolve().parents[1]
+    checkout, checkout_edges = _examples_checkout(tmp_path)
     monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
     monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
     runner = CliRunner()
@@ -422,15 +457,30 @@ def test_all_list_commands_have_uniform_executable_prefixed_actions(monkeypatch)
         (["services"], "service"),
         (["edges-list"], "edge"),
     ):
-        response = runner.invoke(cli, command)
-        assert response.exit_code == 0
+        if resource == "app":
+            monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
+            monkeypatch.setenv("INFRALINK_EDGES", str(checkout_edges))
+            response = runner.invoke(
+                cli,
+                ["--registry", str(checkout), "--edges", str(checkout_edges), *command],
+            )
+        else:
+            monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
+            monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+            response = runner.invoke(cli, command)
+        assert response.exit_code == 0, response.output
         assert "action: {" not in response.output
         payload = yaml.safe_load(response.output)
         actions = payload["next_actions"]
         assert all(item["command"].startswith("infralink ") for item in actions)
         show = next(item for item in actions if item["rel"] == "show")
         assert "argv" not in show
-        assert show["command"] == f"infralink {resource} show '{{id}}'"
+        if resource == "app":
+            assert show["command"].endswith("app show '{app_id}'")
+            assert str(checkout) in show["command"]
+            assert str(checkout_edges) in show["command"]
+        else:
+            assert show["command"] == f"infralink {resource} show '{{id}}'"
         assert "continue" not in {item["rel"] for item in actions}
 
 
