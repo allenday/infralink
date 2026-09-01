@@ -101,6 +101,7 @@ def test_native_mcp_projects_root_topology_sources_before_the_command_path() -> 
     tool = _native_tool("infralink_version", ("version",))
 
     assert {"registry", "edges"} <= set(tool.input_schema["properties"])
+    assert tool.input_schema["properties"]["registry"]["description"] == "Registry checkout root."
     assert _native_argv(
         "infralink_version",
         {"registry": "/registry", "edges": "/edges.yml"},

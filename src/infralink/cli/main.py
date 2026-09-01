@@ -1572,7 +1572,7 @@ def version_command() -> None:
     type=click.Path(exists=False, path_type=Path),
     default=None,
     envvar=REGISTRY_ENVVAR,
-    help="Path to the registry checkout root or legacy registry YAML file",
+    help="Path to the registry checkout root",
 )
 @click.option(
     "-e",
