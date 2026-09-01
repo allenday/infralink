@@ -789,6 +789,7 @@ ansible_defaults:
     host = public_registry["hosts"]["11111111-1111-4111-8111-111111111111"]
     assert host["canonical_name"] == "useful-host"
     assert host["status"] == "active"
+    assert host["group"] == "core"
     assert host["roles"] == ["api"]
     assert host["services"]["api"] == {
         "port": 8443,
@@ -797,6 +798,26 @@ ansible_defaults:
     }
     assert "provider_metadata" not in host
     assert "ansible_defaults" not in public_registry
+
+
+def test_analyze_checkout_supports_typed_epitaph_dates(tmp_path: Path) -> None:
+    registry, edges = _write_topology(tmp_path)
+    topology = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    host = topology["hosts"]["11111111-1111-4111-8111-111111111111"]
+    host["status"] = "terminated"
+    host["epitaph"] = {"retired_at": "2026-09-01", "reason": "superseded"}
+    registry.write_text(yaml.safe_dump(topology), encoding="utf-8")
+    checkout, _ = _analyze_checkout(registry, edges)
+
+    with CliRunner().isolated_filesystem(temp_dir=tmp_path):
+        result = CliRunner().invoke(
+            cli,
+            ["--registry", str(checkout), "analyze", "--output", "generated"],
+        )
+        public_registry = yaml.safe_load(Path("generated/registry.yml").read_text())
+
+    assert result.exit_code == 0, result.output
+    assert public_registry["hosts"]["11111111-1111-4111-8111-111111111111"]["group"] == "core"
 
 
 @pytest.mark.parametrize(

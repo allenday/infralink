@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -251,6 +253,25 @@ def _service_count(data: dict[str, Any]) -> int:
     return len(services)
 
 
+def _analysis_data(ctx: Context) -> dict[str, Any]:
+    """Render parsed checkout hosts without changing legacy artifact semantics."""
+    hosts: dict[str, dict[str, Any]] = {}
+    for host in ctx.registry:
+        data = host.to_dict()
+        if host.group is not None:
+            data["group"] = host.group
+        hosts[host.uuid] = data
+    return json.loads(json.dumps({"hosts": hosts}, default=_json_scalar))
+
+
+def _json_scalar(value: object) -> object:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    raise TypeError(f"unsupported analysis value: {type(value).__name__}")
+
+
 @click.command()
 @click.option("-o", "--output", type=click.Path(path_type=Path), required=True)
 @click.option("--edges/--no-edges", default=True)
@@ -274,12 +295,7 @@ def analyze(
     if source is None or ctx.registry_path != source:
         raise registry_checkout_required(str(ctx.registry_path))
     try:
-        data = json.loads(
-            json.dumps(
-                {"hosts": {host.uuid: host.to_dict() for host in ctx.registry}},
-                default=lambda value: value.value,
-            )
-        )
+        data = _analysis_data(ctx)
     except Exception:
         raise input_load_failed("registry", str(source)) from None
 

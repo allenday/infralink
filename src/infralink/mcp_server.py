@@ -44,7 +44,7 @@ _SOURCE_INDEPENDENT_PATHS = frozenset({("diagram", "project")})
 
 def _sets_root_output_format(argv: list[str]) -> bool:
     """Reject only the root formatter, not artifact commands' local outputs."""
-    root_value_options = {"--registry", "--edges"}
+    root_value_options = {"-r", "--registry", "-e", "--edges"}
     index = 0
     while index < len(argv):
         token = argv[index]

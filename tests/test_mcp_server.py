@@ -57,6 +57,8 @@ def test_mcp_invokes_existing_cli_and_preserves_hateoas_envelope() -> None:
         ["--output", "yaml", "version"],
         ["--output=yaml", "version"],
         ["-o", "yaml", "version"],
+        ["-r", "/registry", "-o", "yaml", "analyze", "--output", "artifacts"],
+        ["-e", "/edges.yml", "--output", "yaml", "analyze", "--output", "artifacts"],
         ["mcp", "serve"],
         ["-v", "mcp", "serve"],
         ["--registry", "/tmp/registry", "mcp", "serve"],
