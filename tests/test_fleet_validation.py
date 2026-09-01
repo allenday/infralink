@@ -174,6 +174,23 @@ def test_static_validation_rejects_literal_include_outside_registry(tmp_path: Pa
     ]
 
 
+def test_static_validation_rejects_root_compose_template_symlink_outside_registry(
+    tmp_path: Path,
+) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    compose = tmp_path / "hosts" / HOST_ID / "docker-compose.yml.j2"
+    outside = tmp_path.parent / "outside-compose.yml.j2"
+    outside.write_text("services:\n  app: {}\n", encoding="utf-8")
+    compose.unlink()
+    compose.symlink_to(outside)
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert [(item.code, item.severity) for item in result.diagnostics] == [
+        ("compose_template_include_unsafe", "capability_gap")
+    ]
+
+
 def test_static_validation_rejects_whitespace_control_include_outside_registry(
     tmp_path: Path,
 ) -> None:
