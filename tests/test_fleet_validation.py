@@ -123,6 +123,20 @@ def test_static_validation_extracts_services_from_jinja_compose_template(tmp_pat
     assert result.valid is True
 
 
+def test_static_validation_extracts_services_from_root_jinja_include(tmp_path: Path) -> None:
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    template = tmp_path / "hosts" / "_templates" / "watchtower-services.yml.j2"
+    template.parent.mkdir(exist_ok=True)
+    template.write_text("services:\n  app:\n    image: {{ app_image }}\n", encoding="utf-8")
+    _write_compose(
+        tmp_path, "{% include 'watchtower-services.yml.j2' %}\nnetworks:\n  default: {}\n"
+    )
+
+    result = validate_fleet(load_sources(SourceRequest(registry=tmp_path, edges=edges)))
+
+    assert result.valid is True
+
+
 def test_live_mode_returns_capability_gap_without_probing(tmp_path: Path) -> None:
     edges = _write_registry(tmp_path, role_overrides="workers: 1")
 

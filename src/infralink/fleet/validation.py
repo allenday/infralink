@@ -271,7 +271,22 @@ def _compose_services(
             )
         )
         return None
-    return _static_compose_service_names(path.read_text(encoding="utf-8"))
+    return _static_compose_service_names(_expand_literal_includes(path, registry_root))
+
+
+def _expand_literal_includes(path: Path, registry_root: Path) -> str:
+    """Inline quoted local includes without evaluating Jinja expressions."""
+    source = path.read_text(encoding="utf-8")
+    include_pattern = re.compile(r"{%\s*include\s+['\"]([^'\"]+)['\"]\s*%}")
+    template_root = registry_root / "hosts" / "_templates"
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        candidates = (path.parent / name, template_root / name)
+        candidate = next((item for item in candidates if item.is_file()), None)
+        return candidate.read_text(encoding="utf-8") if candidate is not None else match.group(0)
+
+    return include_pattern.sub(replace, source)
 
 
 def _static_compose_service_names(source: str) -> set[str]:
