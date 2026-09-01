@@ -1380,6 +1380,15 @@ def test_doctor_normalizes_single_host_firewall_sources_for_nft() -> None:
     ) == ['iifname "tailscale0" ip saddr 100.93.157.126 tcp dport 9300 accept']
 
 
+def test_doctor_uses_ip6_family_for_ipv6_firewall_sources() -> None:
+    from infralink.cli.doctor import _firewall_rule_lines
+
+    assert _firewall_rule_lines(
+        {"interface": "eth0", "sources": ["::/0"], "ports": [22]},
+        "tcp",
+    ) == ['iifname "eth0" ip6 saddr ::/0 tcp dport 22 accept']
+
+
 def test_doctor_host_fails_closed_when_latest_v2_reconcile_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
