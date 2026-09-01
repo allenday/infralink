@@ -114,6 +114,15 @@ typed models:
 The quality pipeline runs generation and then `git diff --exit-code` so model
 and schema drift fails fast.
 
+## CI Fast Path
+
+Changes limited to the documentation contract inputs (`README.md`, `docs/**`,
+`tests/test_docs_contract.py`, and `.woodpecker.yml`) select Woodpecker's
+`docs-contract` step. It runs the documentation contract test and regenerates
+the CLI, observation, and release schemas before requiring a clean diff. A
+change outside those inputs uses the full `quality-3.12` gate. This keeps
+documentation feedback fast without allowing generated schemas to drift.
+
 ## Tests
 
 The `tests/` tree covers command contracts, schema generation, public data
@@ -123,8 +132,8 @@ logic. Policy tests intentionally inspect configuration files such as
 
 ## Release Tooling
 
-Woodpecker runs quality jobs for Python 3.10, 3.11, and 3.12. Its release job is
-manual, `main`-only, and depends on all quality jobs. Local release helper
+Woodpecker runs the `quality-3.12` gate. Its release job is manual, `main`-only,
+and depends on that quality gate. Local release helper
 scripts validate versions, exact protected-main commits, toolchain checksums,
 asset names, checksums, and release attestations. They do not replace the
 protected Woodpecker release step.
