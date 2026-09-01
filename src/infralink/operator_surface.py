@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
 import click
-from agent_surface import App, OperationError
+from agent_surface import App, OperationError, OperationOutcome
 from agent_surface.adapters.click import ClickAdapter
 from agent_surface.adapters.mcp import MCPAdapter
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
@@ -114,8 +114,27 @@ def operator_click_adapter() -> ClickAdapter:
 def operator_mcp_adapter() -> MCPAdapter:
     """Build the one MCP projection for typed operator operations."""
     from infralink.agent_surface import InfralinkEnvelopeRenderer
+    from infralink.fleet.actions import FleetValidationActionProvider
 
-    return MCPAdapter(operator_surface, envelope_renderer=InfralinkEnvelopeRenderer())
+    return MCPAdapter(
+        operator_surface,
+        action_provider=FleetValidationActionProvider(),
+        envelope_renderer=InfralinkEnvelopeRenderer(),
+    )
+
+
+def fleet_click_command() -> click.Group:
+    """Return the generated fleet subtree mounted under the public root."""
+    from infralink.agent_surface import mounted_click_command
+    from infralink.fleet.actions import FleetValidationActionProvider
+
+    root = mounted_click_command(
+        operator_surface,
+        action_provider=FleetValidationActionProvider(),
+    )
+    command = root.get_command(click.Context(root), "fleet")
+    assert isinstance(command, click.Group)
+    return command
 
 
 def app_click_command() -> click.Group:
@@ -593,11 +612,12 @@ def info(request: InfoRequest) -> InfoResult:
 @operator_surface.operation(  # type: ignore[type-var]
     "fleet.validate", summary="Validate declared fleet topology", read_only=True
 )
-def fleet_validate(request: FleetValidateRequest) -> FleetValidationResult:
+def fleet_validate(request: FleetValidateRequest) -> OperationOutcome[FleetValidationResult]:
     """Return deterministic declared-state diagnostics without repairing anything."""
-    return validate_fleet(
+    result = validate_fleet(
         load_sources(request), host=request.host, strict=request.strict, live=request.live
     )
+    return OperationOutcome(result, exit_code=0 if result.valid else 1)
 
 
 @diagram_surface.operation(  # type: ignore[type-var]

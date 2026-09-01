@@ -676,6 +676,42 @@ def test_fleet_validation_is_a_read_only_operator_operation() -> None:
     assert operator_surface.operations.describe("fleet.validate").read_only is True
 
 
+def test_fleet_validate_click_and_mcp_share_the_registered_operation(
+    tmp_path: Path,
+) -> None:
+    edges = _write_registry(tmp_path)
+
+    click_result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(tmp_path),
+            "--edges",
+            str(edges),
+            "--output",
+            "json",
+            "fleet",
+            "validate",
+        ],
+    )
+
+    async def call_mcp() -> dict[str, Any]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool(
+                "fleet.validate",
+                {"registry": str(tmp_path), "edges": str(edges)},
+            )
+        assert result.is_error is False
+        return result.structured_content
+
+    click_payload = json.loads(click_result.output)
+    mcp_payload = asyncio.run(call_mcp())
+    assert click_result.exit_code == 1
+    assert click_payload["result"] == mcp_payload["result"]
+    assert click_payload["next_actions"] == mcp_payload["next_actions"]
+    assert click_payload["next_actions"][0]["rel"] == "inspect-declaration"
+
+
 def test_validator_has_no_host_operation_dependencies() -> None:
     source = Path(validate_fleet.__code__.co_filename).read_text(encoding="utf-8")
 
