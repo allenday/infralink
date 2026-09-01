@@ -4,9 +4,14 @@ from infralink.observation.api import (
     ProjectResult,
     ProjectValidationError,
     SourceProvenance,
+    V2ArtifactProjectResult,
+    V2ConfigurationProjectResult,
     V2MetricProjectResult,
     ValidationReport,
     project,
+    project_v2_artifact_bindings,
+    project_v2_artifact_bindings_from_bytes,
+    project_v2_configuration_bindings,
     project_v2_metric_contracts,
     validate,
 )
@@ -18,7 +23,13 @@ from infralink.observation.explain import (
     DiagnosticExplanation,
     explain,
 )
-from infralink.observation.loader import LoadReport, ObservationDocument, load_observation_documents
+from infralink.observation.loader import (
+    LoadReport,
+    ObservationDocument,
+    ObservationSource,
+    load_observation_documents,
+    load_observation_documents_from_bytes,
+)
 from infralink.observation.models import (
     Application,
     BackendKind,
@@ -64,6 +75,11 @@ from infralink.observation.models import (
     WaiverScopeKind,
 )
 from infralink.observation.models_v2 import (
+    ArtifactBinding,
+    ArtifactKind,
+    ArtifactLifecycle,
+    ArtifactSlot,
+    ArtifactSource,
     ExternalServiceContract,
     MetricBinding,
     MetricContract,
@@ -81,8 +97,10 @@ from infralink.observation.planner import (
 )
 from infralink.observation.v2 import (
     ObservationV2Document,
+    PlannedArtifactBinding,
     PlannedMetricContract,
     parse_v2_document,
+    plan_v2_artifact_bindings,
     plan_v2_metric_contracts,
 )
 
@@ -120,12 +138,18 @@ __all__ = [
     "MetricContract",
     "ObservationBackend",
     "ObservationDocument",
+    "ObservationSource",
     "ObservationV2Document",
     "OperationsView",
     "OperationsViewSection",
     "ProviderAlias",
     "ProjectResult",
     "ProjectValidationError",
+    "ArtifactBinding",
+    "ArtifactKind",
+    "ArtifactLifecycle",
+    "ArtifactSlot",
+    "ArtifactSource",
     "QualifiedRef",
     "ReadinessSuite",
     "RendererBindingIdentity",
@@ -149,12 +173,15 @@ __all__ = [
     "WaiverScope",
     "WaiverScopeKind",
     "ValidationReport",
+    "V2ConfigurationProjectResult",
+    "V2ArtifactProjectResult",
     "V2MetricProjectResult",
     "load_observation_documents",
     "Plan",
     "PlanReport",
     "PlanValidationError",
     "PlannedMetricContract",
+    "PlannedArtifactBinding",
     "SourceRef",
     "resolve_observation_documents",
     "canonical_digest",
@@ -162,8 +189,13 @@ __all__ = [
     "canonical_json_bytes",
     "explain",
     "project",
+    "project_v2_configuration_bindings",
+    "project_v2_artifact_bindings",
+    "project_v2_artifact_bindings_from_bytes",
     "project_v2_metric_contracts",
+    "load_observation_documents_from_bytes",
     "parse_v2_document",
     "plan_v2_metric_contracts",
+    "plan_v2_artifact_bindings",
     "validate",
 ]

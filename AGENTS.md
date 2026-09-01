@@ -23,7 +23,7 @@ version is `0.5.6`.
 
 ## Setup
 
-Use Python 3.10, 3.11, or 3.12. Do not use the macOS system Python 3.9.
+Use Python 3.12 or newer. Do not use the macOS system Python 3.9.
 
 ```bash
 python3.12 -m venv .venv

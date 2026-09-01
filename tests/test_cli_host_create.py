@@ -140,6 +140,39 @@ def test_host_create_rejects_non_directory_registry_and_invalid_address(tmp_path
     assert yaml.safe_load(invalid_address.output)["error"]["code"] == "usage_error"
 
 
+def test_host_create_write_refuses_the_managed_runtime_checkout_before_mutation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The deployed detached checkout is desired-state cache, never an authoring tree."""
+    registry_root = _registry_root(tmp_path)
+    managed_root = registry_root.parent
+    monkeypatch.setattr(
+        "infralink.cli.registry_authoring._managed_runtime_registry_root",
+        lambda: managed_root,
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--registry",
+            str(registry_root),
+            "host",
+            "create",
+            "--name",
+            "new-node",
+            "--address",
+            "100.64.1.9",
+            "--write",
+        ],
+    )
+
+    payload = yaml.safe_load(result.output)
+    assert result.exit_code == 3
+    assert payload["error"]["code"] == "authoring_checkout_required"
+    assert payload["error"]["details"] == {"registry": str(registry_root)}
+    assert list(registry_root.iterdir()) == []
+
+
 def test_host_create_is_discoverable_from_generated_host_help() -> None:
     result = CliRunner().invoke(cli, ["help", "host"])
 

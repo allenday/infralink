@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 import click
 import yaml
+from agent_surface import OperationError
 
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
@@ -39,6 +40,7 @@ from infralink.host_registry_state import HostManifestGitState, inspect_host_man
 from infralink.host_transport import SshReadinessTransport
 from infralink.observation.loader import load_observation_documents
 from infralink.observation.v2 import ObservationV2Document
+from infralink.operator_surface import DoctorBootstrapPlanRequest, doctor_host_bootstrap_plan
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
@@ -736,10 +738,10 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
         manifest = (
             yaml.safe_load(manifest_path.read_text(encoding="utf-8")) if manifest_path else {}
         )
-        declared_v2 = bool(
-            manifest.get("hosts", {})
-            .get(str(host.uuid), {})
-            .get("self_deploy_v2_target_ssh_host_fingerprint")
+        manifest_host = manifest.get("hosts", {}).get(str(host.uuid), {})
+        declared_v2 = isinstance(manifest_host, dict) and (
+            "controller_bootstrap" in manifest_host
+            or isinstance(manifest_host.get("self_deploy_v2_target_ssh_host_fingerprint"), str)
         )
     except (OSError, TypeError, yaml.YAMLError):
         declared_v2 = False
@@ -754,7 +756,8 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
                 readiness = evaluate_host_readiness(
                     host,
                     SshReadinessTransport(
-                        _declared_firewall_rules(ctx, str(host.uuid)), known_hosts
+                        _declared_firewall_rules(ctx, str(host.uuid)),
+                        known_hosts,
                     ),
                 )
             fingerprint_check = HostReadinessCheck(
@@ -780,7 +783,10 @@ def _host_readiness(ctx: Context, target_ref: str, declaration_only: bool) -> An
             )
     if fingerprint_check is None:
         readiness = evaluate_host_readiness(
-            host, SshReadinessTransport(_declared_firewall_rules(ctx, str(host.uuid)))
+            host,
+            SshReadinessTransport(
+                _declared_firewall_rules(ctx, str(host.uuid)),
+            ),
         )
     return (
         readiness
@@ -1106,9 +1112,31 @@ def _apply_host_v2_observation_contract(
 
 
 def _bootstrap_plan_action(ctx: Context, host_id: str) -> Any:
+    host = ctx.registry.get(host_id)
+    address = getattr(host, "tailscale_ip", None) if host is not None else None
+    if not isinstance(address, str):
+        return action(
+            "declare-bootstrap-transport",
+            [*_root_source_argv(ctx), "host", "show", host_id],
+            "Declare the host Tailnet IPv4 before planning bootstrap",
+        )
+    try:
+        operation = doctor_host_bootstrap_plan(
+            DoctorBootstrapPlanRequest(
+                host_ref=host_id,
+                ssh_host=address,
+                declared_ssh_host=address,
+            )
+        )
+    except OperationError:
+        return action(
+            "declare-bootstrap-transport",
+            [*_root_source_argv(ctx), "host", "show", host_id],
+            "Declare the host Tailnet IPv4 before planning bootstrap",
+        )
     return action(
         "bootstrap-plan",
-        [*_root_source_argv(ctx), "host", "bootstrap", host_id, "--plan"],
+        [*_root_source_argv(ctx), *operation.argv],
         "Plan the failed host bootstrap prerequisites",
     )
 

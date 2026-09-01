@@ -4,53 +4,25 @@ when:
   - event: manual
 
 steps:
-  quality-3.10:
-    image: python:3.10-slim-bookworm
-    depends_on: []
+  docs-contract:
+    image: python:3.12-slim-bookworm
+    when:
+      - path:
+          include: [README.md, docs/**, tests/test_docs_contract.py, .woodpecker.yml]
     commands:
-      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
-      - apt-get update
-      - apt-get install --yes --no-install-recommends git
-      - python -m pip install --disable-pip-version-check -e ".[dev]"
-      - python -m ruff format --check src tests scripts
-      - python -m ruff check src tests scripts
-      - python -m mypy src scripts
-      - python -m pytest
-      - python scripts/generate_cli_schemas.py
-      - python scripts/generate_observation_schemas.py
-      - python scripts/generate_release_schemas.py
-      - python scripts/check_docs.py
-      - git diff --exit-code
-      - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
-      - python -m build
-      - python -m twine check dist/*
-
-  quality-3.11:
-    image: python:3.11-slim-bookworm
-    depends_on: []
-    commands:
-      - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
-      - apt-get update
-      - apt-get install --yes --no-install-recommends git
-      - python -m pip install --disable-pip-version-check -e ".[dev]"
-      - python -m ruff format --check src tests scripts
-      - python -m ruff check src tests scripts
-      - python -m mypy src scripts
-      - python -m pytest
-      - python scripts/generate_cli_schemas.py
-      - python scripts/generate_observation_schemas.py
-      - python scripts/generate_release_schemas.py
-      - python scripts/check_docs.py
-      - git diff --exit-code
-      - test -z "$(git ls-files --others --exclude-standard src/infralink/schemas)"
-      - python -m build
-      - python -m twine check dist/*
+      - apt-get update -qq && apt-get install --yes -qq --no-install-recommends git
+      - python -m pip install --disable-pip-version-check pytest pytest-cov
+      - python -m pytest -q tests/test_docs_contract.py --no-cov
 
   quality-3.12:
     image: python:3.12-slim-bookworm
     depends_on: []
+    when:
+      - path:
+          exclude: [README.md, docs/**, tests/test_docs_contract.py, .woodpecker.yml]
     commands:
       - cp -a . /tmp/infralink-quality && cd /tmp/infralink-quality
+      - sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
       - apt-get update
       - apt-get install --yes --no-install-recommends git
       - python -m pip install --disable-pip-version-check -e ".[dev]"
@@ -70,8 +42,6 @@ steps:
   release:
     image: python:3.12-slim-bookworm
     depends_on:
-      - quality-3.10
-      - quality-3.11
       - quality-3.12
     when:
       - event: manual
@@ -129,6 +99,7 @@ steps:
       - rm -rf dist
       - python -m build
       - python -m twine check dist/*
+      - python scripts/release.py distribution-version --dist dist --version "$${RELEASE_VERSION}"
       - python scripts/release.py checksums --version "$${RELEASE_VERSION}" --dist dist
       - COSIGN_PASSWORD= cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
       - >-

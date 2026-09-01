@@ -1,5 +1,158 @@
 {
   "$defs": {
+    "ArtifactBinding": {
+      "additionalProperties": false,
+      "description": "Instance-selected, integrity-bound Registry sources for one artifact slot.",
+      "properties": {
+        "slot_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSource"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "slot_id",
+        "sources"
+      ],
+      "title": "ArtifactBinding",
+      "type": "object"
+    },
+    "ArtifactKind": {
+      "description": "The finite artifact shapes materialized by generic Operations code.",
+      "enum": [
+        "file",
+        "tree"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "ArtifactLifecycle": {
+      "description": "The bounded consumer action after a declared artifact changes.",
+      "enum": [
+        "compose-recreate",
+        "provider-poll"
+      ],
+      "title": "ArtifactLifecycle",
+      "type": "string"
+    },
+    "ArtifactSlot": {
+      "additionalProperties": false,
+      "description": "A profile-owned, non-secret contract for one materialized artifact.",
+      "properties": {
+        "component_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Component Id"
+        },
+        "consumer_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Consumer Id",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ArtifactLifecycle"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "integer"
+        },
+        "owner_gid": {
+          "title": "Owner Gid",
+          "type": "integer"
+        },
+        "owner_uid": {
+          "title": "Owner Uid",
+          "type": "integer"
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "target": {
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "target",
+        "mode",
+        "owner_uid",
+        "owner_gid",
+        "consumer_id",
+        "lifecycle",
+        "purpose"
+      ],
+      "title": "ArtifactSlot",
+      "type": "object"
+    },
+    "ArtifactSource": {
+      "additionalProperties": false,
+      "description": "One exact registry source selected by an instance binding.",
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "relative_target": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Target"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "ArtifactSource",
+      "type": "object"
+    },
     "ComparisonOperator": {
       "enum": [
         "gt",
@@ -171,6 +324,306 @@
       ],
       "title": "ComponentSlot",
       "type": "object"
+    },
+    "ConfigurationBinding": {
+      "additionalProperties": false,
+      "description": "One value bound to a declared profile configuration slot.",
+      "properties": {
+        "edge_refs": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge Refs"
+        },
+        "slot_id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "patternProperties": {
+                "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "patternProperties": {
+                "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "patternProperties": {
+                        "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            },
+            {
+              "items": {
+                "patternProperties": {
+                  "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "patternProperties": {
+                          "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "slot_id"
+      ],
+      "title": "ConfigurationBinding",
+      "type": "object"
+    },
+    "ConfigurationField": {
+      "additionalProperties": false,
+      "description": "One named non-recursive field of a declared structured configuration value.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConfigurationFieldKind"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "ConfigurationField",
+      "type": "object"
+    },
+    "ConfigurationFieldKind": {
+      "description": "The non-recursive values permitted inside declared structured configuration.",
+      "enum": [
+        "string",
+        "integer",
+        "boolean",
+        "string-list",
+        "string-list-map"
+      ],
+      "title": "ConfigurationFieldKind",
+      "type": "string"
+    },
+    "ConfigurationSlot": {
+      "additionalProperties": false,
+      "description": "A profile-owned non-secret configuration contract, optionally component-scoped.",
+      "properties": {
+        "cardinality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConnectionCardinality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "component_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Component Id"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/ConfigurationField"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+          "title": "Id",
+          "type": "string"
+        },
+        "identity_field": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identity Field"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConfigurationValueKind"
+        },
+        "protocol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndpointProtocol"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "purpose": {
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "target_profile_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Profile Id"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "purpose"
+      ],
+      "title": "ConfigurationSlot",
+      "type": "object"
+    },
+    "ConfigurationValueKind": {
+      "description": "The finite set of non-secret values a profile may request.",
+      "enum": [
+        "string",
+        "integer",
+        "boolean",
+        "string-list",
+        "string-list-map",
+        "record",
+        "record-list",
+        "connection"
+      ],
+      "title": "ConfigurationValueKind",
+      "type": "string"
+    },
+    "ConnectionCardinality": {
+      "description": "The number of in-fleet targets a connection contract permits.",
+      "enum": [
+        "one",
+        "many"
+      ],
+      "title": "ConnectionCardinality",
+      "type": "string"
     },
     "Endpoint": {
       "additionalProperties": false,
@@ -593,12 +1046,26 @@
       "additionalProperties": false,
       "description": "A host-local instantiation of a v2 service profile.",
       "properties": {
+        "artifact_bindings": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBinding"
+          },
+          "title": "Artifact Bindings",
+          "type": "array"
+        },
         "components": {
           "items": {
             "$ref": "#/$defs/ComponentInstance"
           },
           "minItems": 1,
           "title": "Components",
+          "type": "array"
+        },
+        "configuration_bindings": {
+          "items": {
+            "$ref": "#/$defs/ConfigurationBinding"
+          },
+          "title": "Configuration Bindings",
           "type": "array"
         },
         "host_id": {
@@ -629,12 +1096,26 @@
       "additionalProperties": false,
       "description": "A reusable service profile composed from component slots.",
       "properties": {
+        "artifact_slots": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSlot"
+          },
+          "title": "Artifact Slots",
+          "type": "array"
+        },
         "components": {
           "items": {
             "$ref": "#/$defs/ComponentSlot"
           },
           "minItems": 1,
           "title": "Components",
+          "type": "array"
+        },
+        "configuration_slots": {
+          "items": {
+            "$ref": "#/$defs/ConfigurationSlot"
+          },
+          "title": "Configuration Slots",
           "type": "array"
         },
         "id": {

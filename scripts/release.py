@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import re
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 RELEASE_TOOLCHAINS = {
@@ -111,6 +112,31 @@ def release_assets(root: Path, *, version: str) -> list[Path]:
     return [files[name] for name in expected_assets]
 
 
+def validate_distribution_version(*, dist: Path, version: str) -> None:
+    wheel = dist / package_assets(version)[0]
+    metadata_suffix = ".dist-info/METADATA"
+    try:
+        with ZipFile(wheel) as archive:
+            metadata_members = [
+                name for name in archive.namelist() if name.endswith(metadata_suffix)
+            ]
+            if len(metadata_members) != 1:
+                raise ReleaseError("wheel must contain exactly one dist-info metadata file")
+            metadata = archive.read(metadata_members[0]).decode("utf-8")
+    except (OSError, BadZipFile, UnicodeDecodeError) as error:
+        raise ReleaseError("cannot read built wheel metadata") from error
+    declared_version = next(
+        (
+            line.removeprefix("Version: ")
+            for line in metadata.splitlines()
+            if line.startswith("Version: ")
+        ),
+        None,
+    )
+    if declared_version != version:
+        raise ReleaseError("wheel metadata version does not match requested release version")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -128,6 +154,9 @@ def _parser() -> argparse.ArgumentParser:
     assets = commands.add_parser("assets")
     assets.add_argument("--dist", required=True, type=Path)
     assets.add_argument("--version", required=True)
+    distribution_version = commands.add_parser("distribution-version")
+    distribution_version.add_argument("--dist", required=True, type=Path)
+    distribution_version.add_argument("--version", required=True)
     return parser
 
 
@@ -145,6 +174,8 @@ def main() -> int:
             write_toolchain_environment(args.platform, args.output)
         elif args.command == "checksums":
             write_checksums(args.dist, version=args.version)
+        elif args.command == "distribution-version":
+            validate_distribution_version(dist=args.dist, version=args.version)
         else:
             for asset in release_assets(args.dist, version=args.version):
                 print(asset)

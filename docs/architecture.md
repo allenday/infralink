@@ -4,6 +4,29 @@ Infralink is organized around explicit, file-backed infrastructure facts and
 bounded command outputs. It does not discover live infrastructure by default and
 does not make private provider data public.
 
+## Public And Private Runtime Boundary
+
+This repository is the public package boundary. It owns the CLI/API contracts,
+schemas, examples, release artifacts, and provider-neutral models.
+
+Private host-controller packaging belongs to the `cyberstorm-dev/infralink-ops`
+consumer repository.
+That consumer packages controller images and host launchers for registry
+checkout, rendering, config projection, BWS-backed secret rendering, Docker
+image retention, firewall verification, and host doctor evidence.
+
+```mermaid
+flowchart LR
+    cli["infralink CLI/API"] --> contracts["schemas and bounded envelopes"]
+    contracts --> consumer["infralink-ops or another controller consumer"]
+    consumer --> registry["environment registry"]
+    registry --> host["managed host runtime"]
+```
+
+The public package may validate registry data or produce operation requests. It
+does not choose a registry revision, publish controller images, resolve private
+tenant policy, or activate services on a host.
+
 ## Package Map
 
 - `src/infralink/cli/main.py` owns the root Click command tree, lazy command
@@ -101,8 +124,10 @@ protected Woodpecker release step.
 
 ## More Context
 
+- Control-plane ownership and migration path: [Control-plane authority map](control-plane-authority-map.md)
 - Observable topology, resources, metrics, and readiness rollups:
   [Observable model](observable-model.md)
+- Private controller runtime consumer: `cyberstorm-dev/infralink-ops`
 - Setup and PR flow: [CONTRIBUTING.md](../CONTRIBUTING.md)
 - Security boundaries: [docs/security-boundaries.md](security-boundaries.md)
 - v0.2 migration history: [docs/compatibility/v0.2.md](compatibility/v0.2.md)

@@ -337,6 +337,63 @@ def test_host_apply_reports_only_normalized_observed_fingerprints_on_key_mismatc
     assert [call[0] for call in calls] == ["ssh-keyscan", "ssh-keygen", "ssh-keygen", "ssh-keygen"]
 
 
+def test_host_apply_scans_the_declared_ed25519_key_type_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest key type selects the matching pinned host-key algorithm."""
+    registry = tmp_path / "registry"
+    host = registry / "hosts" / HOST_ID
+    host.mkdir(parents=True)
+    (host / "manifest.yml").write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    controller_bootstrap: {}\n"
+        f"    ssh:\n      host_key_fingerprint: ssh-ed25519 {FINGERPRINT}\n",
+        encoding="utf-8",
+    )
+    _git(registry, "init", "--quiet")
+    _git(registry, "config", "user.email", "test@example.invalid")
+    _git(registry, "config", "user.name", "Test")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "registry")
+    calls: list[list[str]] = []
+    original_run = subprocess.run
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[0] == "git":
+            return original_run(args, **kwargs)  # type: ignore[arg-type,return-value]
+        if args[0] == "ssh-keyscan":
+            assert args == [
+                "ssh-keyscan",
+                "-T",
+                "10",
+                "-t",
+                "ed25519",
+                "-p",
+                "22",
+                "100.64.68.83",
+            ]
+            return _completed("100.64.68.83 ssh-ed25519 opaque-ed25519-key\n")
+        if args[0] == "ssh-keygen":
+            assert kwargs["input"] == "100.64.68.83 ssh-ed25519 opaque-ed25519-key\n"
+            return _completed(f"256 {FINGERPRINT} scanned-host (ED25519)\n")
+        raise AssertionError("host apply must not open SSH during an identity dry run")
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    response = CliRunner().invoke(
+        cli,
+        ["--registry", str(registry / "hosts"), "host", "apply", HOST_ID, "--dry-run"],
+    )
+
+    payload = yaml.safe_load(response.output)
+    assert response.exit_code == 0
+    assert payload["ok"] is True
+    assert [call[0] for call in calls if call[0] != "git"] == ["ssh-keyscan", "ssh-keygen"]
+
+
 def test_host_apply_rejects_a_nonzero_fingerprint_scan_even_when_stdout_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -650,31 +707,60 @@ def test_host_status_reads_target_timer_and_last_reconcile_evidence(
     assert_schema(payload, "host-status")
 
 
-def test_host_apply_reports_healthy_target_timer_when_direct_dispatch_is_unavailable(
+def test_host_status_reports_failed_target_health_as_typed_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registry_checkout(tmp_path)
+    monkeypatch.setattr(
+        "infralink.cli.operations.subprocess.run",
+        lambda *args, **kwargs: _completed(
+            "timer_active=active\n"
+            "timer_next=2026-08-13T17:00:00Z\n"
+            "unit_active=inactive\n"
+            "unit_result=exit-code\n"
+            "unit_status=1\n"
+            "registry_sha=" + "c" * 40 + "\n"
+            "finished_at=2026-08-13T16:00:00Z\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
 
-    class UnavailableProvider:
+    response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "status", HOST_ID])
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert_schema(payload, "host-status")
+    assert payload["ok"] is True
+    assert payload["result"]["last_reconcile"]["status"] == "failed"
+
+
+@pytest.mark.parametrize("dispatch_status", ["unavailable", "rejected"])
+def test_host_apply_reports_failed_target_timer_when_direct_dispatch_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatch_status: str
+) -> None:
+    registry = _registry_checkout(tmp_path)
+
+    class FallbackProvider:
         def submit(self, request: object) -> OperationRecord:
             raise CliFailure(
                 code=ErrorCode.PROVIDER_UNAVAILABLE,
                 message="Declared host SSH reconcile operation is unavailable",
                 exit_code=ExitCode.PROVIDER_ERROR,
                 fix="Retry",
-                details={"dispatch": "unavailable"},
+                details={"dispatch": dispatch_status},
             )
 
-    monkeypatch.setattr(
-        "infralink.cli.operations.operation_provider", lambda: UnavailableProvider()
-    )
+    monkeypatch.setattr("infralink.cli.operations.operation_provider", lambda: FallbackProvider())
     monkeypatch.setattr(
         "infralink.cli.operations.inspect_target_status",
         lambda request: {
             "timer_active": "active",
             "timer_next": "2026-08-13T17:00:00Z",
             "unit_active": "inactive",
-            "unit_result": "success",
+            "unit_result": "exit-code",
             "registry_sha": "b" * 40,
             "finished_at": "2026-08-13T16:00:00Z",
         },
@@ -689,13 +775,13 @@ def test_host_apply_reports_healthy_target_timer_when_direct_dispatch_is_unavail
     assert_schema(payload, "host-apply")
     assert payload["result"] == {
         "target": {"type": "host", "id": HOST_ID, "canonical_name": HOST_NAME},
-        "dispatch": {"provider": "ssh", "status": "unavailable"},
+        "dispatch": {"provider": "ssh", "status": dispatch_status},
         "target_status": {
             "reconcile_mode": "timer",
             "timer": {"active": True, "next_scheduled_at": "2026-08-13T17:00:00Z"},
             "in_progress": False,
             "last_reconcile": {
-                "status": "success",
+                "status": "failed",
                 "registry_sha": "b" * 40,
                 "finished_at": "2026-08-13T16:00:00Z",
             },
@@ -737,6 +823,51 @@ def test_host_logs_last_run_returns_bounded_sanitized_target_evidence(
     }
     assert "not-output" not in response.output
     assert_schema(payload, "host-logs")
+
+
+def test_host_logs_diagnostic_returns_target_private_adapter_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _completed("private adapter failure detail\n")
+
+    monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.cli.operations._pinned_known_hosts",
+        lambda request: nullcontext(Path("/tmp/known-hosts")),
+    )
+
+    response = CliRunner().invoke(
+        cli, ["--registry", str(registry), "host", "logs", HOST_ID, "--last-run", "--diagnostic"]
+    )
+    payload = yaml.safe_load(response.output)
+
+    assert response.exit_code == 0
+    assert payload["result"]["lines"] == ["private adapter failure detail"]
+    assert calls == [
+        [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "UserKnownHostsFile=/tmp/known-hosts",
+            "-p",
+            "22",
+            "root@100.64.68.83",
+            "sh",
+            "-s",
+        ]
+    ]
 
 
 def test_host_status_marks_an_active_target_reconcile_in_progress(
@@ -951,8 +1082,9 @@ def test_host_apply_wait_projects_the_same_canonical_failure_diagnostic(
     )
 
     payload = yaml.safe_load(response.output)
-    assert response.exit_code == 1
+    assert response.exit_code == 0
     assert_schema(payload, "host-apply")
+    assert payload["result"]["operation"]["state"] == "failed"
     assert payload["result"]["failure"]["journal"] == [
         "code: reconcile_launcher_process_failed",
         "stage: apply",

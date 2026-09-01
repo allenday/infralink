@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import PurePath
 from typing import Annotated, Any, Generic, Literal, TypeVar, cast
 
@@ -118,6 +120,27 @@ class HostControllerBootstrapState(ContractModel):
     registry_read_identity_secret: HostControllerBootstrapSecretRef
     registry_repo_url: str = Field(min_length=1, max_length=1024)
     registry_ref: str = Field(pattern=r"^[A-Za-z0-9._/-]{1,255}$")
+    registry_known_hosts: str = Field(min_length=1, max_length=16384)
+
+    @field_validator("registry_known_hosts")
+    @classmethod
+    def require_ssh_known_hosts_entries(cls, value: str) -> str:
+        """Require parseable, non-secret SSH known-hosts material."""
+        if "\x00" in value:
+            raise ValueError("registry_known_hosts must not contain NUL bytes")
+        entries = [line for line in value.splitlines() if line.strip() and not line.startswith("#")]
+        if not entries:
+            raise ValueError("registry_known_hosts must contain an SSH host-key entry")
+        for entry in entries:
+            fields = entry.split()
+            offset = 1 if fields[0].startswith("@") else 0
+            if len(fields) < offset + 3:
+                raise ValueError("registry_known_hosts contains an incomplete SSH host-key entry")
+            try:
+                base64.b64decode(fields[offset + 2], validate=True)
+            except (ValueError, binascii.Error):
+                raise ValueError("registry_known_hosts contains invalid SSH key material") from None
+        return value
 
 
 class HostBootstrapV2State(ContractModel):
@@ -188,6 +211,7 @@ class HostBootstrapRequest(ContractModel):
                     "registry_read_identity_secret_uuid": self.controller_bootstrap.registry_read_identity_secret.id,
                     "registry_repo_url": self.controller_bootstrap.registry_repo_url,
                     "registry_ref": self.controller_bootstrap.registry_ref,
+                    "registry_known_hosts": self.controller_bootstrap.registry_known_hosts,
                 }
             )
         return values
@@ -595,6 +619,29 @@ class ValidateResult(ContractModel):
     summary: ValidationSummary
 
 
+class FleetValidationDiagnostic(ContractModel):
+    code: str
+    severity: Literal["error", "warning", "capability_gap"]
+    message: str
+    subject_kind: Literal["host", "edge", "fleet"]
+    subject_id: str
+    path: str | None = None
+
+
+class FleetValidationSummary(ContractModel):
+    host_count: int
+    error_count: int
+    warning_count: int
+    capability_gap_count: int
+
+
+class FleetValidationResult(ContractModel):
+    valid: bool
+    mode: Literal["static", "live"]
+    diagnostics: tuple[FleetValidationDiagnostic, ...]
+    summary: FleetValidationSummary
+
+
 class ResolveResult(ContractModel):
     edge: EdgeSummary
     endpoint: Endpoint
@@ -669,6 +716,8 @@ class HostReadinessResult(ContractModel):
     self_deploy_reconcile_active_state: str | None = None
     self_deploy_reconcile_sub_state: str | None = None
     self_deploy_reconcile_exit_timestamp_monotonic: int | None = None
+    controller_image: str | None = None
+    controller_python_version: str | None = None
 
 
 class DoctorResult(ContractModel):

@@ -131,6 +131,175 @@ service_instances:
     assert [source.path for source in result.sources] == ["instances.yml", "profiles.yml"]
 
 
+def test_public_api_projects_v2_configuration_bindings_with_their_contract(
+    tmp_path: Path,
+) -> None:
+    from infralink.observation import project_v2_configuration_bindings
+
+    source = tmp_path / "configuration.yml"
+    source.write_text(
+        """schema_version: infralink.observation/v2
+service_profiles:
+  - id: nginx
+    components: [{id: nginx, endpoints: []}]
+    configuration_slots:
+      - id: virtual-hosts
+        kind: string-list
+        purpose: Declare virtual host names.
+service_instances:
+  - id: nginx
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: nginx
+    components: [{slot_id: nginx}]
+    configuration_bindings:
+      - slot_id: virtual-hosts
+        value: [www.example.test]
+""",
+        encoding="ascii",
+    )
+
+    result = project_v2_configuration_bindings([source])
+
+    assert len(result.configuration_bindings) == 1
+    binding = result.configuration_bindings[0]
+    assert binding.profile_id == "nginx"
+    assert binding.slot.id == "virtual-hosts"
+    assert binding.value == ["www.example.test"]
+
+
+def test_public_api_projects_v2_artifact_bindings_with_integrity_metadata(tmp_path: Path) -> None:
+    from infralink.observation import project_v2_artifact_bindings
+
+    source = tmp_path / "artifacts.yml"
+    source.write_text(
+        """schema_version: infralink.observation/v2
+service_profiles:
+  - id: grafana
+    components: [{id: grafana, endpoints: []}]
+    artifact_slots:
+      - id: datasource
+        component_id: grafana
+        kind: file
+        target: grafana/provisioning/datasources.yml
+        mode: 416
+        owner_uid: 472
+        owner_gid: 472
+        consumer_id: grafana
+        lifecycle: compose-recreate
+        purpose: Provision Grafana datasource configuration.
+service_instances:
+  - id: observability
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: grafana
+    components: [{slot_id: grafana}]
+    artifact_bindings:
+      - slot_id: datasource
+        sources:
+          - path: catalog/grafana/datasources.yml
+            sha256: cfdd3d870458d66f175c68f09f6e0c8df1c717963348d995f58017762773b63b
+""",
+        encoding="ascii",
+    )
+
+    result = project_v2_artifact_bindings([source])
+
+    assert len(result.artifact_bindings) == 1
+    binding = result.artifact_bindings[0]
+    assert binding.slot.target == "grafana/provisioning/datasources.yml"
+    assert (
+        binding.sources[0].sha256
+        == "cfdd3d870458d66f175c68f09f6e0c8df1c717963348d995f58017762773b63b"
+    )
+
+
+def test_public_api_projects_v2_artifact_bindings_from_stable_source_bytes() -> None:
+    from infralink.observation import (
+        ObservationSource,
+        project_v2_artifact_bindings_from_bytes,
+    )
+
+    result = project_v2_artifact_bindings_from_bytes(
+        [
+            ObservationSource(
+                path="catalog/observability.yml",
+                body=b"""schema_version: infralink.observation/v2
+service_profiles:
+  - id: grafana
+    components: [{id: grafana, endpoints: []}]
+    artifact_slots:
+      - id: datasource
+        component_id: grafana
+        kind: file
+        target: grafana/provisioning/datasources.yml
+        mode: 416
+        owner_uid: 472
+        owner_gid: 472
+        consumer_id: grafana
+        lifecycle: compose-recreate
+        purpose: Provision Grafana datasource configuration.
+service_instances:
+  - id: observability
+    host_id: 11111111-1111-4111-8111-111111111111
+    profile_id: grafana
+    components: [{slot_id: grafana}]
+    artifact_bindings:
+      - slot_id: datasource
+        sources:
+          - path: catalog/grafana/datasources.yml
+            sha256: cfdd3d870458d66f175c68f09f6e0c8df1c717963348d995f58017762773b63b
+""",
+            )
+        ]
+    )
+
+    assert [source.path for source in result.sources] == ["catalog/observability.yml"]
+    assert result.artifact_bindings[0].slot.target == "grafana/provisioning/datasources.yml"
+
+
+def test_public_api_bytes_projection_retains_canonical_source_validation() -> None:
+    from infralink.observation import (
+        ObservationSource,
+        ProjectValidationError,
+        project_v2_artifact_bindings_from_bytes,
+    )
+
+    with pytest.raises(ProjectValidationError) as caught:
+        project_v2_artifact_bindings_from_bytes(
+            [
+                ObservationSource(
+                    path="catalog/invalid.yml",
+                    body=b"schema_version: infralink.observation/v2\nservice_profiles: !!set {x: null}\n",
+                )
+            ]
+        )
+
+    assert [item.code for item in caught.value.report.diagnostics] == [
+        "canonical-value-unsupported"
+    ]
+
+
+def test_public_api_bytes_projection_rejects_non_yaml_source_extension() -> None:
+    from infralink.observation import (
+        ObservationSource,
+        ProjectValidationError,
+        project_v2_artifact_bindings_from_bytes,
+    )
+
+    with pytest.raises(ProjectValidationError) as caught:
+        project_v2_artifact_bindings_from_bytes(
+            [
+                ObservationSource(
+                    path="catalog/observability.txt",
+                    body=b"schema_version: infralink.observation/v2\n",
+                )
+            ]
+        )
+
+    assert [item.code for item in caught.value.report.diagnostics] == [
+        "unsupported-source-extension"
+    ]
+
+
 def test_public_api_rejects_non_v2_metric_source(tmp_path: Path) -> None:
     from infralink.observation import ProjectValidationError, project_v2_metric_contracts
 

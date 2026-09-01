@@ -7,6 +7,45 @@ documentation, and release evidence inspection.
 
 Current package version: `0.5.8`.
 
+## Start Here
+
+| If you need to... | Start with... |
+| --- | --- |
+| Understand the public model and repository boundaries | [Architecture](docs/architecture.md) |
+| Find the owner for a control-plane task | [Control-plane authority map](docs/control-plane-authority-map.md) |
+| Inspect or validate declared infrastructure safely | [Safe CLI workflow](docs/safe-cli-workflow.md) |
+| Inspect topology, evidence, or readiness | [Observable model](docs/observable-model.md) |
+| Install and use the local diagnostic agent | [Local doctor agent](docs/local-doctor-agent.md) |
+| Understand release evidence and adoption | [Release operator workflow](docs/release-operator-workflow.md) |
+| Operate a managed host runtime | `cyberstorm-dev/infralink-ops` |
+| Select or promote environment desired state | the environment's Registry repository |
+
+Use this repository to model, inspect, validate, and explain infrastructure.
+Use the environment controller only through its documented Registry-owned workflow.
+
+## Public Boundary
+
+Infralink is the public CLI, schema, and Python API layer. It models declared
+infrastructure data, validates files, emits bounded command envelopes, and
+generates documentation or release evidence.
+
+Private host-runtime helpers live in the `cyberstorm-dev/infralink-ops`
+consumer repository.
+That repo packages controller image primitives such as registry checkout,
+template rendering, config projection, BWS-backed secret rendering, image
+retention, firewall verification, and the `infralink-host` reconciler timer.
+
+```mermaid
+flowchart LR
+    public["infralink public CLI/API"] --> registry["declared registry data"]
+    registry --> ops["infralink-ops private controller runtime"]
+    ops --> host["managed host evidence"]
+```
+
+Do not use the public Infralink package as a deployment controller by itself.
+It can inspect, validate, and model; environment-specific controllers select
+registry revisions and activate services.
+
 ## Install
 
 Infralink supports Python 3.10 through 3.12. Artifact-generating commands require POSIX/Linux
@@ -156,6 +195,17 @@ be validated against packaged schemas under
 `src/infralink/schemas/observation/v1` and
 `src/infralink/schemas/observation/v2`.
 
+In v2, a service profile may declare `configuration_slots` for non-secret
+render or materialization inputs. A slot is profile-wide by default and may
+optionally name a component owner. Instances supply exactly one typed
+`configuration_binding` for each required slot. Supported values are strings,
+integers, booleans, string lists, records, and record lists with explicitly
+declared fields; record fields are limited to scalars and string lists. The
+cross-document loader validates the binding against the profile contract, and
+`plan_v2_configuration_bindings()` returns the normalized, deterministically
+ordered renderer input. Secrets continue to use `resource_slots` and secret
+references rather than configuration bindings.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -199,6 +249,8 @@ templates.
 - Contribution flow and canonical checks: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Agent instructions: [AGENTS.md](AGENTS.md)
 - Architecture/navigation: [docs/architecture.md](docs/architecture.md)
+- Read-only declared fleet validation: [docs/fleet-validate.md](docs/fleet-validate.md)
+- Public/private runtime split: [docs/architecture.md#public-and-private-runtime-boundary](docs/architecture.md#public-and-private-runtime-boundary)
 - Observable topology and metric contracts: [docs/observable-model.md](docs/observable-model.md)
 - Security boundaries: [docs/security-boundaries.md](docs/security-boundaries.md)
 - Release workflow: [docs/release-operator-workflow.md](docs/release-operator-workflow.md)
@@ -219,6 +271,11 @@ Consumers verify the Cosign bundle and `SHA256SUMS` before installing the
 wheel, then record the source commit and wheel digest in consumer configuration.
 Rollback restores the previously verified release revision and digest; it does
 not rebuild old source or mutate the existing public release.
+
+Managed-host adoption is a consumer workflow. For private host controller
+runtime, adopt the verified wheel into the `infralink-ops` consumer repository,
+publish the controller image there, and select that image through the
+environment registry.
 
 ## License
 

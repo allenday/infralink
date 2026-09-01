@@ -19,6 +19,7 @@ from infralink.observation.canonical import canonical_json
 from infralink.observation.diagnostics import Diagnostic, DiagnosticSet, SourceLocation
 from infralink.observation.v2 import (
     ObservationV2Document,
+    V2ConfigurationValidationError,
     V2InstanceTopologyValidationError,
     V2MetricValidationError,
     V2ResourceValidationError,
@@ -75,6 +76,14 @@ class ObservationDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservationSource:
+    """One already-read observation source with caller-provided provenance."""
+
+    path: str
+    body: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class LoadReport:
     """The usable documents and all diagnostics produced while loading them."""
 
@@ -106,6 +115,51 @@ def load_observation_documents(
     for path in discovered:
         source_path = path.relative_to(base).as_posix()
         loaded, load_findings, attempted = _load_file(path, source_path)
+        documents.extend(loaded)
+        findings.extend(load_findings)
+        attempted_document_count += attempted
+
+    findings.extend(_duplicate_id_diagnostics(documents))
+    documents, topology_findings = _validate_v2_source_set(documents)
+    findings.extend(topology_findings)
+    return LoadReport(
+        documents=tuple(documents),
+        diagnostics=DiagnosticSet.from_diagnostics(findings, limit=diagnostic_limit),
+        attempted_document_count=attempted_document_count,
+    )
+
+
+def load_observation_documents_from_bytes(
+    sources: Iterable[ObservationSource],
+    *,
+    diagnostic_limit: int = DEFAULT_DIAGNOSTIC_LIMIT,
+) -> LoadReport:
+    """Load already-read source bytes through the same bounded YAML contract."""
+
+    documents: list[ObservationDocument] = []
+    findings: list[Diagnostic] = []
+    attempted_document_count = 0
+    for source in sources:
+        if (
+            not isinstance(source, ObservationSource)
+            or not isinstance(source.path, str)
+            or not source.path
+            or type(source.body) is not bytes
+        ):
+            raise TypeError("observation source must provide a non-empty path and bytes body")
+        if Path(source.path).suffix not in {".yml", ".yaml"}:
+            findings.append(
+                Diagnostic(
+                    code="unsupported-source-extension",
+                    severity="error",
+                    message="Observation source files must use .yml or .yaml.",
+                    location=SourceLocation(Path(source.path).name),
+                    next_actions=("Supply a .yml or .yaml observation source file.",),
+                )
+            )
+            attempted_document_count += 1
+            continue
+        loaded, load_findings, attempted = _load_bytes(source.body, source.path)
         documents.extend(loaded)
         findings.extend(load_findings)
         attempted_document_count += attempted
@@ -182,7 +236,12 @@ def _common_path(paths: list[str]) -> str:
 def _load_file(
     path: Path, source_path: str
 ) -> tuple[list[ObservationDocument], list[Diagnostic], int]:
-    raw = path.read_bytes()
+    return _load_bytes(path.read_bytes(), source_path)
+
+
+def _load_bytes(
+    raw: bytes, source_path: str
+) -> tuple[list[ObservationDocument], list[Diagnostic], int]:
     raw_sha256 = hashlib.sha256(raw).hexdigest()
     if len(raw) > MAX_SOURCE_BYTES:
         return (
@@ -423,6 +482,22 @@ def _validate_v2_source_set(
             identity=f"service_instances/{error.host_id}/{error.instance_id}/{error.component_id}",
             next_actions=next_actions,
         )
+    except V2ConfigurationValidationError as error:
+        diagnostic = Diagnostic(
+            code=error.code,
+            severity="error",
+            message="The v2 service instance configuration binding is invalid.",
+            location=_v2_configuration_binding_location(
+                v2_documents,
+                error.host_id,
+                error.instance_id,
+                error.configuration_slot_id,
+            ),
+            identity=f"service_instances/{error.host_id}/{error.instance_id}",
+            next_actions=(
+                "Bind each required profile configuration slot exactly once with its declared type.",
+            ),
+        )
     except ValueError:
         diagnostic = Diagnostic(
             code="v2-component-topology-invalid",
@@ -615,6 +690,37 @@ def _v2_resource_error_location(
     return _v2_service_instance_location(
         documents, error.host_id, error.instance_id, error.component_id
     )
+
+
+def _v2_configuration_binding_location(
+    documents: list[ObservationDocument], host_id: str, instance_id: str, slot_id: str
+) -> SourceLocation:
+    for document in documents:
+        instances = document.data.get("service_instances", ())
+        if not isinstance(instances, tuple):
+            continue
+        for instance_index, instance in enumerate(instances):
+            if (
+                not isinstance(instance, Mapping)
+                or instance.get("host_id") != host_id
+                or instance.get("id") != instance_id
+            ):
+                continue
+            bindings = instance.get("configuration_bindings", ())
+            if isinstance(bindings, tuple):
+                for binding_index, binding in enumerate(bindings):
+                    if isinstance(binding, Mapping) and binding.get("slot_id") == slot_id:
+                        return SourceLocation(
+                            document.source_path,
+                            f"/service_instances/{instance_index}/configuration_bindings/{binding_index}/slot_id",
+                            document.document_index,
+                        )
+            return SourceLocation(
+                document.source_path,
+                f"/service_instances/{instance_index}/configuration_bindings",
+                document.document_index,
+            )
+    return SourceLocation(documents[0].source_path, "/", documents[0].document_index)
 
 
 def _v2_profile_resource_slot_location(

@@ -6,6 +6,10 @@ This document describes local release contract inspection and the protected
 Woodpecker publication boundary as of Infralink `0.5.7`. It is not a runbook for
 publishing from a development checkout.
 
+For private host-controller adoption, consume the verified release from the
+`cyberstorm-dev/infralink-ops` consumer repository.
+This repository publishes the public Python package. It does not publish or select the private controller image.
+
 Registry YAML is the source of intent. Operators continue to edit profiles,
 hosts, templates, image tags, and image SHAs directly. This CLI neither edits
 that YAML nor makes generated state the source of truth.

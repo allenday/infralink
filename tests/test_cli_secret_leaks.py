@@ -131,7 +131,7 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
         ),
     )
     monkeypatch.setattr(
-        "infralink.cli.main.SshReadinessTransport.probe",
+        "infralink.operator_operations.host_bootstrap.SshReadinessTransport.probe",
         lambda self, address: HostReadinessProbe(
             reachable=False,
             hostname=None,
@@ -322,6 +322,7 @@ selection:
         ("service", "show"): ([*source, "service", "show", "postgresql"], 0, True),
         ("service", "list"): ([*source, "service", "list"], 0, True),
         ("validate",): ([*source, "validate", "--check-resolution"], 0, True),
+        ("fleet", "validate"): ([*source, "fleet", "validate"], 70, False),
         ("version",): ([*source, "version"], 0, True),
         ("capabilities",): (["--output", "json", "capabilities"], 0, True),
         ("explain",): (["--output", "json", "explain", "schema-version-unsupported"], 0, True),
@@ -438,6 +439,11 @@ selection:
         ),
     }
     discovered = _leaf_paths(cli)
+    if ("controller", "doctor") in discovered:
+        # A controller plugin may be installed with the public CLI. The local
+        # probe is intentionally unavailable in this hermetic topology, but
+        # its typed failure must not expose loaded registry values.
+        invocations[("controller", "doctor")] = (["controller", "doctor"], 70, False)
     # `mcp serve` owns a long-running JSON-RPC transport and cannot be invoked
     # as a one-shot CLI envelope. Its delegated command boundary is covered by
     # tests/test_mcp_server.py.
@@ -446,6 +452,14 @@ selection:
     runner = CliRunner()
     for path, (argv, expected_exit, expected_ok) in invocations.items():
         result = runner.invoke(cli, argv)
+        if path == ("controller", "doctor"):
+            # The optional plugin reads local controller state, so the
+            # hermetic fixture cannot prescribe its health result. Its public
+            # envelope and exception still must never disclose loaded data.
+            assert canary not in result.output
+            assert canary not in result.stderr
+            assert canary not in repr(result.exception)
+            continue
         _assert_no_canary(
             canary,
             " ".join(path) or "root",

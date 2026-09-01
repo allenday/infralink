@@ -8,7 +8,9 @@ import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
+import infralink
 import infralink.cli.main as cli_main
+from infralink.cli import command_plugins
 from infralink.cli.actions import action
 from infralink.cli.errors import CliFailure, ErrorCode
 from infralink.cli.main import cli, main, run
@@ -35,7 +37,7 @@ def assert_schema(payload: dict, name: str) -> None:
 
 def test_root_discovers_canonical_commands_as_json() -> None:
     payload = payload_for()
-    assert payload["result"]["version"] == "0.6.5"
+    assert payload["result"]["version"] == infralink.__version__
     assert {"help", "version", "host", "service", "edge"} <= {
         item["name"] for item in payload["result"]["commands"]
     }
@@ -111,14 +113,14 @@ def test_host_detail_help_is_live_and_command_is_registered() -> None:
 def test_version_is_json() -> None:
     payload = payload_for("version")
     assert payload["result"] == {
-        "version": "0.6.5",
+        "version": infralink.__version__,
         "cli_schema_version": "infralink.cli/v1",
     }
 
 
 def test_click_version_alias_is_json() -> None:
     payload = payload_for("--version")
-    assert payload["result"]["version"] == "0.6.5"
+    assert payload["result"]["version"] == infralink.__version__
     assert payload["command"]["raw"] == "infralink --output json --version"
 
 
@@ -406,7 +408,7 @@ def test_emitted_envelope_is_not_duplicated_by_later_failure(
 
     following = invoke("--version")
     assert following.exit_code == 0
-    assert json.loads(following.output)["result"]["version"] == "0.6.5"
+    assert json.loads(following.output)["result"]["version"] == infralink.__version__
 
 
 def raise_system_exit(code: object) -> None:
@@ -474,6 +476,7 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
         },
         "registry": {"registry-host-get", "registry-host-patch"},
         "validate": {"validate", "observation-validate"},
+        "fleet": {"fleet-validate"},
         "capabilities": {"capabilities"},
         "explain": {"explain"},
         "project": {
@@ -501,7 +504,13 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
     live_commands = {item["name"] for item in payload_for()["result"]["commands"]}
     schema_names = {path.stem for path in (ROOT / "src/infralink/schemas/cli/v1").glob("*.json")}
 
-    assert live_commands == set(schema_coverage)
+    # Infralink owns the root envelope schema and its built-in command families.
+    # Installed runtime packages may contribute typed command subtrees, but their
+    # operation contracts remain package-owned rather than becoming undeclared
+    # core schemas. Built-ins win if an older package advertises a historical
+    # duplicate entry point.
+    external_commands = command_plugins.names() - set(schema_coverage)
+    assert live_commands - external_commands == set(schema_coverage)
     assert set().union(*schema_coverage.values()) | {"root"} == schema_names
 
 

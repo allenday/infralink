@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Infrastructure topology modeling with UUID-based nodes and typed edges"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [
     { name = "Infrastructure Team" }
 ]
@@ -28,8 +28,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: System :: Systems Administration",
     "Topic :: Utilities",
@@ -41,6 +39,8 @@ dependencies = [
     "jinja2>=3.0",
     "pydantic>=2.11,<3",
     "mcp>=2,<3",
+    "agent-surface[mcp]==0.1.6",
+    "cryptography>=42,<51",
 ]
 
 [project.optional-dependencies]
@@ -100,7 +100,7 @@ include = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
 
@@ -116,13 +116,24 @@ select = [
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
+    # Python 3.12 is the supported runtime. These mechanical migrations remain
+    # intentionally deferred so raising the floor does not widen this release.
+    "UP017",  # datetime.UTC
+    "UP040",  # PEP 695 type alias syntax
+    "UP042",  # StrEnum
+    "UP046",  # PEP 695 generic classes
+    "UP047",  # PEP 695 generic functions
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["agent_surface", "agent_surface.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
