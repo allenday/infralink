@@ -271,20 +271,48 @@ def _compose_services(
             )
         )
         return None
-    return _static_compose_service_names(_expand_literal_includes(path, registry_root))
+    try:
+        return _static_compose_service_names(_expand_literal_includes(path, registry_root))
+    except ValueError:
+        diagnostics.append(
+            FleetValidationDiagnostic(
+                code="compose_include_unavailable",
+                severity="capability_gap",
+                message="Compose template includes cannot be statically resolved",
+                subject_kind="host",
+                subject_id=host.canonical_name,
+                path=f"hosts.{host.uuid}.docker-compose.yml.j2",
+            )
+        )
+        return None
 
 
-def _expand_literal_includes(path: Path, registry_root: Path) -> str:
+def _expand_literal_includes(
+    path: Path, registry_root: Path, seen: frozenset[Path] = frozenset()
+) -> str:
     """Inline quoted local includes without evaluating Jinja expressions."""
+    path = path.resolve()
+    roots = (path.parent.resolve(), (registry_root / "hosts" / "_templates").resolve())
+    if path in seen or len(seen) >= 16:
+        raise ValueError("include cycle or depth limit")
     source = path.read_text(encoding="utf-8")
     include_pattern = re.compile(r"{%\s*include\s+['\"]([^'\"]+)['\"]\s*%}")
     template_root = registry_root / "hosts" / "_templates"
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1)
-        candidates = (path.parent / name, template_root / name)
-        candidate = next((item for item in candidates if item.is_file()), None)
-        return candidate.read_text(encoding="utf-8") if candidate is not None else match.group(0)
+        candidates = ((path.parent / name).resolve(), (template_root / name).resolve())
+        candidate = next(
+            (
+                item
+                for item in candidates
+                if item.is_file() and any(item.is_relative_to(root) for root in roots)
+            ),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("include unavailable")
+        return _expand_literal_includes(candidate, registry_root, seen | {path})
 
     return include_pattern.sub(replace, source)
 
