@@ -124,6 +124,7 @@ SAFE_DOTTED_TOKENS = {
     "observable-model.md",
     "infralink.observation",
     "python3.12",
+    "quality-3.12",
     "readme.md",
     "registry.py",
     "release-operator-workflow.md",
