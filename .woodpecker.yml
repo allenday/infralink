@@ -11,8 +11,12 @@ steps:
           include: [README.md, docs/**, tests/test_docs_contract.py, .woodpecker.yml]
     commands:
       - apt-get update -qq && apt-get install --yes -qq --no-install-recommends git
-      - python -m pip install --disable-pip-version-check pytest pytest-cov
+      - python -m pip install --disable-pip-version-check -e ".[dev]"
       - python -m pytest -q tests/test_docs_contract.py --no-cov
+      - python scripts/generate_cli_schemas.py
+      - python scripts/generate_observation_schemas.py
+      - python scripts/generate_release_schemas.py
+      - git diff --exit-code
 
   quality-3.12:
     image: python:3.12-slim-bookworm
