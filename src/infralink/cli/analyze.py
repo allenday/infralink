@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 import yaml
@@ -261,7 +261,7 @@ def _analysis_data(ctx: Context) -> dict[str, Any]:
         if host.group is not None:
             data["group"] = host.group
         hosts[host.uuid] = data
-    return json.loads(json.dumps({"hosts": hosts}, default=_json_scalar))
+    return cast(dict[str, Any], json.loads(json.dumps({"hosts": hosts}, default=_json_scalar)))
 
 
 def _json_scalar(value: object) -> object:
