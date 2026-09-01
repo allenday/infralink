@@ -284,6 +284,50 @@ def test_v2_topology_projection_rejects_oversized_declarations_before_resolution
         topology.project_v2_topology((_document(),))
 
 
+def test_v2_topology_projection_bounds_profile_endpoint_expansion_before_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import infralink.observation.topology as topology
+
+    def must_not_run(*_args: object) -> None:
+        raise AssertionError("topology resolution must not run before bounds validation")
+
+    document = ObservationV2Document.model_validate_json(
+        json.dumps(
+            {
+                "schema_version": "infralink.observation/v2",
+                "service_profiles": [
+                    {
+                        "id": "worker",
+                        "components": [
+                            {
+                                "id": "worker",
+                                "endpoints": [{"id": "input", "protocol": "tcp", "port": 9000}],
+                            }
+                        ],
+                    }
+                ],
+                "service_instances": [
+                    {
+                        "id": f"worker-{number}",
+                        "host_id": f"00000000-0000-4000-8000-{number:012d}",
+                        "profile_id": "worker",
+                        "components": [{"slot_id": "worker"}],
+                    }
+                    for number in range(3)
+                ],
+                "component_edges": [],
+            }
+        )
+    )
+
+    monkeypatch.setattr(topology, "_MAX_TOPOLOGY_ITEMS", 2)
+    monkeypatch.setattr(topology, "validate_v2_documents", must_not_run)
+
+    with pytest.raises(topology.V2TopologyBoundsError, match="topology item bound"):
+        topology.project_v2_topology((document,))
+
+
 def test_v2_topology_projection_uses_the_resolver_for_invalid_declarations() -> None:
     from infralink.observation.topology import project_v2_topology
 

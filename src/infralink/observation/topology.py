@@ -212,12 +212,16 @@ def _resolve_filter(
 def _enforce_declaration_bounds(documents: Iterable[ObservationV2Document]) -> None:
     """Reject oversized declarations before the resolver allocates endpoint references."""
 
+    profile_endpoint_counts = {
+        profile.id: sum(len(component.endpoints) for component in profile.components)
+        for document in documents
+        for profile in document.service_profiles
+    }
     _enforce_topology_bounds(
         endpoint_count=sum(
-            len(component.endpoints)
+            profile_endpoint_counts.get(instance.profile_id, 0)
             for document in documents
-            for profile in document.service_profiles
-            for component in profile.components
+            for instance in document.service_instances
         ),
         edge_count=sum(len(document.component_edges) for document in documents),
     )
