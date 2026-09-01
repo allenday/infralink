@@ -34,14 +34,35 @@ _ROOT_SOURCE_PROPERTIES: dict[str, dict[str, str]] = {
     },
 }
 _NATIVE_OPTION_NAMES: dict[tuple[tuple[str, ...], str], str | None] = {
-    # Analyze predates the root-owned topology selector. Its local registry
-    # override is redundant; its boolean artifact switch is distinct and must
-    # not overload the root edges source path.
-    (("analyze",), "registry"): None,
+    # Analyze's artifact switch is distinct from the root-owned topology
+    # companion source and must not overload its public MCP field.
     (("analyze",), "edges"): "include_edges",
 }
 _NATIVE_GROUP_PATHS = frozenset({("diagram",)})
 _SOURCE_INDEPENDENT_PATHS = frozenset({("diagram", "project")})
+
+
+def _sets_root_output_format(argv: list[str]) -> bool:
+    """Reject only the root formatter, not artifact commands' local outputs."""
+    root_value_options = {"--registry", "--edges"}
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token in {"--output", "-o"} or token.startswith("--output="):
+            return True
+        if token.startswith("-o"):
+            return True
+        if token in root_value_options:
+            index += 2
+            continue
+        if token.startswith("--registry=") or token.startswith("--edges="):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return False
+    return False
 
 
 def _arguments(value: Any) -> tuple[list[str], str | None]:
@@ -50,10 +71,7 @@ def _arguments(value: Any) -> tuple[list[str], str | None]:
     argv = value.get("argv")
     if not isinstance(argv, list) or not argv or any(not isinstance(item, str) for item in argv):
         raise ValueError("argv must be a non-empty array of strings")
-    if any(
-        token == "--output" or token.startswith("--output=") or token.startswith("-o")
-        for token in argv
-    ):
+    if _sets_root_output_format(argv):
         raise ValueError("argv must not set output format; MCP always returns structured JSON")
     if "mcp" in argv:
         raise ValueError("MCP cannot invoke its own server command")

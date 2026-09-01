@@ -269,10 +269,9 @@ selection:
         (): (source, 0, True),
         ("analyze",): (
             [
-                *source,
-                "analyze",
                 "--registry",
-                str(registry_path),
+                str(app_checkout),
+                "analyze",
                 "--output",
                 str(artifacts / "analyze"),
                 "--no-edges",

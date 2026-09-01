@@ -15,6 +15,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from infralink.cli import command_plugins
 from infralink.cli.main import cli
 from infralink.mcp_server import (
+    _arguments,
     _native_argv,
     _native_paths,
     _native_tool,
@@ -22,6 +23,13 @@ from infralink.mcp_server import (
     create_server,
     invoke_cli,
 )
+
+
+def test_mcp_allows_command_local_artifact_output_without_root_format_override() -> None:
+    argv, stdin = _arguments({"argv": ["analyze", "--output", "artifacts"], "stdin": None})
+
+    assert argv == ["analyze", "--output", "artifacts"]
+    assert stdin is None
 
 
 def test_help_discovers_native_mcp_server_command() -> None:
@@ -108,7 +116,7 @@ def test_native_mcp_projects_root_topology_sources_before_the_command_path() -> 
     ) == ["--registry", "/registry", "--edges", "/edges.yml", "version"]
 
 
-def test_native_mcp_normalizes_analyze_legacy_source_option_names() -> None:
+def test_native_mcp_keeps_analyze_artifact_options_distinct_from_root_sources() -> None:
     tool = _native_tool("infralink_analyze", ("analyze",))
 
     assert tool.input_schema["properties"]["registry"]["type"] == "string"
@@ -117,14 +125,14 @@ def test_native_mcp_normalizes_analyze_legacy_source_option_names() -> None:
     assert _native_argv(
         "infralink_analyze",
         {
-            "registry": "/registry.yml",
+            "registry": "/registry",
             "edges": "/edges.yml",
             "output": "artifacts",
             "include_edges": False,
         },
     ) == [
         "--registry",
-        "/registry.yml",
+        "/registry",
         "--edges",
         "/edges.yml",
         "analyze",
@@ -132,6 +140,52 @@ def test_native_mcp_normalizes_analyze_legacy_source_option_names() -> None:
         "artifacts",
         "--no-edges",
     ]
+
+
+def test_mcp_analyze_uses_a_root_checkout_and_rejects_local_registry_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / "registry"
+    manifest = checkout / "hosts/11111111-1111-4111-8111-111111111111/manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        """hosts:
+  11111111-1111-4111-8111-111111111111:
+    canonical_name: alpha
+    status: active
+    roles: [api]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    async def exercise_protocol() -> None:
+        async with Client(create_server()) as client:
+            native = await client.call_tool(
+                "infralink_analyze",
+                {"registry": str(checkout), "output": "artifacts", "include_edges": False},
+            )
+            legacy = await client.call_tool(
+                "infralink_command",
+                {
+                    "argv": [
+                        "--registry",
+                        str(checkout),
+                        "analyze",
+                        "--registry",
+                        str(checkout),
+                        "--output",
+                        "rejected",
+                    ]
+                },
+            )
+
+            assert native.is_error is False
+            assert native.structured_content["command"]["resolved"]["registry"] == str(checkout)
+            assert legacy.is_error is True
+            assert legacy.structured_content["error"]["code"] == "usage_error"
+
+    asyncio.run(exercise_protocol())
 
 
 def test_native_mcp_help_retains_root_topology_sources() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ from infralink.cli.main import (
     _root_source_argv,
     input_load_failed,
     pass_context,
+    registry_checkout_required,
+    registry_checkout_root,
 )
 from infralink.cli.output import ok_envelope
 from infralink.cli.pagination import invalid_cursor
@@ -249,13 +252,6 @@ def _service_count(data: dict[str, Any]) -> int:
 
 
 @click.command()
-@click.option(
-    "-r",
-    "--registry",
-    "registry_override",
-    type=click.Path(exists=False, path_type=Path),
-    default=None,
-)
 @click.option("-o", "--output", type=click.Path(path_type=Path), required=True)
 @click.option("--edges/--no-edges", default=True)
 @click.option("--diagram/--no-diagram", default=True)
@@ -264,7 +260,6 @@ def _service_count(data: dict[str, Any]) -> int:
 @pass_context
 def analyze(
     ctx: Context,
-    registry_override: Path | None,
     output: Path | None,
     edges: bool,
     diagram: bool,
@@ -275,14 +270,16 @@ def analyze(
 ) -> None:
     """Analyze a registry and generate local derived artifacts."""
     output = require_output(output)
-    source = registry_override or ctx.registry_path
-    if source is None or not source.exists() or source.is_dir():
-        raise input_load_failed("registry", str(source))
+    source = registry_checkout_root(ctx.registry_path)
+    if source is None or ctx.registry_path != source:
+        raise registry_checkout_required(str(ctx.registry_path))
     try:
-        loaded = yaml.safe_load(source.read_text(encoding="utf-8"))
-        if not isinstance(loaded, dict) or not isinstance(loaded.get("hosts", {}), dict):
-            raise ValueError("invalid registry root")
-        data: dict[str, Any] = loaded
+        data = json.loads(
+            json.dumps(
+                {"hosts": {host.uuid: host.to_dict() for host in ctx.registry}},
+                default=lambda value: value.value,
+            )
+        )
     except Exception:
         raise input_load_failed("registry", str(source)) from None
 
@@ -377,8 +374,6 @@ def analyze(
         artifacts=artifact_page,
     )
     base_argv = [*_root_source_argv(ctx), "analyze", "--output", output.as_posix()]
-    if registry_override is not None:
-        base_argv.extend(["--registry", str(registry_override)])
     if not edges:
         base_argv.append("--no-edges")
     if not diagram:

@@ -240,7 +240,7 @@ COMMAND_METADATA: dict[str, dict[str, Any]] = {
     },
     "analyze": {
         "description": "Analyze registry and generate derived artifacts.",
-        "usage": "infralink analyze --output <directory>",
+        "usage": "infralink --registry <checkout-root> analyze --output <directory>",
     },
     "check": {"description": "Run health checks for edges.", "usage": "infralink check"},
     "doctor": {
@@ -625,7 +625,6 @@ def _context_for(
         "output": root_values.get("output", "yaml"),
         "verbose": bool(root_values.get("verbose", False)),
     }
-    resolved.update(_command_resolved_overrides(redacted_argv, parsed_path))
     if parsed_path and parsed_path[0] == "doctor":
         gatus_url = os.environ.get("INFRALINK_GATUS_URL")
         for index, item in enumerate(redacted_argv):
@@ -645,30 +644,6 @@ def _context_for(
     )
 
 
-def _command_resolved_overrides(
-    argv: list[str],
-    parsed_path: list[str],
-) -> dict[str, Any]:
-    """Derive command-local effective sources from the same Click parser."""
-    if parsed_path != ["analyze"]:
-        return {}
-    root_ctx = cli.make_context("infralink", list(argv), resilient_parsing=True)
-    if _protected_args(root_ctx) != ["analyze"]:
-        return {}
-    command = _load_command("analyze")
-    if command is None:
-        return {}
-    command_ctx = command.make_context(
-        "infralink analyze",
-        list(root_ctx.args),
-        resilient_parsing=True,
-    )
-    registry_override = command_ctx.params.get("registry_override")
-    if registry_override is None:
-        return {}
-    return {"registry": str(registry_override)}
-
-
 def input_load_failed(source: str, path: str) -> CliFailure:
     return CliFailure(
         code=ErrorCode.INPUT_LOAD_FAILED,
@@ -681,6 +656,24 @@ def input_load_failed(source: str, path: str) -> CliFailure:
                 "help",
                 [*_action_argv_prefix(), "help", "validate"],
                 "Show validation input options",
+            )
+        ],
+    )
+
+
+def registry_checkout_required(path: str) -> CliFailure:
+    """Require an explicit registry repository root for checkout-backed commands."""
+    return CliFailure(
+        code=ErrorCode.INPUT_LOAD_FAILED,
+        message="Registry source must be the checkout root",
+        exit_code=3,
+        fix="Pass the repository root, not a registry YAML file or its hosts subdirectory.",
+        details={"source": "registry", "path": path, "reason": "checkout_root_required"},
+        next_actions=[
+            action(
+                "help",
+                [*_action_argv_prefix(), "help", "analyze"],
+                "Show analyze input options",
             )
         ],
     )

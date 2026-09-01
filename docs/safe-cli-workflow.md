@@ -67,6 +67,19 @@ infralink --registry registry.yml --edges edges.yml diagram --output ./artifacts
 Use `--group GROUP` to limit output to one declared host group. Add
 `--include-terminated` only when the review explicitly needs retired hosts.
 
+## Generate Analyze Artifacts
+
+`analyze` reads the complete registry checkout so its pagination and generated
+artifacts remain replayable. Pass the repository root, not `registry.yml` or
+its `hosts/` subdirectory:
+
+```sh
+infralink --registry /srv/infra-registry analyze --output ./artifacts
+```
+
+Use `--no-edges`, `--no-diagram`, or `--no-monitoring` only to change the
+generated artifact set; they do not select another topology source.
+
 ## Inspect Release Evidence
 
 Release commands inspect immutable, local evidence handoffs. They do not

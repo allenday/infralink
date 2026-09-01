@@ -59,6 +59,10 @@ checkout-relative Doctor inputs but never selects a registry revision or
 desired state. Examples under `examples/` are demo and test inputs only; they
 are not implicit operational fallbacks.
 
+`analyze` specifically requires that checkout root. It does not accept a
+standalone YAML topology or `hosts/` as a compatibility selector, so its
+generated artifacts and continuation actions always retain one canonical source.
+
 Each CLI invocation emits one structured envelope. Topology commands use
 `infralink.cli/v1`; offline observation commands use `agent-cli.response.v1`.
 Both include parsed command metadata, bounded results or redacted errors, and
