@@ -82,6 +82,28 @@ def _projection() -> V2TopologyProjection:
     )
 
 
+def _empty_component_projection() -> V2TopologyProjection:
+    api = _owner(HOST_ALPHA, "alpha", "api")
+    empty = _owner(HOST_ALPHA, "alpha", "empty")
+    idle = _owner(HOST_BETA, "beta", "idle")
+    api_endpoint = f"{HOST_ALPHA}/alpha/api/egress"
+    return V2TopologyProjection(
+        schema_version="infralink.observation-topology/v2",
+        filter={"mode": "full"},
+        components=(idle, empty, api),
+        nodes=(
+            V2TopologyNode(
+                id=api_endpoint,
+                owner=api,
+                endpoint_id="egress",
+                protocol=EndpointProtocol.HTTPS,
+                port=443,
+            ),
+        ),
+        edges=(),
+    )
+
+
 def test_renders_v2_topology_as_nested_mermaid_golden() -> None:
     from infralink.observation.topology_diagrams import render_v2_mermaid
 
@@ -161,6 +183,76 @@ def test_renders_v2_topology_as_nested_dot_golden() -> None:
 }}
 '''
     )
+
+
+def test_renders_empty_declared_components_as_nested_mermaid_and_dot_golden() -> None:
+    from infralink.observation.topology_diagrams import render_v2_dot, render_v2_mermaid
+
+    projection = _empty_component_projection()
+    mermaid = "\n".join(
+        (
+            "flowchart LR",
+            '%% infralink.topology.schema_version="infralink.observation-topology/v2"',
+            f'%% infralink.host.id="{HOST_ALPHA}"',
+            f'subgraph host_bd7662a5eeb41614["host {HOST_ALPHA}"]',
+            f'    %% infralink.service.id="{HOST_ALPHA}/alpha"',
+            '    subgraph service_4285a6382631a656["service alpha"]',
+            f'        %% infralink.component.id="{HOST_ALPHA}/alpha/api"',
+            '        subgraph component_b07bee6ba587bf28["component api"]',
+            f'            %% infralink.node.id="{HOST_ALPHA}/alpha/api/egress"',
+            '            endpoint_29015cefafb8729b["egress (https:443)"]',
+            "        end",
+            f'        %% infralink.component.id="{HOST_ALPHA}/alpha/empty"',
+            '        subgraph component_45630cdd986e13a3["component empty"]',
+            "        end",
+            "    end",
+            "end",
+            f'%% infralink.host.id="{HOST_BETA}"',
+            f'subgraph host_b454f82c5857ebab["host {HOST_BETA}"]',
+            f'    %% infralink.service.id="{HOST_BETA}/beta"',
+            '    subgraph service_8e0598a787f4ebe6["service beta"]',
+            f'        %% infralink.component.id="{HOST_BETA}/beta/idle"',
+            '        subgraph component_2d6d4a5223bf8e8f["component idle"]',
+            "        end",
+            "    end",
+            "end",
+            "",
+        )
+    )
+    dot = "\n".join(
+        (
+            'digraph "infralink_observation_v2" {',
+            '    graph [rankdir="LR"];',
+            '    node [shape="box"];',
+            '    subgraph "cluster_host_bd7662a5eeb41614" {',
+            f'        graph [id="{HOST_ALPHA}", label="host {HOST_ALPHA}"];',
+            '        subgraph "cluster_service_4285a6382631a656" {',
+            f'            graph [id="{HOST_ALPHA}/alpha", label="service alpha"];',
+            '            subgraph "cluster_component_b07bee6ba587bf28" {',
+            f'                graph [id="{HOST_ALPHA}/alpha/api", label="component api"];',
+            '                "endpoint_29015cefafb8729b" [id="11111111-1111-4111-8111-111111111111/alpha/api/egress", label="egress (https:443)"];',
+            "            }",
+            '            subgraph "cluster_component_45630cdd986e13a3" {',
+            f'                graph [id="{HOST_ALPHA}/alpha/empty", label="component empty"];',
+            "            }",
+            "        }",
+            "    }",
+            '    subgraph "cluster_host_b454f82c5857ebab" {',
+            f'        graph [id="{HOST_BETA}", label="host {HOST_BETA}"];',
+            '        subgraph "cluster_service_8e0598a787f4ebe6" {',
+            f'            graph [id="{HOST_BETA}/beta", label="service beta"];',
+            '            subgraph "cluster_component_2d6d4a5223bf8e8f" {',
+            f'                graph [id="{HOST_BETA}/beta/idle", label="component idle"];',
+            "            }",
+            "        }",
+            "    }",
+            "}",
+            "",
+        )
+    )
+
+    assert render_v2_mermaid(projection) == mermaid
+    assert render_v2_dot(projection) == dot
 
 
 def test_v2_topology_renderers_escape_untrusted_values_and_remain_deterministic() -> None:

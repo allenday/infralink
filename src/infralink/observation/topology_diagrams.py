@@ -134,6 +134,15 @@ def _ownership_tree(projection: V2TopologyProjection) -> OwnershipTree:
     tree: defaultdict[str, defaultdict[str, defaultdict[str, list[V2TopologyNode]]]] = defaultdict(
         lambda: defaultdict(lambda: defaultdict(list))
     )
+    for owner in sorted(
+        projection.components,
+        key=lambda current: (
+            current.host_id,
+            current.service_instance_id,
+            current.component_slot_id,
+        ),
+    ):
+        tree[owner.host_id][owner.service_instance_id][owner.component_slot_id]
     for node in sorted(
         projection.nodes,
         key=lambda current: (

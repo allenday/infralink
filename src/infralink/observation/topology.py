@@ -40,7 +40,7 @@ class V2TopologyBoundsError(ValueError):
 
 
 class V2TopologyOwner(StrictModel):
-    """The declaration-owned component that owns one endpoint or edge side."""
+    """One declaration-owned component in the projected topology hierarchy."""
 
     host_id: HostId
     service_instance_id: CanonicalId
@@ -98,6 +98,9 @@ class V2TopologyProjection(StrictModel):
 
     schema_version: Literal["infralink.observation-topology/v2"]
     filter: V2TopologyFilter
+    components: tuple[V2TopologyOwner, ...] = Field(
+        default_factory=tuple, max_length=_MAX_TOPOLOGY_ITEMS
+    )
     nodes: tuple[V2TopologyNode, ...] = Field(max_length=_MAX_TOPOLOGY_ITEMS)
     edges: tuple[V2TopologyEdge, ...] = Field(max_length=_MAX_TOPOLOGY_ITEMS)
 
@@ -122,8 +125,26 @@ def project_v2_topology(
     _resolve_filter(selected_filter, document_list)
     _enforce_topology_bounds(
         endpoint_count=len(endpoint_refs),
+        component_count=sum(
+            len(instance.components)
+            for document in document_list
+            for instance in document.service_instances
+        ),
         edge_count=sum(len(document.component_edges) for document in document_list),
     )
+    all_components = {
+        _owner_key(owner): owner
+        for document in document_list
+        for instance in document.service_instances
+        for component in instance.components
+        for owner in (
+            V2TopologyOwner(
+                host_id=instance.host_id,
+                service_instance_id=instance.id,
+                component_slot_id=component.slot_id,
+            ),
+        )
+    }
     all_nodes = {
         endpoint_ref: _topology_node(endpoint_ref, endpoint)
         for endpoint_ref, endpoint in endpoint_refs.items()
@@ -155,9 +176,18 @@ def project_v2_topology(
     nodes = tuple(
         sorted((all_nodes[node_id] for node_id in selected_ids), key=lambda node: node.id)
     )
+    selected_components = {
+        key: owner
+        for key, owner in all_components.items()
+        if _matches_owner_filter(owner, selected_filter)
+    }
+    for edge in selected_edges:
+        selected_components[_owner_key(edge.source_owner)] = edge.source_owner
+        selected_components[_owner_key(edge.target_owner)] = edge.target_owner
     return V2TopologyProjection(
         schema_version="infralink.observation-topology/v2",
         filter=selected_filter,
+        components=tuple(owner for _, owner in sorted(selected_components.items())),
         nodes=nodes,
         edges=selected_edges,
     )
@@ -223,15 +253,22 @@ def _enforce_declaration_bounds(documents: Iterable[ObservationV2Document]) -> N
             for document in documents
             for instance in document.service_instances
         ),
+        component_count=sum(
+            len(instance.components)
+            for document in documents
+            for instance in document.service_instances
+        ),
         edge_count=sum(len(document.component_edges) for document in documents),
     )
 
 
-def _enforce_topology_bounds(*, endpoint_count: int, edge_count: int) -> None:
-    if endpoint_count + edge_count > _MAX_TOPOLOGY_ITEMS:
+def _enforce_topology_bounds(
+    *, endpoint_count: int, component_count: int = 0, edge_count: int
+) -> None:
+    if component_count + endpoint_count + edge_count > _MAX_TOPOLOGY_ITEMS:
         raise V2TopologyBoundsError(
             f"topology item bound of {_MAX_TOPOLOGY_ITEMS} exceeded "
-            f"(endpoints={endpoint_count}, edges={edge_count})"
+            f"(components={component_count}, endpoints={endpoint_count}, edges={edge_count})"
         )
 
 
@@ -288,3 +325,20 @@ def _matches_filter(node: V2TopologyNode, selected_filter: V2TopologyFilter) -> 
         node.owner.host_id == service.host_id
         and node.owner.service_instance_id == service.service_instance_id
     )
+
+
+def _matches_owner_filter(owner: V2TopologyOwner, selected_filter: V2TopologyFilter) -> bool:
+    if selected_filter.mode == "full":
+        return True
+    if selected_filter.mode == "host":
+        return owner.host_id == selected_filter.host_id
+    service = selected_filter.service_instance
+    assert service is not None
+    return (
+        owner.host_id == service.host_id
+        and owner.service_instance_id == service.service_instance_id
+    )
+
+
+def _owner_key(owner: V2TopologyOwner) -> tuple[str, str, str]:
+    return (owner.host_id, owner.service_instance_id, owner.component_slot_id)

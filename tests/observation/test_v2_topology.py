@@ -97,6 +97,33 @@ def test_projects_a_typed_v2_topology_golden() -> None:
     assert rendered == {
         "schema_version": "infralink.observation-topology/v2",
         "filter": {"mode": "full", "host_id": None, "service_instance": None},
+        "components": [
+            {
+                "host_id": HOST_ALPHA,
+                "service_instance_id": "alpha",
+                "component_slot_id": "api",
+            },
+            {
+                "host_id": HOST_ALPHA,
+                "service_instance_id": "alpha",
+                "component_slot_id": "database",
+            },
+            {
+                "host_id": HOST_ALPHA,
+                "service_instance_id": "alpha",
+                "component_slot_id": "idle",
+            },
+            {
+                "host_id": HOST_BETA,
+                "service_instance_id": "beta",
+                "component_slot_id": "worker",
+            },
+            {
+                "host_id": HOST_GAMMA,
+                "service_instance_id": "gamma",
+                "component_slot_id": "worker",
+            },
+        ],
         "nodes": [
             {
                 "id": f"{HOST_ALPHA}/alpha/api/egress",
@@ -228,8 +255,80 @@ def test_v2_topology_projection_includes_direct_neighbours_for_host_and_service_
         f"{HOST_ALPHA}/alpha/idle/ready",
         f"{HOST_BETA}/beta/worker/input",
     }
+    assert {
+        (owner.host_id, owner.service_instance_id, owner.component_slot_id)
+        for owner in host.components
+    } == {
+        (HOST_ALPHA, "alpha", "api"),
+        (HOST_ALPHA, "alpha", "database"),
+        (HOST_ALPHA, "alpha", "idle"),
+        (HOST_BETA, "beta", "worker"),
+    }
+    assert host.components == service.components
     assert [edge.id for edge in host.edges] == ["api-to-beta", "api-to-database"]
     assert [edge.id for edge in service.edges] == ["api-to-beta", "api-to-database"]
+
+
+def test_v2_topology_projection_includes_empty_declared_components_in_focal_scopes() -> None:
+    from infralink.observation.topology import project_v2_topology
+
+    source = {
+        "schema_version": "infralink.observation/v2",
+        "service_profiles": [
+            {
+                "id": "connected",
+                "components": [
+                    {
+                        "id": "api",
+                        "endpoints": [{"id": "http", "protocol": "http", "port": 80}],
+                    },
+                    {"id": "empty"},
+                ],
+            },
+            {"id": "empty-only", "components": [{"id": "idle"}]},
+        ],
+        "service_instances": [
+            {
+                "id": "alpha",
+                "host_id": HOST_ALPHA,
+                "profile_id": "connected",
+                "components": [{"slot_id": "api"}, {"slot_id": "empty"}],
+            },
+            {
+                "id": "beta",
+                "host_id": HOST_BETA,
+                "profile_id": "empty-only",
+                "components": [{"slot_id": "idle"}],
+            },
+        ],
+        "component_edges": [],
+    }
+    document = ObservationV2Document.model_validate_json(json.dumps(source))
+
+    full = project_v2_topology((document,))
+    host = project_v2_topology((document,), focal_host_id=HOST_ALPHA)
+    service = project_v2_topology((document,), focal_service_instance_ref=f"{HOST_BETA}/beta")
+
+    assert {
+        (owner.host_id, owner.service_instance_id, owner.component_slot_id)
+        for owner in full.components
+    } == {
+        (HOST_ALPHA, "alpha", "api"),
+        (HOST_ALPHA, "alpha", "empty"),
+        (HOST_BETA, "beta", "idle"),
+    }
+    assert {
+        (owner.host_id, owner.service_instance_id, owner.component_slot_id)
+        for owner in host.components
+    } == {
+        (HOST_ALPHA, "alpha", "api"),
+        (HOST_ALPHA, "alpha", "empty"),
+    }
+    assert {
+        (owner.host_id, owner.service_instance_id, owner.component_slot_id)
+        for owner in service.components
+    } == {(HOST_BETA, "beta", "idle")}
+    assert len(service.nodes) == 0
 
 
 @pytest.mark.parametrize(
