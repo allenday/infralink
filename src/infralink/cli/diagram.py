@@ -212,8 +212,13 @@ def project(
     try:
         result = diagram_project(request)
     except OperationError as error:
+        code = (
+            ErrorCode.DIAGRAM_RENDER_BOUNDS_EXCEEDED
+            if error.code == "diagram_render_bounds_exceeded"
+            else ErrorCode.DIAGRAM_SOURCE_INVALID
+        )
         raise CliFailure(
-            code=ErrorCode.DIAGRAM_SOURCE_INVALID,
+            code=code,
             message=error.message,
             exit_code=ExitCode.INPUT_ERROR,
             fix=error.fix or "Supply valid V2 observation source declarations.",

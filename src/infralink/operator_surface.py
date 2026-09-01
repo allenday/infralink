@@ -11,6 +11,7 @@ import subprocess
 from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Literal, NoReturn, cast
+from uuid import UUID
 
 from agent_surface import App, OperationError
 from agent_surface.adapters.click import ClickAdapter
@@ -48,7 +49,11 @@ from infralink.cli.operation_contracts import (
 from infralink.cli.queries import entity_not_found, list_services
 from infralink.fleet.validation import FleetValidationResult, validate_fleet
 from infralink.observation.api import ProjectValidationError, project_v2_topology_diagram
-from infralink.observation.topology_diagrams import render_v2_dot, render_v2_mermaid
+from infralink.observation.topology_diagrams import (
+    V2TopologyRenderBoundsError,
+    render_v2_dot,
+    render_v2_mermaid,
+)
 from infralink.operator_operations.topology import (
     AppShowRequest,
     EdgeShowRequest,
@@ -142,10 +147,11 @@ class DiagramProjectRequest(_OperationModel):
     def require_exact_scope_selector(self) -> DiagramProjectRequest:
         if self.scope == "full" and self.host is None and self.service is None:
             return self
-        if self.scope == "host" and self.host is not None and self.service is None:
+        if self.scope == "host" and _is_uuid(self.host) and self.service is None:
             return self
         if self.scope == "service" and self.host is None and self.service is not None:
-            if len(self.service.split("/")) == 2:
+            host_id, separator, service_id = self.service.partition("/")
+            if separator and "/" not in service_id and service_id and _is_uuid(host_id):
                 return self
         raise ValueError("scope requires its exact selector combination")
 
@@ -473,9 +479,19 @@ def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
             fix="Supply valid infralink.observation/v2 source declarations.",
         ) from None
     projection = projection_result.projection
-    source = (
-        render_v2_mermaid(projection) if request.syntax == "mermaid" else render_v2_dot(projection)
-    )
+    try:
+        source = (
+            render_v2_mermaid(projection)
+            if request.syntax == "mermaid"
+            else render_v2_dot(projection)
+        )
+    except V2TopologyRenderBoundsError as error:
+        raise OperationError(
+            "diagram_render_bounds_exceeded",
+            "V2 topology diagram exceeds the inline render limit",
+            details=(),
+            fix="Narrow the diagram scope to a host or service and retry.",
+        ) from error
     focus = request.host if request.scope == "host" else request.service
     return DiagramProjectResult(
         syntax=request.syntax,
@@ -485,6 +501,16 @@ def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
         edge_count=len(projection.edges),
         source=source,
     )
+
+
+def _is_uuid(value: str | None) -> bool:
+    if value is None:
+        return False
+    try:
+        UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 @operator_surface.operation(

@@ -1497,20 +1497,35 @@ def cli(
     click_ctx = click.get_current_context()
     source_independent = {None, "help", "version", "capabilities", "explain"}
     # ``diagram project`` consumes only explicit V2 observation sources. It
-    # must not select the ambient Registry used by the legacy diagram writer.
+    # must ignore ambient root defaults but retain an explicitly supplied root
+    # source so the child can reject it as unsupported input.
     incoming = _INVOCATION_ARGS.get() or []
-    if any(
+    diagram_project = any(
         incoming[index : index + 2] == ["diagram", "project"] for index in range(len(incoming) - 1)
-    ):
+    )
+    if diagram_project:
         source_independent.add("diagram")
-    selected_registry = registry
-    if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
-        selected_registry = _configured_registry()
+    if diagram_project:
+        selected_registry = (
+            registry
+            if click_ctx.get_parameter_source("registry") is click.core.ParameterSource.COMMANDLINE
+            else None
+        )
+        selected_edges = (
+            edges
+            if click_ctx.get_parameter_source("edges") is click.core.ParameterSource.COMMANDLINE
+            else None
+        )
+    else:
+        selected_registry = registry
+        if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
+            selected_registry = _configured_registry()
+        selected_edges = edges or registry_companion(
+            selected_registry, "network/main-dev/edges/edges.yml"
+        )
     ctx.registry_path = selected_registry
     ctx.hosts_path = None
-    ctx.edges_path = edges or registry_companion(
-        ctx.registry_path, "network/main-dev/edges/edges.yml"
-    )
+    ctx.edges_path = selected_edges
     ctx.verbose = verbose
     ctx.output = output
     ctx.output_explicit = (

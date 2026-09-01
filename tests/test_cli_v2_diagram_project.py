@@ -14,8 +14,10 @@ from click.testing import CliRunner
 from mcp import Client
 
 import infralink.cli.main as cli_main
+import infralink.operator_surface as operator_surface_module
 from infralink.cli.main import cli
 from infralink.mcp_server import create_server
+from infralink.observation.topology_diagrams import V2TopologyRenderBoundsError
 from infralink.operator_surface import diagram_surface
 
 HOST_ID = "11111111-1111-4111-8111-111111111111"
@@ -108,6 +110,27 @@ def test_diagram_project_never_selects_an_ambient_registry(
     assert result.exit_code == 0, result.output
 
 
+@pytest.mark.parametrize("option", ["--registry", "--edges"])
+def test_diagram_project_ignores_ambient_root_sources_but_rejects_explicit_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, option: str
+) -> None:
+    source = _source(tmp_path)
+    ambient = tmp_path / "ambient.yml"
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(ambient))
+    monkeypatch.setenv("INFRALINK_EDGES", str(ambient))
+
+    ambient_result = CliRunner().invoke(cli, ["diagram", "project", "--source", str(source)])
+    explicit_result = CliRunner().invoke(
+        cli,
+        ["--output", "json", option, str(ambient), "diagram", "project", "--source", str(source)],
+    )
+
+    assert ambient_result.exit_code == 0, ambient_result.output
+    explicit_payload = json.loads(explicit_result.output)
+    assert explicit_result.exit_code == 2
+    assert explicit_payload["error"]["code"] == "diagram_project_forbidden_input"
+
+
 @pytest.mark.parametrize(
     ("scope", "options", "code"),
     [
@@ -141,6 +164,66 @@ def test_diagram_project_rejects_invalid_scope_selector_combinations(
     payload = json.loads(result.output)
     assert payload["ok"] is False
     assert payload["error"]["code"] == code
+
+
+@pytest.mark.parametrize(
+    ("scope", "option", "value"),
+    [
+        ("host", "--host", "not-a-uuid"),
+        ("service", "--service", "not-a-uuid/relay"),
+        ("service", "--service", f"{HOST_ID}/"),
+        ("service", "--service", f"{HOST_ID}/relay/extra"),
+    ],
+)
+def test_diagram_project_requires_uuid_qualified_focus_selectors(
+    tmp_path: Path, scope: str, option: str, value: str
+) -> None:
+    source = _source(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--output",
+            "json",
+            "diagram",
+            "project",
+            "--source",
+            str(source),
+            "--scope",
+            scope,
+            option,
+            value,
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["error"]["code"] == "diagram_scope_selector_invalid"
+
+
+def test_diagram_project_translates_render_bounds_for_cli_and_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source(tmp_path)
+
+    def bounds_error(*_args: object, **_kwargs: object) -> str:
+        raise V2TopologyRenderBoundsError("rendered topology exceeds test limit")
+
+    monkeypatch.setattr(operator_surface_module, "render_v2_mermaid", bounds_error)
+    cli_result = CliRunner().invoke(
+        cli, ["--output", "json", "diagram", "project", "--source", str(source)]
+    )
+
+    async def call_mcp() -> tuple[bool, dict[str, object]]:
+        async with Client(create_server()) as client:
+            result = await client.call_tool("infralink_diagram_project", {"source": [str(source)]})
+        return result.is_error, result.structured_content
+
+    is_error, mcp_payload = asyncio.run(call_mcp())
+    cli_payload = json.loads(cli_result.output)
+    assert cli_result.exit_code == 3
+    assert cli_payload["error"]["code"] == "diagram_render_bounds_exceeded"
+    assert is_error is True
+    assert mcp_payload["error"] == cli_payload["error"]
 
 
 def test_diagram_project_native_mcp_matches_cli_and_accepts_only_v2_inputs(tmp_path: Path) -> None:

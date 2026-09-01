@@ -61,6 +61,7 @@ class ErrorCode(str, Enum):
     DIAGRAM_SCOPE_SELECTOR_INVALID = "diagram_scope_selector_invalid"
     DIAGRAM_PROJECT_FORBIDDEN_INPUT = "diagram_project_forbidden_input"
     DIAGRAM_SOURCE_INVALID = "diagram_source_invalid"
+    DIAGRAM_RENDER_BOUNDS_EXCEEDED = "diagram_render_bounds_exceeded"
     INTERNAL_ERROR = "internal_error"
 
 
