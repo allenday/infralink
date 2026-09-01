@@ -311,7 +311,9 @@ def test_registry_host_patch_refuses_a_managed_runtime_checkout(
     monkeypatch, tmp_path: Path
 ) -> None:
     root = _registry_root(tmp_path)
-    monkeypatch.setattr(registry_authoring, "_managed_runtime_registry_root", lambda: root)
+    monkeypatch.setattr(
+        registry_authoring.operator_sources, "managed_runtime_registry_root", lambda: root
+    )
 
     result = CliRunner().invoke(
         cli,

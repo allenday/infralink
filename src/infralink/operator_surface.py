@@ -10,7 +10,7 @@ import re
 import subprocess
 from ipaddress import ip_address, ip_network
 from pathlib import Path
-from typing import Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast
 
 import click
 from agent_surface import App, OperationError
@@ -278,6 +278,32 @@ class HostApplyRequest(HostTargetRequest):
     timeout: int = Field(default=300, ge=1, le=3600)
 
 
+class HostCreateRequest(SourceRequest):
+    """Render or explicitly write one host scaffold in an operator checkout."""
+
+    name: str = Field(min_length=1)
+    address: str = Field(min_length=1)
+    write: bool = False
+
+
+class HostCreateAddress(_OperationModel):
+    field: Literal["tailscale_ip", "tailscale_name"]
+    value: str
+    reason: str
+
+
+class HostCreateResult(_OperationModel):
+    mode: Literal["dry_run", "written"]
+    host_id: str
+    address: HostCreateAddress
+    manifest_path: Path | None
+    manifest: dict[str, Any]
+    write_state: Literal["local_uncommitted"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    git_worktree: Path | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class HostBootstrapOperationResult(_OperationModel):
     result: HostBootstrapPlanResult
     succeeded: bool
@@ -440,6 +466,19 @@ def host_apply_operation(request: HostApplyRequest) -> HostApplyResult:
             ssh_host_identity="passed",
             failure=record.failure,
         )
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "host.create", summary="Render or write a declared host scaffold", idempotent=False
+)
+def host_create_operation(request: HostCreateRequest) -> HostCreateResult:
+    """Use one typed authoring handler for dry-run and explicit writes."""
+    from infralink.operator_operations.host_authoring import create_host
+
+    try:
+        return HostCreateResult.model_validate(create_host(request))
     except Exception as error:
         _raise_operation_failure(error)
 
