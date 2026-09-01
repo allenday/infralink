@@ -108,6 +108,9 @@ _INVOCATION_ARGS: ContextVar[list[str] | None] = ContextVar(
 _ENVELOPE_EMITTED: ContextVar[bool] = ContextVar("infralink_envelope_emitted", default=False)
 _DEFER_ENVELOPE: ContextVar[bool] = ContextVar("infralink_defer_envelope", default=False)
 _PENDING_ENVELOPE: ContextVar[str | None] = ContextVar("infralink_pending_envelope", default=None)
+_ALLOW_EXTERNAL_COMMANDS: ContextVar[bool] = ContextVar(
+    "infralink_allow_external_commands", default=True
+)
 
 
 def current_invocation_argv() -> tuple[str, ...]:
@@ -575,12 +578,16 @@ HELP_METADATA: dict[tuple[str, ...], dict[str, Any]] = {
 def _context_for(
     argv: list[str] | None = None,
     path: list[str] | None = None,
+    *,
+    allow_external_commands: bool = True,
 ) -> CommandContext:
     active_argv = argv
     if active_argv is None:
         active_argv = _INVOCATION_ARGS.get() or []
     redacted_argv = redact_argv(active_argv)
-    parsed_path, parsed_args, root_values = _parse_invocation(redacted_argv)
+    parsed_path, parsed_args, root_values = _parse_invocation(
+        redacted_argv, allow_external_commands=allow_external_commands
+    )
     click_ctx = click.get_current_context(silent=True)
     runtime_ctx = click_ctx.find_root().obj if click_ctx is not None else None
     effective_registry = root_values.get("registry")
@@ -725,8 +732,14 @@ def _protected_args(ctx: click.Context) -> list[str]:
 
 def _parse_invocation(
     argv: list[str],
+    *,
+    allow_external_commands: bool = True,
 ) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
-    root_ctx = cli.make_context("infralink", list(argv), resilient_parsing=True)
+    external_commands_token = _ALLOW_EXTERNAL_COMMANDS.set(allow_external_commands)
+    try:
+        root_ctx = cli.make_context("infralink", list(argv), resilient_parsing=True)
+    finally:
+        _ALLOW_EXTERNAL_COMMANDS.reset(external_commands_token)
     root_values = dict(root_ctx.params)
     protected = _protected_args(root_ctx)
     if not protected:
@@ -734,7 +747,7 @@ def _parse_invocation(
 
     name = protected[0]
     path = [name]
-    command = _load_command(name)
+    command = _load_command_with_policy(name, allow_external_commands=allow_external_commands)
     remaining = list(root_ctx.args)
     if command is None:
         candidate = tuple([name, *[item for item in remaining if not item.startswith("-")]][:2])
@@ -839,7 +852,9 @@ def _normalize_discovery_aliases(argv: list[str]) -> list[str]:
     if "--help" not in argv:
         return argv
 
-    path, _, _ = _parse_invocation(redact_argv(argv[: argv.index("--help")]))
+    path, _, _ = _parse_invocation(
+        redact_argv(argv[: argv.index("--help")]), allow_external_commands=False
+    )
     return ["--output", _output_from_argv(argv), "help", *path]
 
 
@@ -906,7 +921,7 @@ def _output_from_argv(argv: list[str]) -> str:
 
 
 def _help_result(path: tuple[str, ...]) -> HelpResult:
-    command = _command_for_path(path)
+    command = _command_for_path(path, allow_external_commands=False)
     if command is None:
         raise click.UsageError("Unknown command path")
     arguments, options = _help_parameters(command)
@@ -1000,10 +1015,12 @@ def _help_argv_prefix() -> list[str]:
     return ["infralink", "help"]
 
 
-def _command_for_path(path: tuple[str, ...]) -> click.Command | None:
+def _command_for_path(
+    path: tuple[str, ...], *, allow_external_commands: bool = True
+) -> click.Command | None:
     if not path:
         return cli
-    command = _load_command(path[0])
+    command = _load_command_with_policy(path[0], allow_external_commands=allow_external_commands)
     if command is None:
         return None
     for name in path[1:]:
@@ -1019,7 +1036,7 @@ def _emit_help(path: tuple[str, ...], argv: list[str] | None = None) -> None:
     result = _help_result(path)
     _emit(
         ok_envelope(
-            _context_for(argv, list(path)),
+            _context_for(argv, list(path), allow_external_commands=False),
             result,
             [],
         )
@@ -1049,7 +1066,7 @@ def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action
                 "Show canonical command help",
             )
         ]
-    command = _command_for_path(tuple(path))
+    command = _command_for_path(tuple(path), allow_external_commands=False)
     if isinstance(command, click.Group):
         return [
             action(
@@ -1060,7 +1077,7 @@ def _usage_actions(path: list[str], artifact_command: str | None) -> list[Action
             for child in _help_children(tuple(path), command)
         ]
     help_argv = _help_argv_prefix()
-    if _command_for_path(tuple(path)) is not None:
+    if _command_for_path(tuple(path), allow_external_commands=False) is not None:
         help_argv = [*help_argv, *path]
     return [action("help", help_argv, "Show command usage")]
 
@@ -1084,6 +1101,7 @@ _BUILTIN_COMMAND_NAMES = frozenset(
         "docs",
         "resolve",
         "validate",
+        "fleet",
         "capabilities",
         "project",
         "explain",
@@ -1108,7 +1126,11 @@ def _is_external_command(name: str) -> bool:
     return name not in _BUILTIN_COMMAND_NAMES and name in command_plugins.names()
 
 
-def _load_command(name: str) -> click.Command | None:
+def _load_command(
+    name: str, *, allow_external_commands: bool | None = None
+) -> click.Command | None:
+    if allow_external_commands is None:
+        allow_external_commands = _ALLOW_EXTERNAL_COMMANDS.get()
     if name == "help":
         return help_command
     if name == "version":
@@ -1191,13 +1213,29 @@ def _load_command(name: str) -> click.Command | None:
         from infralink.cli.registry_authoring import registry
 
         return registry
+    if not allow_external_commands:
+        return None
     return command_plugins.load(name)
+
+
+def _load_command_with_policy(name: str, *, allow_external_commands: bool) -> click.Command | None:
+    token = _ALLOW_EXTERNAL_COMMANDS.set(allow_external_commands)
+    try:
+        return _load_command(name)
+    finally:
+        _ALLOW_EXTERNAL_COMMANDS.reset(token)
 
 
 class JsonGroup(click.Group):
     def list_commands(self, ctx: click.Context) -> list[str]:
-        names = set(COMMAND_METADATA) | command_plugins.names()
-        return sorted(name for name in names if _load_command(name) is not None)
+        # Discovery must be offline and side-effect free. In particular, an
+        # entry point may import a controller runtime that pulls an image.
+        # External commands remain available only through explicit execution.
+        return sorted(
+            name
+            for name in COMMAND_METADATA
+            if _load_command_with_policy(name, allow_external_commands=False) is not None
+        )
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         return _load_command(cmd_name)
@@ -1240,10 +1278,14 @@ class JsonGroup(click.Group):
                         exit_code = ExitCode(result)
                     except ValueError:
                         failure = internal_failure()
-                        _emit(error_envelope(_context_for(incoming), failure))
+                        _emit(
+                            error_envelope(
+                                _context_for(incoming, allow_external_commands=False), failure
+                            )
+                        )
                         exit_code = failure.exit_code
             except click.UsageError as usage_error:
-                path, _, _ = _parse_invocation(redact_argv(incoming))
+                path, _, _ = _parse_invocation(redact_argv(incoming), allow_external_commands=False)
                 from infralink.cli.observation import is_observation_argv
 
                 observation_command = is_observation_argv(incoming)
@@ -1276,12 +1318,20 @@ class JsonGroup(click.Group):
                     next_actions=_usage_actions(path, artifact_command),
                 )
                 if not continue_after_usage and not _ENVELOPE_EMITTED.get():
-                    _emit(error_envelope(_context_for(incoming), usage_failure))
+                    _emit(
+                        error_envelope(
+                            _context_for(incoming, allow_external_commands=False), usage_failure
+                        )
+                    )
                 if not continue_after_usage:
                     exit_code = usage_failure.exit_code
             except CliFailure as cli_failure:
                 if not _ENVELOPE_EMITTED.get():
-                    _emit(error_envelope(_context_for(incoming), cli_failure))
+                    _emit(
+                        error_envelope(
+                            _context_for(incoming, allow_external_commands=False), cli_failure
+                        )
+                    )
                 exit_code = cli_failure.exit_code
             except SystemExit as system_exit:
                 if _ENVELOPE_EMITTED.get() and isinstance(system_exit.code, int):
@@ -1289,11 +1339,19 @@ class JsonGroup(click.Group):
                         exit_code = ExitCode(system_exit.code)
                     except ValueError:
                         failure = internal_failure()
-                        _emit(error_envelope(_context_for(incoming), failure))
+                        _emit(
+                            error_envelope(
+                                _context_for(incoming, allow_external_commands=False), failure
+                            )
+                        )
                         exit_code = failure.exit_code
                 else:
                     failure = internal_failure()
-                    _emit(error_envelope(_context_for(incoming), failure))
+                    _emit(
+                        error_envelope(
+                            _context_for(incoming, allow_external_commands=False), failure
+                        )
+                    )
                     exit_code = failure.exit_code
             except Exception:
                 from infralink.cli.observation import is_observation_argv
@@ -1310,7 +1368,11 @@ class JsonGroup(click.Group):
                     exit_code = 4
                 else:
                     failure = internal_failure()
-                    _emit(error_envelope(_context_for(incoming), failure))
+                    _emit(
+                        error_envelope(
+                            _context_for(incoming, allow_external_commands=False), failure
+                        )
+                    )
                     exit_code = failure.exit_code
         finally:
             pending_envelope = _PENDING_ENVELOPE.get()
