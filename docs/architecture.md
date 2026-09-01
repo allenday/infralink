@@ -79,6 +79,13 @@ registry authoring writes. It does not add generic shell execution, a second
 desired-state selector, or an alternate deployment path. Existing `--write` and
 `--apply` gates remain in the CLI implementation.
 
+Installed operation packages extend this same surface through a build-generated
+Agent Surface manifest in their wheel. Root help and native MCP enumerate that
+manifest without importing the package; an explicit command invocation imports
+the selected app and verifies that it exactly matches the manifest before it
+runs. This keeps CLI help, native MCP schemas, and executable operations on one
+typed contract without discovery-time controller side effects.
+
 For Codex, configure the native executable and the registry checkout root:
 
 ```toml

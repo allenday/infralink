@@ -1,99 +1,175 @@
-"""External command plugins must join the one public Infralink tree."""
+"""External command manifests must join the one public Infralink tree."""
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
-import click
 import pytest
+from agent_surface import App
+from agent_surface.manifest import manifest_for
 from click.testing import CliRunner
+from mcp import Client
+from pydantic import BaseModel
 
 import infralink.cli.main as cli_main
+from infralink.mcp_server import _native_paths, _native_tool, create_server
 
 
-def test_load_command_discovers_declared_external_controller_plugin(
-    monkeypatch,
-) -> None:
-    controller = click.Group("controller")
-    entry_point = SimpleNamespace(name="controller", load=lambda: controller)
-
-    monkeypatch.setattr(
-        "infralink.cli.command_plugins.entry_points",
-        lambda *, group, name: (
-            (entry_point,) if (group, name) == ("infralink.commands", "controller") else ()
-        ),
-    )
-
-    assert cli_main._load_command("controller") is controller
+class _Request(BaseModel):
+    value: str = "default"
 
 
-def test_load_command_invokes_an_external_command_factory(monkeypatch) -> None:
-    controller = click.Group("controller")
-    entry_point = SimpleNamespace(name="controller", load=lambda: lambda: controller)
-
-    monkeypatch.setattr(
-        "infralink.cli.command_plugins.entry_points",
-        lambda *, group, name: (
-            (entry_point,) if (group, name) == ("infralink.commands", "controller") else ()
-        ),
-    )
-
-    assert cli_main._load_command("controller") is controller
+class _Result(BaseModel):
+    value: str
 
 
-def test_load_command_rejects_a_plugin_with_the_wrong_public_name(monkeypatch) -> None:
-    entry_point = SimpleNamespace(name="controller", load=lambda: click.Group("wrong"))
+def _app(operation_name: str = "controller.doctor") -> App:
+    app = App("infralink")
 
-    monkeypatch.setattr(
-        "infralink.cli.command_plugins.entry_points",
-        lambda *, group, name: (
-            (entry_point,) if (group, name) == ("infralink.commands", "controller") else ()
-        ),
-    )
+    @app.operation(operation_name, summary="Inspect controller evidence", read_only=True)
+    def doctor(request: _Request) -> _Result:
+        return _Result(value=request.value)
 
-    with pytest.raises(RuntimeError, match="command_plugin_name_invalid"):
-        cli_main._load_command("controller")
+    return app
 
 
-def test_root_discovers_a_declared_external_command(monkeypatch) -> None:
-    @click.command("controller")
-    def controller() -> None:
-        click.echo("controller-command")
-
-    entry_point = SimpleNamespace(name="controller", load=lambda: controller)
-    monkeypatch.setattr(
-        "infralink.cli.command_plugins.entry_points",
-        lambda *, group, name=None: (
-            (entry_point,)
-            if group == "infralink.commands" and (name is None or name == "controller")
-            else ()
-        ),
-    )
-
-    result = CliRunner().invoke(cli_main.cli, ["controller"])
-
-    assert result.exit_code == 0, result.output
-    assert result.output == "controller-command\n"
-
-
-def test_discovery_never_loads_an_external_command_plugin(monkeypatch) -> None:
+def _install_manifest(monkeypatch: pytest.MonkeyPatch, *, loader=None) -> SimpleNamespace:
+    app = _app()
     entry_point = SimpleNamespace(
         name="controller",
-        load=lambda: pytest.fail("discovery must not load an external command plugin"),
+        value="example.controller:build_app",
+        load=loader or (lambda: _app),
     )
     monkeypatch.setattr(
         "infralink.cli.command_plugins.entry_points",
-        lambda *, group, name=None: (
-            (entry_point,)
-            if group == "infralink.commands" and (name is None or name == "controller")
-            else ()
+        lambda *, group: (entry_point,) if group == "infralink.commands" else (),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.command_plugins.installed_manifests",
+        lambda: (
+            manifest_for(
+                app,
+                factory=entry_point.value,
+                distribution_name="infralink-ops",
+                distribution_version="0.0.0",
+            ),
         ),
     )
+    return entry_point
 
-    result = CliRunner().invoke(cli_main.cli, ["--output", "json"])
+
+def test_root_and_help_discover_a_manifest_backed_command_without_importing_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manifest(
+        monkeypatch,
+        loader=lambda: pytest.fail("discovery must not import an external command app"),
+    )
+
+    root = CliRunner().invoke(cli_main.cli, ["--output", "json"])
+    root_help = CliRunner().invoke(cli_main.cli, ["--output", "json", "help"])
+    help_result = CliRunner().invoke(cli_main.cli, ["--output", "json", "help", "controller"])
+    click_help = CliRunner().invoke(cli_main.cli, ["--output", "json", "controller", "--help"])
+
+    assert root.exit_code == 0, root.output
+    assert '"name":"controller"' in root.output
+    assert root_help.exit_code == 0, root_help.output
+    assert '"name":"controller","summary":"Inspect controller evidence"' in root_help.output
+    assert help_result.exit_code == 0, help_result.output
+    assert '"name":"doctor"' in help_result.output
+    assert click_help.exit_code == 0, click_help.output
+    assert '"name":"doctor"' in click_help.output
+
+
+def test_native_mcp_discovers_manifest_schema_without_importing_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manifest(
+        monkeypatch,
+        loader=lambda: pytest.fail("MCP discovery must not import an external command app"),
+    )
+
+    assert _native_paths()["infralink_controller_doctor"] == ("controller", "doctor")
+    tool = _native_tool("infralink_controller_doctor", ("controller", "doctor"))
+
+    assert tool.input_schema["properties"]["value"]["type"] == "string"
+    assert {"registry", "edges", "value"} <= set(tool.input_schema["properties"])
+
+
+def test_discovery_refreshes_after_an_in_place_plugin_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_point = SimpleNamespace(
+        name="controller",
+        value="example.controller:build_app",
+        load=lambda: _app(),
+    )
+    manifests = [
+        manifest_for(
+            _app(),
+            factory=entry_point.value,
+            distribution_name="infralink-ops",
+            distribution_version="0.0.0",
+        )
+    ]
+    monkeypatch.setattr(
+        "infralink.cli.command_plugins.entry_points",
+        lambda *, group: (entry_point,) if group == "infralink.commands" else (),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.command_plugins.installed_manifests", lambda: tuple(manifests)
+    )
+
+    assert cli_main.command_plugins.names() == {"controller"}
+
+    entry_point.name = "platform"
+    entry_point.value = "example.platform:build_app"
+    manifests[:] = [
+        manifest_for(
+            _app("platform.doctor"),
+            factory=entry_point.value,
+            distribution_name="infralink-ops",
+            distribution_version="0.0.1",
+        )
+    ]
+
+    assert cli_main.command_plugins.names() == {"platform"}
+
+
+def test_explicit_execution_imports_and_verifies_the_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manifest(monkeypatch)
+
+    result = CliRunner().invoke(cli_main.cli, ["controller", "doctor", "--value", "verified"])
 
     assert result.exit_code == 0, result.output
-    assert "controller" not in result.output
+    assert "verified" in result.output
+
+
+def test_native_mcp_invokes_the_same_manifest_verified_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manifest(monkeypatch)
+
+    async def exercise() -> None:
+        async with Client(create_server()) as client:
+            result = await client.call_tool("infralink_controller_doctor", {"value": "native"})
+        assert result.is_error is False
+        assert result.structured_content["result"]["value"] == "native"
+
+    asyncio.run(exercise())
+
+
+def test_execution_rejects_a_factory_that_does_not_match_its_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrong = App("infralink")
+    _install_manifest(monkeypatch, loader=lambda: wrong)
+
+    with pytest.raises(RuntimeError, match="command_plugin_manifest_mismatch"):
+        cli_main._load_command("controller")
 
 
 def test_packaging_entry_points_do_not_reclassify_builtin_commands() -> None:
