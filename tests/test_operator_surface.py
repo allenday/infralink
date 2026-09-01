@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from agent_surface import OperationError
 from click.testing import CliRunner
+from mcp import Client
 
 from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostReadinessResult
 from infralink.cli.errors import CliFailure
@@ -14,8 +16,11 @@ from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_
 from infralink.operator_surface import (
     DoctorBootstrapPlanRequest,
     HostBootstrapRequest,
+    HostCreateRequest,
     doctor_host_bootstrap_plan,
+    host_create_operation,
     operator_click_adapter,
+    operator_mcp_adapter,
     operator_surface,
 )
 
@@ -224,3 +229,112 @@ def test_bootstrap_plan_uses_one_typed_transport_boundary_across_doctor_and_clic
         "host": host_id,
         "declared_tailscale_ip": declared_address,
     }
+
+
+def test_host_create_operation_uses_checkout_root_and_refuses_runtime_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "authoring"
+    (checkout / "hosts").mkdir(parents=True)
+
+    dry_run = host_create_operation(
+        HostCreateRequest(name="new-node", address="100.64.1.9")
+    )
+    assert dry_run.mode == "dry_run"
+    assert dry_run.manifest_path is None
+    assert dry_run.manifest["hosts"][dry_run.host_id]["tailscale_ip"] == "100.64.1.9"
+
+    written = host_create_operation(
+        HostCreateRequest(
+            registry=checkout,
+            name="new-node.internal",
+            address="new-node.internal",
+            write=True,
+        )
+    )
+    assert written.mode == "written"
+    assert written.git_worktree == checkout
+    assert written.manifest_path == checkout / "hosts" / written.host_id / "manifest.yml"
+    assert written.manifest_path.is_file()
+
+    monkeypatch.setattr(
+        "infralink.operator_operations.host_authoring.managed_runtime_registry_root",
+        lambda: checkout,
+    )
+    with pytest.raises(OperationError, match="operator registry working tree"):
+        host_create_operation(
+            HostCreateRequest(
+                registry=checkout,
+                name="blocked-node",
+                address="100.64.1.10",
+                write=True,
+            )
+        )
+
+
+def test_host_create_is_discoverable_through_the_typed_mcp_adapter() -> None:
+    async def invoke() -> tuple[set[str], dict[str, object]]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+            result = await client.call_tool(
+                "host.create", {"name": "new-node", "address": "100.64.1.9"}
+            )
+        assert result.is_error is False
+        return {tool.name for tool in tools.tools}, result.structured_content
+
+    tools, payload = asyncio.run(invoke())
+    assert "host.create" in tools
+    assert payload["result"]["mode"] == "dry_run"
+
+
+def test_host_create_refuses_a_hosts_symlink_into_the_managed_runtime_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime_hosts = runtime / "hosts"
+    runtime_hosts.mkdir(parents=True)
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "hosts").symlink_to(runtime_hosts, target_is_directory=True)
+    monkeypatch.setattr(
+        "infralink.operator_operations.host_authoring.managed_runtime_registry_root",
+        lambda: runtime,
+    )
+
+    with pytest.raises(OperationError, match="must not resolve inside the managed runtime"):
+        host_create_operation(
+            HostCreateRequest(
+                registry=authoring,
+                name="blocked-node",
+                address="100.64.1.10",
+                write=True,
+            )
+        )
+
+    assert list(runtime_hosts.iterdir()) == []
+
+
+def test_host_create_refuses_a_generated_host_directory_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    authoring = tmp_path / "authoring"
+    hosts = authoring / "hosts"
+    hosts.mkdir(parents=True)
+    outside = tmp_path / "outside" / host_id
+    (hosts / host_id).symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        "infralink.operator_operations.host_authoring.uuid4", lambda: UUID(host_id)
+    )
+
+    with pytest.raises(OperationError, match="must not resolve inside the managed runtime"):
+        host_create_operation(
+            HostCreateRequest(
+                registry=authoring,
+                name="blocked-node",
+                address="100.64.1.10",
+                write=True,
+            )
+        )
+
+    assert not outside.exists()

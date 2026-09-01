@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import os
-import re
 import sys
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
-from uuid import uuid4
 
 import click
 import yaml
@@ -730,6 +727,8 @@ def _raise_cli_operation_error(error: Exception) -> NoReturn:
             if code.value.startswith("provider_")
             else ExitCode.INTERNAL_ERROR
             if code is ErrorCode.INTERNAL_ERROR
+            else ExitCode.USAGE_ERROR
+            if code in {ErrorCode.USAGE_ERROR, ErrorCode.INVALID_CURSOR}
             else ExitCode.INPUT_ERROR
         ),
         fix=error.fix or "Correct the declared host operation and retry",
@@ -2034,34 +2033,6 @@ def host() -> None:
     """Inspect or scaffold hosts."""
 
 
-_HOSTNAME_PATTERN = re.compile(
-    r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
-    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z"
-)
-
-
-def _host_address(value: str) -> tuple[str, str]:
-    try:
-        return "tailscale_ip", str(ipaddress.ip_address(value))
-    except ValueError:
-        if _HOSTNAME_PATTERN.fullmatch(value):
-            return "tailscale_name", value.lower()
-    raise click.BadParameter("must be an IP address or DNS hostname")
-
-
-def _host_create_failure(message: str, fix: str, details: dict[str, Any]) -> CliFailure:
-    return CliFailure(
-        code=ErrorCode.USAGE_ERROR,
-        message=message,
-        exit_code=ExitCode.USAGE_ERROR,
-        fix=fix,
-        details=details,
-        next_actions=[
-            action("help", ["infralink", "help", "host", "create"], "Show host create help")
-        ],
-    )
-
-
 @host.command(name="create")
 @click.option("--name", required=True, type=str, help="Canonical host name")
 @click.option("--address", required=True, type=str, help="IP address or DNS hostname")
@@ -2069,97 +2040,29 @@ def _host_create_failure(message: str, fix: str, details: dict[str, Any]) -> Cli
 @pass_context
 def host_create(ctx: Context, name: str, address: str, write: bool) -> None:
     """Create a dry-run host manifest scaffold, or write it with --write."""
-    address_field, normalized_address = _host_address(address)
-    host_id = str(uuid4())
-    host_data: dict[str, Any] = {
-        "canonical_name": name,
-        "status": "provisioning",
-        address_field: normalized_address,
-    }
+    from infralink.operator_surface import HostCreateRequest, host_create_operation
 
-    from infralink.core.schema import HostSchema
-
-    HostSchema(**host_data)
-    manifest = {"hosts": {host_id: host_data}}
-    manifest_path: Path | None = None
-    mode = "dry_run"
-
-    if write:
-        if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
-            raise _host_create_failure(
-                "Host create --write requires a directory registry",
-                "Provide --registry pointing to a registry checkout root",
-                {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
-            )
-        from infralink.cli.registry_authoring import _managed_runtime_registry_root
-
-        managed_root = _managed_runtime_registry_root().resolve()
-        selected_root = ctx.hosts_path.resolve()
-        if selected_root == managed_root or managed_root in selected_root.parents:
-            raise CliFailure(
-                code=ErrorCode.AUTHORING_CHECKOUT_REQUIRED,
-                message="Host create --write requires an operator registry working tree",
-                exit_code=ExitCode.INPUT_ERROR,
-                fix=(
-                    "Use a writable authoring checkout, commit the generated manifest, "
-                    "and let normal self-deploy fetch the merged registry revision"
-                ),
-                details={"registry": str(ctx.hosts_path)},
-                next_actions=[
-                    action("help", ["infralink", "help", "host", "create"], "Show host create help")
-                ],
-            )
-        registry = ctx.registry
-        if registry.get_by_name(name) is not None:
-            raise _host_create_failure(
-                "Host canonical name already exists",
-                "Choose a unique --name or update the existing host manifest",
-                {"name": name},
-            )
-        manifest_path = ctx.hosts_path / host_id / "manifest.yml"
-        if manifest_path.parent.exists():
-            raise _host_create_failure(
-                "Generated host UUID already exists",
-                "Run host create again to generate a new host UUID",
-                {"host_id": host_id},
-            )
-        manifest_path.parent.mkdir(mode=0o755)
-        manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
-        mode = "written"
-
-    result = {
-        "mode": mode,
-        "host_id": host_id,
-        "address": {
-            "field": address_field,
-            "value": normalized_address,
-            "reason": (
-                "input is an IP address"
-                if address_field == "tailscale_ip"
-                else "input is a DNS hostname and maps to tailscale_name"
-            ),
-        },
-        "manifest_path": str(manifest_path) if manifest_path is not None else None,
-        "manifest": manifest,
-    }
+    try:
+        created = host_create_operation(
+            HostCreateRequest(registry=ctx.registry_path, name=name, address=address, write=write)
+        )
+    except Exception as error:
+        _raise_cli_operation_error(error)
+    result = created.model_dump(mode="json")
     actions = [action("help", ["infralink", "help", "host", "show"], "Show host details help")]
-    if manifest_path is not None:
-        assert ctx.registry_path is not None
-        assert ctx.hosts_path is not None
-        git_worktree = registry_checkout_root(ctx.registry_path) or ctx.hosts_path.parent
-        result["write_state"] = "local_uncommitted"
-        result["git_worktree"] = str(git_worktree)
+    if created.manifest_path is not None:
+        assert created.git_worktree is not None
         actions.append(
             action(
                 "show",
-                [*_root_source_argv(ctx), "host", "show", host_id],
+                [*_root_source_argv(ctx), "host", "show", created.host_id],
                 "Show the created host",
             )
         )
         actions.append(
             action(
                 "git-status",
-                ["git", "-C", str(git_worktree), "status", "--short"],
+                ["git", "-C", str(created.git_worktree), "status", "--short"],
                 "Inspect the uncommitted registry change",
             )
         )

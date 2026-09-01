@@ -12,6 +12,11 @@ from infralink.core.registry import Registry
 from infralink.operator_config import OperatorConfigError, configured_registry
 
 
+def managed_runtime_registry_root() -> Path:
+    """Return the sole deployed Registry cache, which is never an authoring tree."""
+    return Path("/var/lib/infralink/registry")
+
+
 class OperatorInputs(BaseModel):
     """Root inputs projected once before every Agent Surface command path."""
 

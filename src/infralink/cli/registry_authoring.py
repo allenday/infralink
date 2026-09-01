@@ -13,6 +13,7 @@ import click
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode
 
+from infralink import operator_sources
 from infralink.cli.actions import action
 from infralink.cli.contracts import (
     Binding,
@@ -46,10 +47,6 @@ def _failure(message: str, fix: str, details: dict[str, Any]) -> CliFailure:
     )
 
 
-def _managed_runtime_registry_root() -> Path:
-    return Path("/var/lib/infralink/registry")
-
-
 def _registry_root(ctx: Context, *, for_write: bool = False) -> Path:
     root = ctx.hosts_path
     if root is None or not root.is_dir():
@@ -59,7 +56,7 @@ def _registry_root(ctx: Context, *, for_write: bool = False) -> Path:
             {"registry": str(ctx.registry_path) if ctx.registry_path is not None else None},
         )
     resolved = root.resolve()
-    runtime_registry = _managed_runtime_registry_root()
+    runtime_registry = operator_sources.managed_runtime_registry_root()
     if for_write and (resolved == runtime_registry or runtime_registry in resolved.parents):
         raise _failure(
             "Registry authoring refuses the managed runtime checkout",
