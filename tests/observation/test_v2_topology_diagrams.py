@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from infralink.observation.models import EndpointProtocol
 from infralink.observation.models_v2 import EdgeScope
 from infralink.observation.topology import (
@@ -210,3 +212,32 @@ def test_v2_topology_renderers_escape_untrusted_values_and_remain_deterministic(
     assert '\\"' in dot
     assert re.search(r"endpoint_[0-9a-f]{16}", mermaid)
     assert re.search(r'"endpoint_[0-9a-f]{16}"', dot)
+
+
+@pytest.mark.parametrize("renderer_name", ["render_v2_mermaid", "render_v2_dot"])
+def test_v2_topology_renderers_reject_long_ids_before_returning_source(
+    monkeypatch: pytest.MonkeyPatch, renderer_name: str
+) -> None:
+    import infralink.observation.topology_diagrams as diagrams
+
+    long_service_id = "service-" + "a" * 2_048
+    owner = _owner(HOST_ALPHA, long_service_id, "component")
+    endpoint_id = f"{HOST_ALPHA}/{long_service_id}/component/endpoint"
+    projection = V2TopologyProjection(
+        schema_version="infralink.observation-topology/v2",
+        filter={"mode": "full"},
+        nodes=(
+            V2TopologyNode(
+                id=endpoint_id,
+                owner=owner,
+                endpoint_id="endpoint",
+                protocol=EndpointProtocol.TCP,
+                port=1,
+            ),
+        ),
+        edges=(),
+    )
+    monkeypatch.setattr(diagrams, "_MAX_RENDERED_BYTES", 1_024)
+
+    with pytest.raises(diagrams.V2TopologyRenderBoundsError, match="rendered topology exceeds"):
+        getattr(diagrams, renderer_name)(projection)

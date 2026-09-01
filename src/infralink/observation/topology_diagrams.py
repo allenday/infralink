@@ -9,7 +9,13 @@ from typing import Literal
 
 from infralink.observation.topology import V2TopologyNode, V2TopologyProjection
 
-__all__ = ["render_v2_dot", "render_v2_mermaid"]
+_MAX_RENDERED_BYTES = 1_048_576
+
+__all__ = ["V2TopologyRenderBoundsError", "render_v2_dot", "render_v2_mermaid"]
+
+
+class V2TopologyRenderBoundsError(ValueError):
+    """A rendered declaration-only diagram exceeds the encoded output limit."""
 
 
 def render_v2_mermaid(projection: V2TopologyProjection) -> str:
@@ -28,7 +34,7 @@ def render_v2_mermaid(projection: V2TopologyProjection) -> str:
                 f"{_endpoint_identifier(edge.target_endpoint_id)}",
             )
         )
-    return "\n".join(lines) + "\n"
+    return _finalize_render(lines)
 
 
 def render_v2_dot(projection: V2TopologyProjection) -> str:
@@ -47,7 +53,7 @@ def render_v2_dot(projection: V2TopologyProjection) -> str:
             f"[id={_dot_string(edge.id)}, label={_dot_string(_edge_label(edge.id, edge.scope.value))}];"
         )
     lines.append("}")
-    return "\n".join(lines) + "\n"
+    return _finalize_render(lines)
 
 
 def _render_mermaid_ownership(lines: list[str], projection: V2TopologyProjection) -> None:
@@ -149,6 +155,15 @@ def _ownership_tree(projection: V2TopologyProjection) -> OwnershipTree:
         }
         for host_id, services in sorted(tree.items())
     }
+
+
+def _finalize_render(lines: list[str]) -> str:
+    rendered = "\n".join(lines) + "\n"
+    if len(rendered.encode("utf-8")) > _MAX_RENDERED_BYTES:
+        raise V2TopologyRenderBoundsError(
+            f"rendered topology exceeds {_MAX_RENDERED_BYTES}-byte limit"
+        )
+    return rendered
 
 
 def _identifier(kind: Literal["host", "service", "component"], canonical_id: str) -> str:
