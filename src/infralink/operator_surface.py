@@ -15,11 +15,12 @@ from typing import Literal, NoReturn, cast
 from agent_surface import App, OperationError
 from agent_surface.adapters.click import ClickAdapter
 from agent_surface.adapters.mcp import MCPAdapter
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from infralink.cli.contracts import (
     AppListResult,
     AppShowResult,
+    DiagramProjectResult,
     DoctorTarget,
     EdgeListResult,
     EdgeShowResult,
@@ -46,6 +47,14 @@ from infralink.cli.operation_contracts import (
 )
 from infralink.cli.queries import entity_not_found, list_services
 from infralink.fleet.validation import FleetValidationResult, validate_fleet
+from infralink.observation.api import ProjectValidationError, project_v2_topology_diagram
+from infralink.observation.models import CanonicalId, HostId
+from infralink.observation.topology import V2TopologyBoundsError
+from infralink.observation.topology_diagrams import (
+    V2TopologyRenderBoundsError,
+    render_v2_dot,
+    render_v2_mermaid,
+)
 from infralink.operator_operations.topology import (
     AppShowRequest,
     EdgeShowRequest,
@@ -79,6 +88,11 @@ class DoctorBootstrapPlanResult(_OperationModel):
 
 
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
+# Diagram projection owns explicit observation sources and therefore cannot
+# inherit the Registry/edge selector shared by topology operations.
+diagram_surface = App("infralink-diagram")
+_canonical_id_adapter = TypeAdapter(CanonicalId)
+_host_id_adapter = TypeAdapter(HostId)
 
 
 def operator_click_adapter() -> ClickAdapter:
@@ -121,6 +135,34 @@ class FleetValidateRequest(SourceRequest):
     host: str | None = Field(default=None, min_length=1)
     strict: bool = False
     live: bool = False
+
+
+class DiagramProjectRequest(_OperationModel):
+    """Explicit V2 declaration sources for one read-only inline diagram."""
+
+    source: tuple[Path, ...] = Field(min_length=1)
+    scope: Literal["full", "host", "service"] = "full"
+    host: str | None = Field(default=None, min_length=1)
+    service: str | None = Field(default=None, min_length=1)
+    syntax: Literal["mermaid", "dot"] = "mermaid"
+
+    @model_validator(mode="after")
+    def require_exact_scope_selector(self) -> DiagramProjectRequest:
+        if self.scope == "full" and self.host is None and self.service is None:
+            return self
+        if self.scope == "host" and _is_host_id(self.host) and self.service is None:
+            return self
+        if self.scope == "service" and self.host is None and self.service is not None:
+            host_id, separator, service_id = self.service.partition("/")
+            if (
+                separator
+                and "/" not in service_id
+                and service_id
+                and _is_host_id(host_id)
+                and _is_canonical_id(service_id)
+            ):
+                return self
+        raise ValueError("scope requires its exact selector combination")
 
 
 class HostBootstrapRequest(SourceRequest):
@@ -418,6 +460,83 @@ def fleet_validate(request: FleetValidateRequest) -> FleetValidationResult:
     return validate_fleet(
         load_sources(request), host=request.host, strict=request.strict, live=request.live
     )
+
+
+@diagram_surface.operation(
+    "diagram.project", summary="Project a declared V2 topology diagram", read_only=True
+)  # type: ignore[untyped-decorator]
+def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
+    """Render declared V2 topology inline without selecting or changing host state."""
+    try:
+        projection_result = project_v2_topology_diagram(
+            request.source,
+            focal_host_id=request.host,
+            focal_service_instance_ref=request.service,
+        )
+    except V2TopologyBoundsError as error:
+        raise OperationError(
+            "diagram_topology_bounds_exceeded",
+            "V2 topology declaration exceeds the projection item limit",
+            details=(),
+            fix="Reduce or split the full declaration; narrowing diagram focus does not reduce this bound.",
+        ) from error
+    except ProjectValidationError as error:
+        first = error.report.diagnostics.diagnostics[0]
+        raise OperationError(
+            "diagram_source_invalid",
+            "V2 topology source could not be projected",
+            details=(
+                {
+                    "code": first.code,
+                    "path": first.location.path,
+                    "pointer": first.location.pointer,
+                },
+            ),
+            fix="Supply valid infralink.observation/v2 source declarations.",
+        ) from None
+    projection = projection_result.projection
+    try:
+        source = (
+            render_v2_mermaid(projection)
+            if request.syntax == "mermaid"
+            else render_v2_dot(projection)
+        )
+    except V2TopologyRenderBoundsError as error:
+        raise OperationError(
+            "diagram_render_bounds_exceeded",
+            "V2 topology diagram exceeds the inline render limit",
+            details=(),
+            fix="Narrow the diagram scope to a host or service and retry.",
+        ) from error
+    focus = request.host if request.scope == "host" else request.service
+    return DiagramProjectResult(
+        syntax=request.syntax,
+        scope=request.scope,
+        resolved_focus=focus,
+        node_count=len(projection.nodes),
+        edge_count=len(projection.edges),
+        source=source,
+    )
+
+
+def _is_host_id(value: str | None) -> bool:
+    if value is None:
+        return False
+    try:
+        _host_id_adapter.validate_python(value)
+    except ValidationError:
+        return False
+    return True
+
+
+def _is_canonical_id(value: str | None) -> bool:
+    if value is None:
+        return False
+    try:
+        _canonical_id_adapter.validate_python(value)
+    except ValidationError:
+        return False
+    return True
 
 
 @operator_surface.operation(

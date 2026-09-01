@@ -596,6 +596,7 @@ def _context_for(
     path: list[str] | None = None,
     *,
     allow_external_commands: bool = True,
+    ignore_root_sources: bool = False,
 ) -> CommandContext:
     active_argv = argv
     if active_argv is None:
@@ -611,6 +612,11 @@ def _context_for(
     if isinstance(runtime_ctx, Context):
         effective_registry = runtime_ctx.registry_path or effective_registry
         effective_edges = runtime_ctx.edges_path or effective_edges
+    if ignore_root_sources:
+        root_values["registry"] = None
+        root_values["edges"] = None
+        effective_registry = None
+        effective_edges = None
     resolved = {
         "version": __version__,
         "cwd": os.getcwd(),
@@ -1037,7 +1043,8 @@ def _help_parameters(
                 OptionDescriptor(
                     name=long_option.removeprefix("--").replace("-", "_"),
                     type=parameter.type.name,
-                    required=parameter.required,
+                    required=parameter.required
+                    or bool(getattr(parameter, "required_for_projection", False)),
                 )
             )
     return arguments, options
@@ -1596,14 +1603,36 @@ def cli(
     """
     click_ctx = click.get_current_context()
     source_independent = {None, "help", "version", "capabilities", "explain"}
-    selected_registry = registry
-    if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
-        selected_registry = _configured_registry()
+    # ``diagram project`` consumes only explicit V2 observation sources. It
+    # must ignore ambient root defaults but retain an explicitly supplied root
+    # source so the child can reject it as unsupported input.
+    incoming = _INVOCATION_ARGS.get() or []
+    diagram_project = any(
+        incoming[index : index + 2] == ["diagram", "project"] for index in range(len(incoming) - 1)
+    )
+    if diagram_project:
+        source_independent.add("diagram")
+    if diagram_project:
+        selected_registry = (
+            registry
+            if click_ctx.get_parameter_source("registry") is click.core.ParameterSource.COMMANDLINE
+            else None
+        )
+        selected_edges = (
+            edges
+            if click_ctx.get_parameter_source("edges") is click.core.ParameterSource.COMMANDLINE
+            else None
+        )
+    else:
+        selected_registry = registry
+        if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
+            selected_registry = _configured_registry()
+        selected_edges = edges or registry_companion(
+            selected_registry, "network/main-dev/edges/edges.yml"
+        )
     ctx.registry_path = selected_registry
     ctx.hosts_path = None
-    ctx.edges_path = edges or registry_companion(
-        ctx.registry_path, "network/main-dev/edges/edges.yml"
-    )
+    ctx.edges_path = selected_edges
     ctx.verbose = verbose
     ctx.output = output
     ctx.output_explicit = (

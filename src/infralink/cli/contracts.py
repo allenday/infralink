@@ -649,6 +649,17 @@ class FleetValidationResult(ContractModel):
     live_evidence: FleetLiveEvidence | None = None
 
 
+class DiagramProjectResult(ContractModel):
+    """One bounded inline V2 topology graph source."""
+
+    syntax: Literal["mermaid", "dot"]
+    scope: Literal["full", "host", "service"]
+    resolved_focus: str | None = None
+    node_count: int = Field(ge=0, le=4096)
+    edge_count: int = Field(ge=0, le=4096)
+    source: str = Field(min_length=1, max_length=1_048_576)
+
+
 class ResolveResult(ContractModel):
     edge: EdgeSummary
     endpoint: Endpoint
