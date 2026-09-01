@@ -56,6 +56,10 @@ class _MountedClickAdapter(ClickAdapter):
         return payload
 
     def _invoke(self, context: click.Context, plan: Any, params: dict[str, Any]) -> None:
+        # Extracted leaves are mounted beneath Infralink's root rather than an
+        # Agent Surface group, so seed the command context with the root argv.
+        assert self._argv_provider is not None
+        context.meta[agent_surface_click._RAW_ARGV_KEY] = tuple(self._argv_provider())
         token = _compact_mounted_json.set(True)
         try:
             super()._invoke(context, plan, params)

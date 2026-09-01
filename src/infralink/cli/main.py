@@ -1626,8 +1626,10 @@ def cli(
         is not click.core.ParameterSource.DEFAULT
     )
 
-    if click_ctx.invoked_subcommand is not None and _is_external_command(
-        click_ctx.invoked_subcommand
+    mounted_commands = {"app", "fleet", "info"}
+    if click_ctx.invoked_subcommand is not None and (
+        _is_external_command(click_ctx.invoked_subcommand)
+        or click_ctx.invoked_subcommand in mounted_commands
     ):
         mounted = _load_command(click_ctx.invoked_subcommand)
         if mounted is not None:
