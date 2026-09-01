@@ -28,6 +28,7 @@ _KEY_ID = r"^[a-z][a-z0-9-]{0,127}$"
 _BINDING_REF = r"^[a-z][a-z0-9-]{0,127}/[a-z][a-z0-9-]{0,127}$"
 _REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _MAX_ARTIFACT_BYTES = 1_048_576
+_MAX_GIT_METADATA_BYTES = 1_048_576
 
 
 class _StrictModel(BaseModel):
@@ -208,17 +209,17 @@ def _registry_revision(root: Path) -> str | None:
     git = _git_directory(root)
     if git is None:
         return None
-    try:
-        head = (git / "HEAD").read_text(encoding="ascii").strip()
-        if head.startswith("ref: "):
-            reference = head.removeprefix("ref: ")
-            if not reference.startswith("refs/") or ".." in Path(reference).parts:
-                return None
-            value = _read_git_reference(git, reference)
-        else:
-            value = head
-    except OSError:
+    common = _common_git_directory(git)
+    head = _read_git_metadata(git / "HEAD")
+    if common is None or head is None:
         return None
+    if head.startswith("ref: "):
+        reference = head.removeprefix("ref: ")
+        if not reference.startswith("refs/") or ".." in Path(reference).parts:
+            return None
+        value = _read_git_reference(common, reference)
+    else:
+        value = head
     return value if _REVISION.fullmatch(value) else None
 
 
@@ -228,9 +229,8 @@ def _git_directory(root: Path) -> Path | None:
         return metadata
     if not metadata.is_file():
         return None
-    try:
-        line = metadata.read_text(encoding="utf-8").strip()
-    except OSError:
+    line = _read_git_metadata(metadata)
+    if line is None:
         return None
     if not line.startswith("gitdir: "):
         return None
@@ -239,23 +239,48 @@ def _git_directory(root: Path) -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
+def _common_git_directory(git: Path) -> Path | None:
+    """Resolve only Git's standard linked-worktree common metadata location."""
+
+    declared = git / "commondir"
+    if not declared.is_file():
+        return git
+    value = _read_git_metadata(declared)
+    if value is None or not value:
+        return None
+    configured = Path(value)
+    candidate = (configured if configured.is_absolute() else git / configured).resolve()
+    expected = git.parent.parent.resolve()
+    if git.parent.name != "worktrees" or candidate != expected or not candidate.is_dir():
+        return None
+    return candidate
+
+
 def _read_git_reference(git: Path, reference: str) -> str:
-    try:
-        direct = (git / reference).read_text(encoding="ascii").strip()
-    except OSError:
-        direct = ""
+    direct = _read_git_metadata(git / reference) or ""
     if direct:
         return direct
-    try:
-        for line in (git / "packed-refs").read_text(encoding="ascii").splitlines():
-            if not line or line.startswith(("#", "^")):
-                continue
-            revision, separator, packed_reference = line.partition(" ")
-            if separator and packed_reference == reference:
-                return revision
-    except OSError:
-        pass
+    packed_refs = _read_git_metadata(git / "packed-refs")
+    if packed_refs is None:
+        return ""
+    for line in packed_refs.splitlines():
+        if not line or line.startswith(("#", "^")):
+            continue
+        revision, separator, packed_reference = line.partition(" ")
+        if separator and packed_reference == reference:
+            return revision
     return ""
+
+
+def _read_git_metadata(path: Path) -> str | None:
+    try:
+        with path.open("rb") as metadata:
+            raw = metadata.read(_MAX_GIT_METADATA_BYTES + 1)
+        if len(raw) > _MAX_GIT_METADATA_BYTES:
+            return None
+        return raw.decode("ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _failure(

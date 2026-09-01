@@ -303,6 +303,16 @@ def _write_registry_revision(root: Path) -> None:
     (git_dir / "HEAD").write_text(f"{REGISTRY_REVISION}\n", encoding="ascii")
 
 
+def _write_linked_worktree_revision(root: Path) -> None:
+    common = root.parent / "common-git"
+    worktree = common / "worktrees" / "registry"
+    worktree.mkdir(parents=True)
+    (root / ".git").write_text(f"gitdir: {worktree}\n", encoding="utf-8")
+    (worktree / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+    (worktree / "commondir").write_text("../..\n", encoding="ascii")
+    (common / "packed-refs").write_text(f"{REGISTRY_REVISION} refs/heads/main\n", encoding="ascii")
+
+
 def _write_live_evidence(
     path: Path,
     *,
@@ -459,6 +469,27 @@ def test_live_mode_accepts_fresh_signed_complete_evidence(tmp_path: Path, monkey
     assert result.live_evidence is not None
     assert result.live_evidence.status == "fresh"
     assert result.live_evidence.generated_at == "2026-09-01T12:00:00Z"
+
+
+def test_live_mode_accepts_evidence_from_a_linked_worktree_symbolic_head(
+    tmp_path: Path, monkeypatch
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    _write_live_evidence(evidence_path)
+    edges = _write_registry(tmp_path, role_overrides="workers: 1")
+    _write_linked_worktree_revision(tmp_path)
+    _write_live_declaration(tmp_path)
+    monkeypatch.setenv("INFRALINK_CONFIG", str(_live_config(tmp_path, evidence_path)))
+
+    result = validate_fleet(
+        load_sources(SourceRequest(registry=tmp_path, edges=edges)),
+        live=True,
+        now=datetime(2026, 9, 1, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert result.valid is True
+    assert result.live_evidence is not None
+    assert result.live_evidence.status == "fresh"
 
 
 def test_live_mode_rejects_key_trusted_for_a_different_signing_binding(
