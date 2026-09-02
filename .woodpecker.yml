@@ -60,8 +60,14 @@ steps:
       - apt-get update
       - apt-get install --yes --no-install-recommends ca-certificates curl git
       - python -m pip install --disable-pip-version-check -e ".[dev]"
-      - git fetch --no-tags origin main
-      - MAIN_SHA=$$(git rev-parse FETCH_HEAD)
+      - python scripts/release.py platform --platform "$${CI_SYSTEM_PLATFORM}" --output /tmp/infralink-toolchain
+      - . /tmp/infralink-toolchain
+      - GH_VERSION=2.76.2
+      - curl --fail --location --silent --show-error --output /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v$${GH_VERSION}/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}.tar.gz"
+      - echo "$${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum --check -
+      - tar -xzf /tmp/gh.tar.gz -C /tmp
+      - install "/tmp/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}/bin/gh" /usr/local/bin/gh
+      - MAIN_SHA=$$(gh api "repos/$${CI_REPO}/git/ref/heads/main" --jq '.object.sha')
       - PACKAGE_VERSION=$$(python -c 'from infralink.__about__ import __version__; print(__version__)')
       - RELEASE_TAG="v$${RELEASE_VERSION:?}"
       - >-
@@ -72,21 +78,14 @@ steps:
         --main-sha "$${MAIN_SHA}"
       - |-
         set +e
-        git ls-remote --exit-code --tags origin "refs/tags/$${RELEASE_TAG}" >/tmp/infralink-tag
+        tag_response=$$(gh api --include "repos/$${CI_REPO}/git/ref/tags/$${RELEASE_TAG}" 2>&1)
         tag_status=$$?
         set -e
         if [ "$${tag_status}" -eq 0 ]; then
           echo "tag $${RELEASE_TAG} already exists" >&2
           exit 1
         fi
-        test "$${tag_status}" -eq 2
-      - python scripts/release.py platform --platform "$${CI_SYSTEM_PLATFORM}" --output /tmp/infralink-toolchain
-      - . /tmp/infralink-toolchain
-      - GH_VERSION=2.76.2
-      - curl --fail --location --silent --show-error --output /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v$${GH_VERSION}/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}.tar.gz"
-      - echo "$${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum --check -
-      - tar -xzf /tmp/gh.tar.gz -C /tmp
-      - install "/tmp/gh_$${GH_VERSION}_linux_$${TOOL_ARCH}/bin/gh" /usr/local/bin/gh
+        printf '%s\n' "$${tag_response}" | grep -Eq '^HTTP/[^ ]+ 404 '
       - |-
         set +e
         release_response=$$(gh api --include "repos/$${CI_REPO}/releases/tags/$${RELEASE_TAG}" 2>&1)
