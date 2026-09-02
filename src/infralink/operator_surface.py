@@ -108,24 +108,26 @@ _host_id_adapter = TypeAdapter(HostId)
 
 def operator_click_adapter() -> ClickAdapter:
     """Build the one Click projection for typed operator operations."""
-    from infralink.agent_surface import InfralinkEnvelopeRenderer, operation_error_exit_code
+    from infralink.agent_surface import OperatorEnvelopeRenderer, operation_error_exit_code
+    from infralink.operator_actions import OperatorActionProvider
 
     return ClickAdapter(
         operator_surface,
-        envelope_renderer=InfralinkEnvelopeRenderer(),
+        action_provider=OperatorActionProvider(),
+        envelope_renderer=OperatorEnvelopeRenderer(),
         operation_error_exit_code=operation_error_exit_code,
     )
 
 
 def operator_mcp_adapter() -> MCPAdapter:
     """Build the one MCP projection for typed operator operations."""
-    from infralink.agent_surface import InfralinkEnvelopeRenderer
+    from infralink.agent_surface import OperatorEnvelopeRenderer
     from infralink.operator_actions import OperatorActionProvider
 
     return MCPAdapter(
         operator_surface,
         action_provider=OperatorActionProvider(),
-        envelope_renderer=InfralinkEnvelopeRenderer(),
+        envelope_renderer=OperatorEnvelopeRenderer(),
     )
 
 
@@ -159,10 +161,14 @@ def info_click_command() -> click.Command:
 
 def host_click_command() -> click.Group:
     """Return the generated host subtree mounted under the public root."""
-    from infralink.agent_surface import mounted_click_command
+    from infralink.agent_surface import OperatorEnvelopeRenderer, mounted_click_command
     from infralink.operator_actions import OperatorActionProvider
 
-    root = mounted_click_command(operator_surface, action_provider=OperatorActionProvider())
+    root = mounted_click_command(
+        operator_surface,
+        action_provider=OperatorActionProvider(),
+        envelope_renderer=OperatorEnvelopeRenderer(),
+    )
     command = root.get_command(click.Context(root), "host")
     assert isinstance(command, click.Group)
     return command

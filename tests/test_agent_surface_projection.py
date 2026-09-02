@@ -63,13 +63,31 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert click_result.exit_code == 0, click_result.output
     click_document = json.loads(click_result.output)
     mcp_document = asyncio.run(call_mcp())
-    for document in (click_document, mcp_document):
+    for document, action_output in (
+        (click_document, " --output json"),
+        (mcp_document, ""),
+    ):
         assert document["schema_version"] == "infralink.cli/v1"
         assert document["ok"] is True
         assert document["command"]["parsed"]["path"] == ["host", "list"]
         assert document["command"]["resolved"]["registry"] == str(tmp_path)
         assert document["result"]["items"] == [host_id]
-        assert document["next_actions"] == []
+        assert document["next_actions"] == [
+            {
+                "rel": "show",
+                "command": f"infralink{action_output} --registry {tmp_path} host show '{{host_id}}'",
+                "description": "Show one host declaration",
+                "safe": True,
+                "templated": True,
+                "bindings": {
+                    "host_id": {
+                        "type": "string",
+                        "required": True,
+                        "source": "result.items[]",
+                    }
+                },
+            }
+        ]
 
     assert click_document["command"]["raw"] == (
         f"infralink --registry {tmp_path} host list --format json"
@@ -305,7 +323,7 @@ def test_renderer_fails_closed_for_truncated_hateoas_action_frontiers() -> None:
             ["info"],
             "info",
             {"summary": {"host_count": 1, "service_count": 2, "edge_count": 1}},
-            ([], ["list", "list"]),
+            (["list", "list"], ["list", "list"]),
         ),
     ],
 )

@@ -8,7 +8,7 @@ from agent_surface.contracts import Action, ActionCollection
 from agent_surface.outcomes import ActionProvider
 from pydantic import BaseModel
 
-from infralink.cli.contracts import InfoResult
+from infralink.cli.contracts import HostListResult, InfoResult
 from infralink.cli.operation_contracts import (
     HostApplyResult,
     HostLogsResult,
@@ -73,6 +73,26 @@ class OperatorActionProvider(ActionProvider):
                         description="Show the created host declaration",
                         command=("host", "show", result.host_id),
                         operation="host.show",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if operation == "host.list" and isinstance(result, HostListResult) and result.items:
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="show",
+                        description="Show one host declaration",
+                        command_template=("host", "show", "{host_id}"),
+                        operation="host.show",
+                        slots={
+                            "host_id": {
+                                "type": "string",
+                                "required": True,
+                                "source": "result.items[]",
+                            }
+                        },
                     ),
                 ),
                 total=1,

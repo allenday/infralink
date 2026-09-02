@@ -53,6 +53,11 @@ class _MountedClickAdapter(ClickAdapter):
             if field.source != "argv" or field.name not in {"registry", "edges"}:
                 continue
             value = params.get(field.name)
+            if value is None:
+                # The public root alone selects topology sources.  Its
+                # environment/config-derived value must reach extracted
+                # mounted leaves just as an explicit root flag does.
+                value = _root_source_default(field.name)
             if value is not None:
                 payload[field.name] = value
         return payload
@@ -202,6 +207,9 @@ class InfralinkEnvelopeRenderer:
             invocation.next_actions,
             action_sources,
             allow_templates=self._allow_action_templates(),
+            output=_explicit_cli_output(
+                invocation.command.raw if invocation.command is not None else ()
+            ),
         )
         command = _command_context(invocation)
         if invocation.error is not None:
@@ -257,6 +265,14 @@ class AppEnvelopeRenderer(InfralinkEnvelopeRenderer):
     @staticmethod
     def _action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
         return _effective_source_values(request)
+
+    @staticmethod
+    def _allow_action_templates() -> bool:
+        return True
+
+
+class OperatorEnvelopeRenderer(InfralinkEnvelopeRenderer):
+    """Allow source-bound list navigation for public operator operations."""
 
     @staticmethod
     def _allow_action_templates() -> bool:
@@ -320,6 +336,16 @@ def _output_format(tokens: tuple[str, ...], *, mcp: bool) -> str:
     return "json" if mcp else "yaml"
 
 
+def _explicit_cli_output(tokens: tuple[str, ...]) -> str | None:
+    """Return a replayable format only when the CLI explicitly selected it."""
+    for index, token in enumerate(tokens):
+        if token in {"--format", "--output"} and index + 1 < len(tokens):
+            return tokens[index + 1]
+        if token.startswith(("--format=", "--output=")):
+            return token.partition("=")[2]
+    return None
+
+
 def _error_details(details: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     if not details:
         return {}
@@ -353,6 +379,7 @@ def _project_actions(
     request: Mapping[str, Any] | None,
     *,
     allow_templates: bool,
+    output: str | None,
 ) -> list[Action]:
     """Project only concrete Agent Surface actions into the v1 action normal form."""
     if actions.truncated:
@@ -367,7 +394,8 @@ def _project_actions(
             raise ValueError("Infralink action has no command")
         command = _inherit_declared_sources(list(source_command), request)
         _validate_action_operation(action_value.operation, command)
-        argv = ["infralink", *_declared_source_argv(request), *command]
+        output_argv = ["--output", "json"] if output == "json" else []
+        argv = ["infralink", *output_argv, *_declared_source_argv(request), *command]
         bindings = _project_action_bindings(action_value.slots) if template else {}
         projected.append(
             Action(

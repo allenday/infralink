@@ -1332,7 +1332,13 @@ class JsonGroup(click.Group):
         return sorted(builtins | command_plugins.names())
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
-        return _load_command(cmd_name)
+        command = _load_command(cmd_name)
+        if command is not None:
+            # The root callback runs after Click has resolved the child. Keep
+            # that exact mounted command so its default map reaches the active
+            # operation tree rather than a second freshly-created tree.
+            ctx.meta.setdefault("infralink_resolved_commands", {})[cmd_name] = command
+        return command
 
     def resolve_command(
         self, ctx: click.Context, args: list[str]
@@ -1641,7 +1647,9 @@ def cli(
         _is_external_command(click_ctx.invoked_subcommand)
         or click_ctx.invoked_subcommand in mounted_commands
     ):
-        mounted = _load_command(click_ctx.invoked_subcommand)
+        mounted = click_ctx.meta.get("infralink_resolved_commands", {}).get(
+            click_ctx.invoked_subcommand
+        ) or _load_command(click_ctx.invoked_subcommand)
         if mounted is not None:
             _set_mounted_defaults(click_ctx, click_ctx.invoked_subcommand, mounted)
 

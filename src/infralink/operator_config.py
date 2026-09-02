@@ -99,7 +99,15 @@ def operator_config_path() -> Path:
 
 
 def configured_registry() -> Path | None:
-    """Resolve the optional local registry checkout selector."""
+    """Resolve the optional local registry checkout selector.
+
+    The public root's explicit value and ``INFRALINK_REGISTRY`` take priority
+    over the durable operator config.  Typed transports reuse this selector so
+    CLI and MCP never diverge on a second source-resolution policy.
+    """
+    environment_registry = os.environ.get("INFRALINK_REGISTRY")
+    if environment_registry:
+        return Path(environment_registry).expanduser()
     path = operator_config_path()
     if not path.is_file():
         return None
