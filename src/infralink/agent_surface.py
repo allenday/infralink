@@ -226,7 +226,7 @@ class InfralinkEnvelopeRenderer:
                     message=invocation.error.message,
                     details=self._error_details(invocation),
                 ),
-                fix=invocation.error.fix,
+                fix=_public_error_fix(invocation.error.fix, invocation.operation.name),
                 next_actions=next_actions,
             )
         return Envelope[Any](
@@ -282,6 +282,14 @@ class OperatorEnvelopeRenderer(InfralinkEnvelopeRenderer):
     @staticmethod
     def _allow_action_templates() -> bool:
         return True
+
+
+def _public_error_fix(fix: str | None, operation: str) -> str | None:
+    """Replace Agent Surface's private discovery path with public Infralink help."""
+    expected = f"Run infralink operations describe {operation}."
+    if fix == expected:
+        return f"Run infralink help {operation.replace('.', ' ')}."
+    return fix
 
 
 def _command_context(invocation: Invocation) -> CommandContext:

@@ -210,7 +210,7 @@ def test_native_mcp_keeps_analyze_artifact_options_distinct_from_root_sources() 
         "analyze",
         "--output",
         "artifacts",
-        "--no-edges",
+        "--no-include-edges",
     ]
 
 

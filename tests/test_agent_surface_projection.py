@@ -264,6 +264,29 @@ def test_edge_resolution_and_health_operations_are_declared_once() -> None:
     assert {"check", "resolve"} <= declared
 
 
+def test_analyze_is_a_typed_explicit_artifact_write_operation() -> None:
+    """Analyze owns its output path but inherits source selection from the root."""
+    definition = operator_surface.operations.describe("analyze")
+
+    assert definition.read_only is False
+    assert definition.input_model.model_fields["output"].is_required()
+    assert {
+        "include_edges",
+        "include_diagram",
+        "include_monitoring",
+    } <= set(definition.input_model.model_fields)
+
+    async def listed_schema() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+        tool = next(item for item in tools.tools if item.name == "analyze")
+        return tool.input_schema
+
+    schema = asyncio.run(listed_schema())
+    assert set(schema["required"]) == {"output"}
+    assert schema["properties"]["registry"]["default"] is None
+
+
 def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() -> None:
     definition = operator_surface.operations.describe("host.list")
     renderer = InfralinkEnvelopeRenderer()

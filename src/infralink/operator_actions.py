@@ -8,7 +8,13 @@ from agent_surface.contracts import Action, ActionCollection
 from agent_surface.outcomes import ActionProvider
 from pydantic import BaseModel
 
-from infralink.cli.contracts import CheckCommandResult, HostListResult, InfoResult, ResolveResult
+from infralink.cli.contracts import (
+    AnalyzeResult,
+    CheckCommandResult,
+    HostListResult,
+    InfoResult,
+    ResolveResult,
+)
 from infralink.cli.operation_contracts import (
     HostApplyResult,
     HostLogsResult,
@@ -16,6 +22,7 @@ from infralink.cli.operation_contracts import (
     HostVerifierResult,
 )
 from infralink.fleet.validation import FleetValidationResult
+from infralink.operator_operations.analyze import AnalyzeRequest
 from infralink.operator_operations.edge_health import EdgeCheckRequest, EdgeResolveRequest
 from infralink.operator_surface import (
     FleetValidateRequest,
@@ -92,6 +99,12 @@ class OperatorActionProvider(ActionProvider):
             )
         if error is not None:
             return ActionCollection()
+        if (
+            operation == "analyze"
+            and isinstance(request, AnalyzeRequest)
+            and isinstance(result, AnalyzeResult)
+        ):
+            return _analyze_actions(request, result)
         if (
             operation == "host.create"
             and isinstance(request, HostCreateRequest)
@@ -240,6 +253,47 @@ class OperatorActionProvider(ActionProvider):
 
     def explain(self, operation: str) -> Action | None:
         return None
+
+
+def _analyze_actions(request: AnalyzeRequest, result: AnalyzeResult) -> ActionCollection:
+    """Continue either bounded analyze result collection through the same operation."""
+    actions: list[Action] = []
+    for collection, page, source in (
+        (
+            "diagnostics",
+            result.analysis.diagnostics.page,
+            "result.analysis.diagnostics.page.next_cursor",
+        ),
+        ("artifacts", result.artifacts.page, "result.artifacts.page.next_cursor"),
+    ):
+        if page.next_cursor is None:
+            continue
+        command = ["analyze", "--output", request.output.as_posix()]
+        if not request.include_edges:
+            command.append("--no-include-edges")
+        if not request.include_diagram:
+            command.append("--no-include-diagram")
+        if not request.include_monitoring:
+            command.append("--no-include-monitoring")
+        command.extend(
+            ("--collection", collection, "--cursor", "{cursor}", "--limit", str(request.limit))
+        )
+        actions.append(
+            Action(
+                rel="continue",
+                description=f"Continue analyze {collection}",
+                command_template=tuple(command),
+                operation="analyze",
+                slots={
+                    "cursor": {
+                        "type": "string",
+                        "required": True,
+                        "source": source,
+                    }
+                },
+            )
+        )
+    return ActionCollection(items=tuple(actions), total=len(actions), returned=len(actions))
 
 
 def _check_actions(request: EdgeCheckRequest, result: CheckCommandResult) -> ActionCollection:

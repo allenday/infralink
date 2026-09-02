@@ -19,6 +19,7 @@ from agent_surface.adapters.mcp import MCPAdapter
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from infralink.cli.contracts import (
+    AnalyzeResult,
     AppListResult,
     AppShowResult,
     CheckCommandResult,
@@ -59,6 +60,7 @@ from infralink.observation.topology_diagrams import (
     render_v2_dot,
     render_v2_mermaid,
 )
+from infralink.operator_operations.analyze import AnalyzeRequest, analyze_declared_registry
 from infralink.operator_operations.edge_health import (
     EdgeCheckRequest,
     EdgeResolveRequest,
@@ -170,6 +172,26 @@ def info_click_command() -> click.Command:
         action_provider=OperatorActionProvider(),
     )
     command = root.get_command(click.Context(root), "info")
+    assert isinstance(command, click.Command)
+    return command
+
+
+def analyze_click_command() -> click.Command:
+    """Return the generated analyze leaf mounted under the public root."""
+    from infralink.agent_surface import (
+        OperatorEnvelopeRenderer,
+        mounted_click_command,
+        operator_render_options,
+    )
+    from infralink.operator_actions import OperatorActionProvider
+
+    root = mounted_click_command(
+        operator_surface,
+        action_provider=OperatorActionProvider(),
+        envelope_renderer=OperatorEnvelopeRenderer(),
+        render_options=operator_render_options(),
+    )
+    command = root.get_command(click.Context(root), "analyze")
     assert isinstance(command, click.Command)
     return command
 
@@ -700,6 +722,26 @@ def edge_list(request: EdgeListRequest) -> EdgeListResult:
 def edge_show(request: EdgeShowRequest) -> EdgeShowResult:
     """Return one bounded edge view without a Click context."""
     return show_declared_edge(request)
+
+
+@operator_surface.operation("analyze", summary="Generate declared topology artifacts")  # type: ignore[type-var]
+def analyze(request: AnalyzeRequest) -> AnalyzeResult:
+    """Write deterministic artifacts from the selected Registry checkout."""
+    try:
+        return analyze_declared_registry(request)
+    except OperationError as error:
+        if error.code in {"source_not_found", "source_invalid"}:
+            details = dict(error.details[0]) if error.details else {}
+            details.setdefault("reason", "checkout_root_required")
+            raise OperationError(
+                "input_load_failed",
+                error.message,
+                details=(details,),
+                fix=error.fix,
+            ) from None
+        raise
+    except Exception as error:
+        _raise_operation_failure(error)
 
 
 @operator_surface.operation("check", summary="Check declared edge health", read_only=True)  # type: ignore[type-var]

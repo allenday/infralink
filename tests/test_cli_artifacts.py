@@ -116,7 +116,10 @@ def test_artifact_commands_require_explicit_output(tmp_path: Path, command: str)
 
     assert result.exit_code == 2
     assert payload["error"]["code"] == "usage_error"
-    assert "--output" in payload["fix"]
+    if command == "analyze":
+        assert payload["fix"] == "Run infralink help analyze."
+    else:
+        assert "--output" in payload["fix"]
     assert payload["command"]["parsed"]["path"] == [command]
 
 

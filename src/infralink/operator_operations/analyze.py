@@ -3,38 +3,37 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
-import click
 import yaml
+from pydantic import Field, StrictInt
 
-from infralink.cli.actions import action
 from infralink.cli.artifacts import (
     artifact_fingerprint,
     artifact_metadata,
     artifact_pages,
-    continuation_actions,
     require_output,
     write_artifacts,
 )
 from infralink.cli.contracts import AnalysisSummary, AnalyzeResult, Artifact, Diagnostic, Page
-from infralink.cli.main import (
-    Context,
-    _context_for,
-    _emit,
-    _page_options,
-    _root_source_argv,
-    input_load_failed,
-    pass_context,
-    registry_checkout_required,
-    registry_checkout_root,
-)
-from infralink.cli.output import ok_envelope
 from infralink.cli.pagination import invalid_cursor
+from infralink.operator_sources import SourceRequest, load_registry
+
+
+class AnalyzeRequest(SourceRequest):
+    """Generate deterministic public artifacts from one Registry checkout."""
+
+    output: Path
+    include_edges: bool = True
+    include_diagram: bool = True
+    include_monitoring: bool = True
+    limit: StrictInt = Field(default=20, ge=1, le=1000)
+    cursor: str | None = None
+    collection: str | None = None
 
 
 def _host_id(name: str, host_data: dict[str, Any]) -> str | None:
@@ -253,10 +252,10 @@ def _service_count(data: dict[str, Any]) -> int:
     return len(services)
 
 
-def _analysis_data(ctx: Context) -> dict[str, Any]:
-    """Render parsed checkout hosts without changing legacy artifact semantics."""
+def _analysis_data(registry: Any) -> dict[str, Any]:
+    """Render parsed checkout hosts without changing artifact semantics."""
     hosts: dict[str, dict[str, Any]] = {}
-    for host in ctx.registry:
+    for host in registry:
         data = host.to_dict()
         if host.group is not None:
             data["group"] = host.group
@@ -272,32 +271,21 @@ def _json_scalar(value: object) -> object:
     raise TypeError(f"unsupported analysis value: {type(value).__name__}")
 
 
-@click.command()
-@click.option("-o", "--output", type=click.Path(path_type=Path), required=True)
-@click.option("--edges/--no-edges", default=True)
-@click.option("--diagram/--no-diagram", default=True)
-@click.option("--monitoring/--no-monitoring", default=True)
-@_page_options
-@pass_context
-def analyze(
-    ctx: Context,
-    output: Path | None,
-    edges: bool,
-    diagram: bool,
-    monitoring: bool,
-    limit: int,
-    cursor: str | None,
-    collection: str | None,
-) -> None:
-    """Analyze a registry and generate local derived artifacts."""
-    output = require_output(output)
-    source = registry_checkout_root(ctx.registry_path)
-    if source is None or ctx.registry_path != source:
-        raise registry_checkout_required(str(ctx.registry_path))
+def analyze_declared_registry(request: AnalyzeRequest) -> AnalyzeResult:
+    """Generate local artifacts from the selected checkout without deployment effects."""
+    output = require_output(request.output)
+    loaded = load_registry(request)
     try:
-        data = _analysis_data(ctx)
-    except Exception:
-        raise input_load_failed("registry", str(source)) from None
+        data = _analysis_data(loaded.registry)
+    except Exception as error:
+        from agent_surface import OperationError
+
+        raise OperationError(
+            "source_invalid",
+            "Registry source could not be analyzed",
+            details=({"source": "registry", "path": str(loaded.registry_source_path)},),
+            fix="Correct the registry declaration and validate it before retrying.",
+        ) from error
 
     diagnostics: list[Diagnostic] = []
     converted = convert_to_uuid_primary(data, diagnostics)
@@ -309,8 +297,8 @@ def analyze(
         ),
         None,
     )
-    edge_list = infer_edges_from_dependencies(data) if edges else []
-    if edges and monitoring:
+    edge_list = infer_edges_from_dependencies(data) if request.include_edges else []
+    if request.include_edges and request.include_monitoring:
         edge_list = sorted(
             [*edge_list, *infer_monitoring_edges(data, prometheus_id)],
             key=lambda edge: str(edge["id"]),
@@ -323,7 +311,7 @@ def analyze(
             yaml.safe_dump(converted, sort_keys=True).encode("utf-8"),
         )
     ]
-    if edges:
+    if request.include_edges:
         generated.append(
             (
                 Path("edges.yml"),
@@ -334,7 +322,7 @@ def analyze(
                 ).encode("utf-8"),
             )
         )
-    if diagram:
+    if request.include_diagram:
         generated.append(
             (
                 Path("diagram.mmd"),
@@ -343,21 +331,21 @@ def analyze(
             )
         )
     artifacts = artifact_metadata(output, generated)
-    collections: Mapping[str, Sequence[object]] = {
+    collections: dict[str, Sequence[object]] = {
         "diagnostics": diagnostics,
         "artifacts": artifacts,
     }
-    selected = collection or "diagnostics"
+    selected = request.collection or "diagnostics"
     if selected not in collections:
         raise invalid_cursor()
     fingerprint = artifact_fingerprint(
         command="analyze",
-        sources=[source],
+        sources=[loaded.registry_path],
         options={
             "output": output.as_posix(),
-            "edges": edges,
-            "diagram": diagram,
-            "monitoring": monitoring,
+            "include_edges": request.include_edges,
+            "include_diagram": request.include_diagram,
+            "include_monitoring": request.include_monitoring,
         },
         collections=collections,
     )
@@ -365,22 +353,22 @@ def analyze(
         command="analyze",
         collections={"diagnostics": diagnostics},
         selected="diagnostics",
-        cursor=cursor if selected == "diagnostics" else None,
-        limit=limit,
+        cursor=request.cursor if selected == "diagnostics" else None,
+        limit=request.limit,
         fingerprint=fingerprint,
     )
     artifact_result_pages = artifact_pages(
         command="analyze",
         collections={"artifacts": artifacts},
         selected="artifacts",
-        cursor=cursor if selected == "artifacts" else None,
-        limit=limit,
+        cursor=request.cursor if selected == "artifacts" else None,
+        limit=request.limit,
         fingerprint=fingerprint,
     )
     diagnostic_page: Page[Diagnostic] = diagnostic_pages["diagnostics"]
     artifact_page: Page[Artifact] = artifact_result_pages["artifacts"]
     write_artifacts(output, generated)
-    result = AnalyzeResult(
+    return AnalyzeResult(
         analysis=AnalysisSummary(
             host_count=len(data.get("hosts", {})),
             service_count=_service_count(data),
@@ -389,34 +377,3 @@ def analyze(
         ),
         artifacts=artifact_page,
     )
-    base_argv = [*_root_source_argv(ctx), "analyze", "--output", output.as_posix()]
-    if not edges:
-        base_argv.append("--no-edges")
-    if not diagram:
-        base_argv.append("--no-diagram")
-    if not monitoring:
-        base_argv.append("--no-monitoring")
-    actions = [
-        action("help", ["infralink", "help", "analyze"], "Show analyze help"),
-        *continuation_actions(
-            base_argv=base_argv,
-            limit=limit,
-            pages=diagnostic_pages,
-            sources={"diagnostics": "result.analysis.diagnostics.page.next_cursor"},
-        ),
-        *continuation_actions(
-            base_argv=base_argv,
-            limit=limit,
-            pages=artifact_result_pages,
-            sources={"artifacts": "result.artifacts.page.next_cursor"},
-        ),
-    ]
-    payload = ok_envelope(
-        _context_for(path=["analyze"]),
-        result,
-        actions,
-    )
-    payload["meta"]["truncated"] = any(
-        page.page.next_cursor is not None for page in (diagnostic_page, artifact_page)
-    )
-    _emit(payload)
