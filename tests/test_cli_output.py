@@ -8,7 +8,7 @@ from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 
 import pytest
-from click import NoSuchOption
+from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 
@@ -23,6 +23,7 @@ from infralink.cli.contracts import (
     PageInfo,
 )
 from infralink.cli.errors import CliFailure, ErrorCode
+from infralink.cli.main import cli
 from infralink.cli.output import (
     SENSITIVE_OPTIONS,
     command_context,
@@ -30,7 +31,6 @@ from infralink.cli.output import (
     ok_envelope,
     redact_argv,
 )
-from infralink.cli.resolve import resolve
 
 
 class NestedCredential(BaseModel):
@@ -251,8 +251,13 @@ def test_redact_argv_redacts_live_short_password_alias() -> None:
 
 
 def test_click_parser_rejects_attached_short_password_value() -> None:
-    with pytest.raises(NoSuchOption):
-        resolve.make_context("resolve", ["edge-1", "-pcanary-secret"])
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "resolve", "edge-1", "-pcanary-secret"],
+    )
+
+    assert result.exit_code == 2
+    assert "canary-secret" not in result.output
 
 
 def test_redact_argv_redacts_attached_short_password_without_matching_long_prefixes() -> None:

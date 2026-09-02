@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from infralink.cli.contracts import (
     AppListResult,
     AppShowResult,
+    CheckCommandResult,
     DiagramProjectResult,
     DoctorTarget,
     EdgeListResult,
@@ -31,6 +32,7 @@ from infralink.cli.contracts import (
     InfoResult,
     InfoSources,
     InfoSummary,
+    ResolveResult,
     ServiceListResult,
     ServiceShowResult,
 )
@@ -56,6 +58,12 @@ from infralink.observation.topology_diagrams import (
     V2TopologyRenderBoundsError,
     render_v2_dot,
     render_v2_mermaid,
+)
+from infralink.operator_operations.edge_health import (
+    EdgeCheckRequest,
+    EdgeResolveRequest,
+    check_declared_edges,
+    resolve_declared_edge,
 )
 from infralink.operator_operations.topology import (
     AppShowRequest,
@@ -108,37 +116,44 @@ _host_id_adapter = TypeAdapter(HostId)
 
 def operator_click_adapter() -> ClickAdapter:
     """Build the one Click projection for typed operator operations."""
-    from infralink.agent_surface import OperatorEnvelopeRenderer, operation_error_exit_code
+    from infralink.agent_surface import (
+        OperatorEnvelopeRenderer,
+        operation_error_exit_code,
+        operator_render_options,
+    )
     from infralink.operator_actions import OperatorActionProvider
 
     return ClickAdapter(
         operator_surface,
         action_provider=OperatorActionProvider(),
         envelope_renderer=OperatorEnvelopeRenderer(),
+        render_options=operator_render_options(),
         operation_error_exit_code=operation_error_exit_code,
     )
 
 
 def operator_mcp_adapter() -> MCPAdapter:
     """Build the one MCP projection for typed operator operations."""
-    from infralink.agent_surface import OperatorEnvelopeRenderer
+    from infralink.agent_surface import OperatorEnvelopeRenderer, operator_render_options
     from infralink.operator_actions import OperatorActionProvider
 
     return MCPAdapter(
         operator_surface,
         action_provider=OperatorActionProvider(),
         envelope_renderer=OperatorEnvelopeRenderer(),
+        render_options=operator_render_options(),
     )
 
 
 def fleet_click_command() -> click.Group:
     """Return the generated fleet subtree mounted under the public root."""
-    from infralink.agent_surface import mounted_click_command
+    from infralink.agent_surface import mounted_click_command, operator_render_options
     from infralink.operator_actions import OperatorActionProvider
 
     root = mounted_click_command(
         operator_surface,
         action_provider=OperatorActionProvider(),
+        render_options=operator_render_options(),
     )
     command = root.get_command(click.Context(root), "fleet")
     assert isinstance(command, click.Group)
@@ -159,15 +174,60 @@ def info_click_command() -> click.Command:
     return command
 
 
-def host_click_command() -> click.Group:
-    """Return the generated host subtree mounted under the public root."""
-    from infralink.agent_surface import OperatorEnvelopeRenderer, mounted_click_command
+def check_click_command() -> click.Command:
+    """Return the generated check leaf mounted under the public root."""
+    from infralink.agent_surface import (
+        OperatorEnvelopeRenderer,
+        mounted_click_command,
+        operator_render_options,
+    )
     from infralink.operator_actions import OperatorActionProvider
 
     root = mounted_click_command(
         operator_surface,
         action_provider=OperatorActionProvider(),
         envelope_renderer=OperatorEnvelopeRenderer(),
+        render_options=operator_render_options(),
+    )
+    command = root.get_command(click.Context(root), "check")
+    assert isinstance(command, click.Command)
+    return command
+
+
+def resolve_click_command() -> click.Command:
+    """Return the generated resolve leaf mounted under the public root."""
+    from infralink.agent_surface import (
+        OperatorEnvelopeRenderer,
+        mounted_click_command,
+        operator_render_options,
+    )
+    from infralink.operator_actions import OperatorActionProvider
+
+    root = mounted_click_command(
+        operator_surface,
+        action_provider=OperatorActionProvider(),
+        envelope_renderer=OperatorEnvelopeRenderer(),
+        render_options=operator_render_options(),
+    )
+    command = root.get_command(click.Context(root), "resolve")
+    assert isinstance(command, click.Command)
+    return command
+
+
+def host_click_command() -> click.Group:
+    """Return the generated host subtree mounted under the public root."""
+    from infralink.agent_surface import (
+        OperatorEnvelopeRenderer,
+        mounted_click_command,
+        operator_render_options,
+    )
+    from infralink.operator_actions import OperatorActionProvider
+
+    root = mounted_click_command(
+        operator_surface,
+        action_provider=OperatorActionProvider(),
+        envelope_renderer=OperatorEnvelopeRenderer(),
+        render_options=operator_render_options(),
     )
     command = root.get_command(click.Context(root), "host")
     assert isinstance(command, click.Group)
@@ -640,6 +700,19 @@ def edge_list(request: EdgeListRequest) -> EdgeListResult:
 def edge_show(request: EdgeShowRequest) -> EdgeShowResult:
     """Return one bounded edge view without a Click context."""
     return show_declared_edge(request)
+
+
+@operator_surface.operation("check", summary="Check declared edge health", read_only=True)  # type: ignore[type-var]
+def check(request: EdgeCheckRequest) -> OperationOutcome[CheckCommandResult]:
+    """Check selected declared edges through the common typed operation."""
+    result = check_declared_edges(request)
+    return OperationOutcome(result, exit_code=0 if result.healthy else 1)
+
+
+@operator_surface.operation("resolve", summary="Resolve one declared edge", read_only=True)  # type: ignore[type-var]
+def resolve(request: EdgeResolveRequest) -> ResolveResult:
+    """Resolve a declared edge through the common typed operation."""
+    return resolve_declared_edge(request)
 
 
 @app_surface.operation("app.list", summary="List declared applications", read_only=True)  # type: ignore[type-var]

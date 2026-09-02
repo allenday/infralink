@@ -136,7 +136,7 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
     assert loaded_app.description.endswith(canary)
 
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: HealthCheckResult(
             edge_id=edge.id,
             edge_type=edge.type.value,

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import yaml
 from click.testing import CliRunner
 
 from infralink.cli.main import cli
@@ -13,6 +14,22 @@ def run_cmd(args: list[str]):
     runner = CliRunner()
     result = runner.invoke(cli, ["--output", "json", *args])
     return result
+
+
+def example_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """Materialize examples using the public checkout-root source contract."""
+    registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    checkout = tmp_path / "registry"
+    for host_id, manifest in registry["hosts"].items():
+        manifest_path = checkout / "hosts" / host_id / "manifest.yml"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
+        )
+    edges = checkout / "network" / "main-dev" / "edges" / "edges.yml"
+    edges.parent.mkdir(parents=True, exist_ok=True)
+    edges.write_text((EXAMPLES / "edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    return checkout, edges
 
 
 def test_validate_json_ok():
@@ -110,13 +127,14 @@ def test_resolve_rejects_password_env_without_reading_it(
     assert json.loads(result.output)["error"]["code"] == "usage_error"
 
 
-def test_resolve_template_preserves_safe_user_and_database() -> None:
+def test_resolve_template_preserves_safe_user_and_database(tmp_path: Path) -> None:
+    checkout, edges = example_checkout(tmp_path)
     result = run_cmd(
         [
             "--registry",
-            str(EXAMPLES / "registry.yml"),
+            str(checkout),
             "--edges",
-            str(EXAMPLES / "edges.yml"),
+            str(edges),
             "resolve",
             EXAMPLE_EDGE_ID,
             "--user",

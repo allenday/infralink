@@ -6,7 +6,6 @@ import json
 import os
 import shlex
 from collections.abc import Callable, Mapping
-from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,14 +28,13 @@ if TYPE_CHECKING:
     from agent_surface import App, Invocation
 
 
-_compact_mounted_json: ContextVar[bool] = ContextVar("compact_mounted_json", default=False)
 _agent_surface_render = agent_surface_click.render  # type: ignore[attr-defined]
 
 
 def _render_mounted_cli(value: Any, *, options: Any = None) -> str:
     """Preserve Infralink's one-line JSON CLI envelope for mounted operations."""
     rendered = _agent_surface_render(value, options=options)
-    if _compact_mounted_json.get() and options is not None and options.format == "json":
+    if options is not None and options.format == "json":
         return json.dumps(json.loads(rendered), separators=(",", ":")) + "\n"
     return rendered
 
@@ -67,11 +65,7 @@ class _MountedClickAdapter(ClickAdapter):
         # Agent Surface group, so seed the command context with the root argv.
         assert self._argv_provider is not None
         context.meta[agent_surface_click._RAW_ARGV_KEY] = tuple(self._argv_provider())
-        token = _compact_mounted_json.set(True)
-        try:
-            super()._invoke(context, plan, params)
-        finally:
-            _compact_mounted_json.reset(token)
+        super()._invoke(context, plan, params)
 
 
 def mounted_click_command(
@@ -103,6 +97,11 @@ def mounted_click_command(
 def app_render_options() -> RenderOptions:
     """Preserve the legacy bounded application query response capacity."""
     return RenderOptions(budget=OutputBudget(max_items=1000))
+
+
+def operator_render_options() -> RenderOptions:
+    """Preserve the public topology-query capacity across CLI and MCP."""
+    return RenderOptions(budget=OutputBudget(max_items=1000, max_bytes=1_048_576))
 
 
 def _mounted_invocation_argv() -> tuple[str, ...]:
@@ -294,6 +293,8 @@ def _command_context(invocation: Invocation) -> CommandContext:
         if not raw_tokens or raw_tokens[0] != "infralink":
             raw_tokens = ("infralink", *raw_tokens)
         arguments = dict(invocation.command.parsed.args)
+        if invocation.error is not None and not arguments:
+            arguments = _recover_error_arguments(invocation.operation, raw_tokens)
     else:
         raw_tokens = _canonical_mcp_command(path, request, source_fields)
         arguments = {name: value for name, value in request.items() if name not in source_fields}
@@ -313,6 +314,41 @@ def _command_context(invocation: Invocation) -> CommandContext:
         parsed={"path": path, "args": arguments, "flags": _command_flags(raw_tokens)},
         resolved=resolved,
     )
+
+
+def _recover_error_arguments(operation: Any, raw_tokens: tuple[str, ...]) -> dict[str, Any]:
+    """Retain safe positional context when generated Click parsing stops early.
+
+    Agent Surface intentionally does not expose a partial parse result.  The
+    public Infralink envelope still needs the already supplied positional
+    identifiers for a replayable, diagnosable usage error.  This only reads
+    declared positional fields from the canonical (already redacted) argv;
+    it never interprets options or invents values.
+    """
+    path = tuple(operation.name.split("."))
+    start = next(
+        (
+            index + len(path)
+            for index in range(len(raw_tokens) - len(path) + 1)
+            if raw_tokens[index : index + len(path)] == path
+        ),
+        None,
+    )
+    if start is None:
+        return {}
+    positional_names = [
+        name
+        for name, field in operation.input_model.model_fields.items()
+        if isinstance(field.json_schema_extra, dict)
+        and isinstance(field.json_schema_extra.get("cli"), dict)
+        and field.json_schema_extra["cli"].get("kind") == "argument"
+    ]
+    values: dict[str, Any] = {}
+    for name, token in zip(positional_names, raw_tokens[start:], strict=False):
+        if token.startswith("-"):
+            break
+        values[name] = token
+    return values
 
 
 def _canonical_mcp_command(
