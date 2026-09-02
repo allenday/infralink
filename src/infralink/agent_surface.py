@@ -548,6 +548,8 @@ def _validate_action_operation(operation: str | None, argv: list[str]) -> None:
 
 
 def _action_is_read_only(operation: str | None) -> bool:
+    if operation == "help":
+        return True
     if operation is None:
         return False
     from agent_surface.operations import UnknownOperationError

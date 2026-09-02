@@ -58,6 +58,19 @@ class OperatorActionProvider(ActionProvider):
                 total=1,
                 returned=1,
             )
+        if error is not None and getattr(error, "code", None) == "usage_error":
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="help",
+                        description="Show command usage",
+                        command=("help", *operation.split(".")),
+                        operation="help",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
         if error is not None:
             return ActionCollection()
         if (
