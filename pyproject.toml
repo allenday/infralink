@@ -67,13 +67,6 @@ bws = [
 infralink = "infralink.cli.main:run"
 infralink-local-doctor = "infralink.local_doctor_agent:run"
 
-[project.entry-points."infralink.commands"]
-check = "infralink.cli.check:check"
-diagram = "infralink.cli.diagram:diagram"
-docs = "infralink.cli.docs:docs"
-validate = "infralink.cli.validate:validate"
-resolve = "infralink.cli.resolve:resolve"
-
 [project.urls]
 Homepage = "https://github.com/cyberstorm-dev/infralink"
 Issues = "https://github.com/cyberstorm-dev/infralink/issues"

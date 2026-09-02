@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from infralink.cli.contracts import (
     AnalyzeResult,
+    ArtifactResult,
     CheckCommandResult,
     HostListResult,
     InfoResult,
@@ -23,6 +24,7 @@ from infralink.cli.operation_contracts import (
 )
 from infralink.fleet.validation import FleetValidationResult
 from infralink.operator_operations.analyze import AnalyzeRequest
+from infralink.operator_operations.docs import DocsRequest
 from infralink.operator_operations.edge_health import EdgeCheckRequest, EdgeResolveRequest
 from infralink.operator_surface import (
     FleetValidateRequest,
@@ -48,6 +50,24 @@ class OperatorActionProvider(ActionProvider):
         result: object | None = None,
         error: Any = None,
     ) -> ActionCollection:
+        if (
+            error is not None
+            and operation == "docs"
+            and isinstance(request, DocsRequest)
+            and getattr(error, "code", None) == "entity_not_found"
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="list",
+                        description="List host declarations",
+                        command=("host", "list"),
+                        operation="host.list",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
         if (
             error is not None
             and operation == "resolve"
@@ -105,6 +125,12 @@ class OperatorActionProvider(ActionProvider):
             and isinstance(result, AnalyzeResult)
         ):
             return _analyze_actions(request, result)
+        if (
+            operation == "docs"
+            and isinstance(request, DocsRequest)
+            and isinstance(result, ArtifactResult)
+        ):
+            return _docs_actions(request, result)
         if (
             operation == "host.create"
             and isinstance(request, HostCreateRequest)
@@ -294,6 +320,46 @@ def _analyze_actions(request: AnalyzeRequest, result: AnalyzeResult) -> ActionCo
             )
         )
     return ActionCollection(items=tuple(actions), total=len(actions), returned=len(actions))
+
+
+def _docs_actions(request: DocsRequest, result: ArtifactResult) -> ActionCollection:
+    """Continue the bounded docs artifact listing through the same operation."""
+    page = result.artifacts.page
+    if page.next_cursor is None:
+        return ActionCollection()
+    command = [
+        "docs",
+        "--output",
+        request.output.as_posix(),
+        "--document-format",
+        request.document_format,
+    ]
+    if request.host is not None:
+        command.extend(("--host", request.host))
+    if request.index_only:
+        command.append("--index-only")
+    command.extend(
+        ("--collection", "artifacts", "--cursor", "{cursor}", "--limit", str(request.limit))
+    )
+    return ActionCollection(
+        items=(
+            Action(
+                rel="continue",
+                description="Continue docs artifacts",
+                command_template=tuple(command),
+                operation="docs",
+                slots={
+                    "cursor": {
+                        "type": "string",
+                        "required": True,
+                        "source": "result.artifacts.page.next_cursor",
+                    }
+                },
+            ),
+        ),
+        total=1,
+        returned=1,
+    )
 
 
 def _check_actions(request: EdgeCheckRequest, result: CheckCommandResult) -> ActionCollection:

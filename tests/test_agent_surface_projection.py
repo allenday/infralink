@@ -287,6 +287,25 @@ def test_analyze_is_a_typed_explicit_artifact_write_operation() -> None:
     assert schema["properties"]["registry"]["default"] is None
 
 
+def test_docs_is_a_typed_explicit_artifact_write_operation() -> None:
+    """Docs owns its output path and inherits topology sources from the root."""
+    definition = operator_surface.operations.describe("docs")
+
+    assert definition.read_only is False
+    assert definition.input_model.model_fields["output"].is_required()
+    assert {"host", "index_only", "document_format"} <= set(definition.input_model.model_fields)
+
+    async def listed_schema() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+        tool = next(item for item in tools.tools if item.name == "docs")
+        return tool.input_schema
+
+    schema = asyncio.run(listed_schema())
+    assert set(schema["required"]) == {"output"}
+    assert schema["properties"]["registry"]["default"] is None
+
+
 def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() -> None:
     definition = operator_surface.operations.describe("host.list")
     renderer = InfralinkEnvelopeRenderer()
