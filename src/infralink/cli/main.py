@@ -26,9 +26,6 @@ from infralink.cli.contracts import (
     HelpNavigationAction,
     HelpResult,
     HelpSubcommand,
-    InfoResult,
-    InfoSources,
-    InfoSummary,
     OptionDescriptor,
     RootResult,
     VersionResult,
@@ -1277,7 +1274,9 @@ def _load_command(
 
         return app_click_command()
     if name == "info":
-        return info
+        from infralink.operator_surface import info_click_command
+
+        return info_click_command()
     if name == "hosts":
         return hosts
     if name == "edges-list":
@@ -1627,8 +1626,10 @@ def cli(
         is not click.core.ParameterSource.DEFAULT
     )
 
-    if click_ctx.invoked_subcommand is not None and _is_external_command(
-        click_ctx.invoked_subcommand
+    mounted_commands = {"app", "fleet", "info"}
+    if click_ctx.invoked_subcommand is not None and (
+        _is_external_command(click_ctx.invoked_subcommand)
+        or click_ctx.invoked_subcommand in mounted_commands
     ):
         mounted = _load_command(click_ctx.invoked_subcommand)
         if mounted is not None:
@@ -1939,37 +1940,6 @@ def _emit_service_list(ctx: Context, *, path: list[str]) -> None:
         result=result,
         extra_actions=_compatibility_action(ctx, path, ["service", "list"]),
     )
-
-
-@cli.command()
-@pass_context
-def info(ctx: Context) -> None:
-    """Show registry and edge summary."""
-    from infralink.cli.queries import list_services
-
-    registry = ctx.registry
-    edges = ctx.edges
-    service_count = len(list_services(registry, edges).items)
-    result = InfoResult(
-        sources=InfoSources(
-            registry=str(ctx.registry_path),
-            edges=str(ctx.edges_path),
-        ),
-        summary=InfoSummary(
-            host_count=len(registry),
-            service_count=service_count or 0,
-            edge_count=len(edges),
-        ),
-    )
-    payload = ok_envelope(
-        _context_for(path=["info"]),
-        result,
-        [
-            action("list", [*_root_source_argv(ctx), "host", "list"], "List all hosts"),
-            action("list", [*_root_source_argv(ctx), "edge", "list"], "List all edges"),
-        ],
-    )
-    _emit(payload)
 
 
 @click.command()

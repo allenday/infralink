@@ -265,14 +265,20 @@ def test_renderer_fails_closed_for_truncated_hateoas_action_frontiers() -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "operation", "expected_result"),
+    ("path", "operation", "expected_result", "expected_action_rels"),
     [
-        (["service", "list"], "service.list", {"items": ["api", "nginx"]}),
-        (["edge", "list"], "edge.list", {"items": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}),
+        (["service", "list"], "service.list", {"items": ["api", "nginx"]}, ([], [])),
+        (
+            ["edge", "list"],
+            "edge.list",
+            {"items": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]},
+            ([], []),
+        ),
         (
             ["info"],
             "info",
             {"summary": {"host_count": 1, "service_count": 2, "edge_count": 1}},
+            ([], ["list", "list"]),
         ),
     ],
 )
@@ -281,6 +287,7 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
     path: list[str],
     operation: str,
     expected_result: dict[str, object],
+    expected_action_rels: tuple[list[str], list[str]],
 ) -> None:
     host_id = "11111111-1111-4111-8111-111111111111"
     manifest = tmp_path / "hosts" / host_id / "manifest.yml"
@@ -339,7 +346,9 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
     assert click_result.exit_code == 0, click_result.output
     click_document = json.loads(click_result.output)
     mcp_document = asyncio.run(call_mcp())
-    for document in (click_document, mcp_document):
+    for document, expected_actions in zip(
+        (click_document, mcp_document), expected_action_rels, strict=True
+    ):
         assert document["schema_version"] == "infralink.cli/v1"
         assert document["ok"] is True
         assert document["command"]["parsed"]["path"] == path
@@ -347,7 +356,7 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
         assert document["command"]["resolved"]["edges"] == str(edges)
         for key, value in expected_result.items():
             assert document["result"][key] == value
-        assert document["next_actions"] == []
+        assert [action["rel"] for action in document["next_actions"]] == expected_actions
 
     assert click_document["result"] == mcp_document["result"]
     assert mcp_document["command"]["raw"] == (

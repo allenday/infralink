@@ -56,6 +56,10 @@ class _MountedClickAdapter(ClickAdapter):
         return payload
 
     def _invoke(self, context: click.Context, plan: Any, params: dict[str, Any]) -> None:
+        # Extracted leaves are mounted beneath Infralink's root rather than an
+        # Agent Surface group, so seed the command context with the root argv.
+        assert self._argv_provider is not None
+        context.meta[agent_surface_click._RAW_ARGV_KEY] = tuple(self._argv_provider())
         token = _compact_mounted_json.set(True)
         try:
             super()._invoke(context, plan, params)
@@ -181,9 +185,15 @@ class InfralinkEnvelopeRenderer:
     output_model: type[BaseModel] = Envelope[Any]
 
     def render(self, invocation: Invocation) -> BaseModel:
+        action_sources = self._action_sources(invocation.request)
+        if invocation.operation.name == "info":
+            # Info's follow-ups inspect both topology documents. Preserve the
+            # effective companion edge source even when callers selected only
+            # a checkout root.
+            action_sources = _info_action_sources(invocation.request)
         next_actions = _project_actions(
             invocation.next_actions,
-            self._action_sources(invocation.request),
+            action_sources,
             allow_templates=self._allow_action_templates(),
         )
         command = _command_context(invocation)
@@ -427,6 +437,15 @@ def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any
     else:
         edges = Path(str(edges)).expanduser().resolve()
     return {"registry": registry_path, "edges": edges}
+
+
+def _info_action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    """Keep legacy YAML info actions replayable without inventing an edge path."""
+    if request is None or (registry := request.get("registry")) is None:
+        return _effective_source_values(request)
+    if Path(str(registry)).expanduser().is_dir():
+        return _effective_source_values(request)
+    return request
 
 
 def _project_action_bindings(slots: Mapping[str, Any]) -> dict[str, Binding]:

@@ -71,7 +71,13 @@ from infralink.operator_operations.topology import (
     show_declared_host,
     show_declared_service,
 )
-from infralink.operator_sources import OperatorInputs, SourceRequest, load_registry, load_sources
+from infralink.operator_sources import (
+    OperatorInputs,
+    SourceRequest,
+    load_info_sources,
+    load_registry,
+    load_sources,
+)
 
 
 class _OperationModel(BaseModel):
@@ -114,11 +120,11 @@ def operator_click_adapter() -> ClickAdapter:
 def operator_mcp_adapter() -> MCPAdapter:
     """Build the one MCP projection for typed operator operations."""
     from infralink.agent_surface import InfralinkEnvelopeRenderer
-    from infralink.fleet.actions import FleetValidationActionProvider
+    from infralink.operator_actions import OperatorActionProvider
 
     return MCPAdapter(
         operator_surface,
-        action_provider=FleetValidationActionProvider(),
+        action_provider=OperatorActionProvider(),
         envelope_renderer=InfralinkEnvelopeRenderer(),
     )
 
@@ -126,14 +132,28 @@ def operator_mcp_adapter() -> MCPAdapter:
 def fleet_click_command() -> click.Group:
     """Return the generated fleet subtree mounted under the public root."""
     from infralink.agent_surface import mounted_click_command
-    from infralink.fleet.actions import FleetValidationActionProvider
+    from infralink.operator_actions import OperatorActionProvider
 
     root = mounted_click_command(
         operator_surface,
-        action_provider=FleetValidationActionProvider(),
+        action_provider=OperatorActionProvider(),
     )
     command = root.get_command(click.Context(root), "fleet")
     assert isinstance(command, click.Group)
+    return command
+
+
+def info_click_command() -> click.Command:
+    """Return the generated info leaf mounted under the public root."""
+    from infralink.agent_surface import mounted_click_command
+    from infralink.operator_actions import OperatorActionProvider
+
+    root = mounted_click_command(
+        operator_surface,
+        action_provider=OperatorActionProvider(),
+    )
+    command = root.get_command(click.Context(root), "info")
+    assert isinstance(command, click.Command)
     return command
 
 
@@ -598,7 +618,7 @@ def app_show(request: AppShowRequest) -> AppShowResult:
 @operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[type-var]
 def info(request: InfoRequest) -> InfoResult:
     """Return topology counts and the exact resolved declaration sources."""
-    sources = load_sources(request)
+    sources = load_info_sources(request)
     return InfoResult(
         sources=InfoSources(registry=str(sources.registry_path), edges=str(sources.edges_path)),
         summary=InfoSummary(
