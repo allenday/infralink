@@ -182,9 +182,9 @@ def test_every_live_cli_path_keeps_loaded_secret_values_out_of_observables(
 
     source = [
         "--registry",
-        str(registry_path),
+        str(app_checkout),
         "--edges",
-        str(edges_path),
+        str(app_checkout / "network/main-dev/edges/edges.yml"),
     ]
     monkeypatch.chdir(tmp_path)
     artifacts = Path("artifacts")

@@ -49,10 +49,15 @@ class _MountedClickAdapter(ClickAdapter):
 
     def _payload(self, context: click.Context, plan: Any, params: dict[str, Any]) -> dict[str, Any]:
         payload = super()._payload(context, plan, params)
-        for field in plan.fields:
+        for field in (*self._shared_fields, *plan.fields):
             if field.source != "argv" or field.name not in {"registry", "edges"}:
                 continue
             value = params.get(field.name)
+            if value is None:
+                # The public root alone selects topology sources.  Its
+                # environment/config-derived value must reach extracted
+                # mounted leaves just as an explicit root flag does.
+                value = _root_source_default(field.name)
             if value is not None:
                 payload[field.name] = value
         return payload
@@ -187,16 +192,30 @@ class InfralinkEnvelopeRenderer:
     output_model: type[BaseModel] = Envelope[Any]
 
     def render(self, invocation: Invocation) -> BaseModel:
-        action_sources = self._action_sources(invocation.request)
+        action_sources = _effective_source_values(invocation.request)
+        if invocation.command is not None:
+            # The adapter redacts sensitive request fields before rendering.
+            # Explicit root selectors retain their resolved selection. When
+            # there are no explicit selectors, use the resolved operation
+            # source so config and MCP actions stay pinned and replayable.
+            declared_sources = _command_declared_sources(invocation.command.raw)
+            if declared_sources:
+                # Preserve each explicitly selected source, while retaining
+                # independently resolved companion
+                # selectors (for example INFRALINK_EDGES with --registry).
+                action_sources = {**action_sources, **declared_sources}
         if invocation.operation.name == "info":
             # Info's follow-ups inspect both topology documents. Preserve the
             # effective companion edge source even when callers selected only
             # a checkout root.
-            action_sources = _info_action_sources(invocation.request)
+            action_sources = dict(_info_action_sources(invocation.request) or {})
         next_actions = _project_actions(
             invocation.next_actions,
             action_sources,
             allow_templates=self._allow_action_templates(),
+            output=_explicit_cli_output(
+                invocation.command.raw if invocation.command is not None else ()
+            ),
         )
         command = _command_context(invocation)
         if invocation.error is not None:
@@ -252,6 +271,14 @@ class AppEnvelopeRenderer(InfralinkEnvelopeRenderer):
     @staticmethod
     def _action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
         return _effective_source_values(request)
+
+    @staticmethod
+    def _allow_action_templates() -> bool:
+        return True
+
+
+class OperatorEnvelopeRenderer(InfralinkEnvelopeRenderer):
+    """Allow source-bound list navigation for public operator operations."""
 
     @staticmethod
     def _allow_action_templates() -> bool:
@@ -315,6 +342,16 @@ def _output_format(tokens: tuple[str, ...], *, mcp: bool) -> str:
     return "json" if mcp else "yaml"
 
 
+def _explicit_cli_output(tokens: tuple[str, ...]) -> str | None:
+    """Return a replayable format only when the CLI explicitly selected it."""
+    for index, token in enumerate(tokens):
+        if token in {"--format", "--output"} and index + 1 < len(tokens):
+            return tokens[index + 1]
+        if token.startswith(("--format=", "--output=")):
+            return token.partition("=")[2]
+    return None
+
+
 def _error_details(details: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     if not details:
         return {}
@@ -348,6 +385,7 @@ def _project_actions(
     request: Mapping[str, Any] | None,
     *,
     allow_templates: bool,
+    output: str | None,
 ) -> list[Action]:
     """Project only concrete Agent Surface actions into the v1 action normal form."""
     if actions.truncated:
@@ -362,7 +400,8 @@ def _project_actions(
             raise ValueError("Infralink action has no command")
         command = _inherit_declared_sources(list(source_command), request)
         _validate_action_operation(action_value.operation, command)
-        argv = ["infralink", *_declared_source_argv(request), *command]
+        output_argv = ["--output", "json"] if output == "json" else []
+        argv = ["infralink", *output_argv, *_declared_source_argv(request), *command]
         bindings = _project_action_bindings(action_value.slots) if template else {}
         projected.append(
             Action(
@@ -420,6 +459,29 @@ def _declared_source_argv(request: Mapping[str, Any] | None) -> list[str]:
     return argv
 
 
+def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, Path]:
+    """Return explicit root selectors with shell-home expansion for replay."""
+    sources: dict[str, Path] = {}
+    index = 0
+    names = {"--registry": "registry", "--edges": "edges"}
+    while index < len(tokens):
+        token = tokens[index]
+        option, separator, inline_value = token.partition("=")
+        source = names.get(option)
+        if source is None:
+            index += 1
+            continue
+        if separator:
+            sources[source] = Path(inline_value).expanduser()
+            index += 1
+            continue
+        if index + 1 >= len(tokens):
+            raise ValueError(f"Infralink command source {option} is missing its value")
+        sources[source] = Path(tokens[index + 1]).expanduser()
+        index += 2
+    return sources
+
+
 def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any]:
     """Resolve the selected registry companion paths for public provenance."""
     if request is None:
@@ -435,10 +497,14 @@ def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any
             return {"edges": edges} if edges is not None else {}
     registry_path = Path(str(registry)).expanduser().resolve()
     if edges is None:
-        try:
-            edges = resolve_registry_companion(registry_path, filename="edges.yml")
-        except (OperationError, OSError):
-            return {"registry": registry_path}
+        environment_edges = os.environ.get("INFRALINK_EDGES")
+        if environment_edges:
+            edges = Path(environment_edges).expanduser().resolve()
+        else:
+            try:
+                edges = resolve_registry_companion(registry_path, filename="edges.yml")
+            except (OperationError, OSError):
+                return {"registry": registry_path}
     else:
         edges = Path(str(edges)).expanduser().resolve()
     return {"registry": registry_path, "edges": edges}
@@ -482,6 +548,8 @@ def _validate_action_operation(operation: str | None, argv: list[str]) -> None:
 
 
 def _action_is_read_only(operation: str | None) -> bool:
+    if operation == "help":
+        return True
     if operation is None:
         return False
     from agent_surface.operations import UnknownOperationError

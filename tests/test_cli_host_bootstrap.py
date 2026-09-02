@@ -311,8 +311,8 @@ def test_host_bootstrap_apply_requires_stdin_token_before_any_probe(
         lambda *_args: pytest.fail("apply without a token must not start SSH"),
     )
 
-    registry = tmp_path / "hosts"
-    manifest = registry / HOST_ID / "manifest.yml"
+    registry = tmp_path
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
         f"hosts:\n  {HOST_ID}:\n    canonical_name: {HOST_NAME}\n    tailscale_ip: 100.64.68.83\n",
@@ -375,8 +375,8 @@ def test_bootstrap_dry_plan_marks_a_missing_token_as_required() -> None:
 def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisites(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    registry = tmp_path / "hosts"
-    manifest = registry / HOST_ID / "manifest.yml"
+    registry = tmp_path
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
         "hosts:\n"
@@ -501,7 +501,6 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
     payload = yaml.safe_load(result.output)
     apply = next(item for item in payload["next_actions"] if item["rel"] == "apply")
     assert apply["command"] == (
-        "printf '%s\\n' \"$HOST_BWS_TOKEN\" | "
         f"infralink --registry {registry} host bootstrap {HOST_ID} "
         "--ssh-host 100.64.68.83 --bws-token-stdin --apply"
     )
@@ -731,9 +730,9 @@ def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation(
 
 
 def test_controller_bootstrap_requires_declared_registry_known_hosts(tmp_path: Path) -> None:
-    registry = tmp_path / "hosts"
-    manifest = registry / HOST_ID / "manifest.yml"
-    deployment = registry / HOST_ID / "operations" / "deployment.yml"
+    registry = tmp_path
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
+    deployment = registry / "hosts" / HOST_ID / "operations" / "deployment.yml"
     deployment.parent.mkdir(parents=True)
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
@@ -767,9 +766,9 @@ def test_controller_bootstrap_uses_invoking_seed_for_preservation_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A preserve-only declaration has no Compose controller image by design."""
-    registry = tmp_path / "hosts"
-    manifest = registry / HOST_ID / "manifest.yml"
-    deployment = registry / HOST_ID / "operations" / "deployment.yml"
+    registry = tmp_path
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
+    deployment = registry / "hosts" / HOST_ID / "operations" / "deployment.yml"
     deployment.parent.mkdir(parents=True)
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
@@ -797,7 +796,7 @@ def test_controller_bootstrap_uses_invoking_seed_for_preservation_state(
     )
     monkeypatch.setenv("INFRALINK_CONTROLLER_IMAGE", "ghcr.io/example/controller:main")
 
-    state = _controller_bootstrap_state(registry, type("Target", (), {"uuid": HOST_ID})())
+    state = _controller_bootstrap_state(registry / "hosts", type("Target", (), {"uuid": HOST_ID})())
 
     assert state.controller_image == "ghcr.io/example/controller:main"
     assert state.registry_ref == "main"
@@ -823,8 +822,8 @@ def test_controller_bootstrap_rejects_invalid_registry_known_hosts(known_hosts: 
 def test_bootstrap_reports_missing_controller_declaration_with_inspection_action(
     tmp_path: Path,
 ) -> None:
-    registry = tmp_path / "hosts"
-    manifest = registry / HOST_ID / "manifest.yml"
+    registry = tmp_path
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
         "hosts:\n"
@@ -849,7 +848,7 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
         "details": {
             "host": HOST_ID,
             "manifest_path": str(manifest),
-            "deployment_path": str(registry / HOST_ID / "operations" / "deployment.yml"),
+            "deployment_path": str(registry / "hosts" / HOST_ID / "operations" / "deployment.yml"),
             "required_manifest_fields": [
                 "controller_bootstrap.registry_read_identity_secret.project",
                 "controller_bootstrap.registry_read_identity_secret.id",

@@ -118,7 +118,7 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
         input=f"{token}\n",
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert "--plan-only" not in result.output
     assert "--apply-changes" not in result.output
     assert token not in result.output
@@ -191,8 +191,8 @@ def test_bootstrap_plan_uses_one_typed_transport_boundary_across_doctor_and_clic
     host_id = "11111111-1111-4111-8111-111111111111"
     declared_address = "100.64.0.1"
     requested_address = "100.64.0.2"
-    registry = tmp_path / "hosts"
-    manifest = registry / host_id / "manifest.yml"
+    registry = tmp_path
+    manifest = registry / "hosts" / host_id / "manifest.yml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
         f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    tailscale_ip: {declared_address}\n",

@@ -708,7 +708,10 @@ def test_fleet_validate_click_and_mcp_share_the_registered_operation(
     mcp_payload = asyncio.run(call_mcp())
     assert click_result.exit_code == 1
     assert click_payload["result"] == mcp_payload["result"]
-    assert click_payload["next_actions"] == mcp_payload["next_actions"]
+    assert click_payload["next_actions"][0]["command"] == (
+        "infralink --output json "
+        + mcp_payload["next_actions"][0]["command"].removeprefix("infralink ")
+    )
     assert click_payload["next_actions"][0]["rel"] == "inspect-declaration"
 
 

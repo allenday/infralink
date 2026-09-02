@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,11 +15,29 @@ from mcp import Client
 
 from infralink.agent_surface import InfralinkEnvelopeRenderer
 from infralink.cli.contracts import HostListResult
+from infralink.cli.main import cli
 from infralink.operator_surface import (
     operator_click_adapter,
     operator_mcp_adapter,
     operator_surface,
 )
+
+
+def test_public_host_help_exposes_the_complete_generated_operation_family() -> None:
+    result = CliRunner().invoke(cli, ["help", "host"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(CliRunner().invoke(cli, ["--output", "json", "help", "host"]).output)
+    assert {child["name"] for child in document["result"]["children"]} == {
+        "apply",
+        "bootstrap",
+        "create",
+        "list",
+        "logs",
+        "show",
+        "status",
+        "verifier",
+    }
 
 
 def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
@@ -45,13 +64,31 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert click_result.exit_code == 0, click_result.output
     click_document = json.loads(click_result.output)
     mcp_document = asyncio.run(call_mcp())
-    for document in (click_document, mcp_document):
+    for document, action_output in (
+        (click_document, " --output json"),
+        (mcp_document, ""),
+    ):
         assert document["schema_version"] == "infralink.cli/v1"
         assert document["ok"] is True
         assert document["command"]["parsed"]["path"] == ["host", "list"]
         assert document["command"]["resolved"]["registry"] == str(tmp_path)
         assert document["result"]["items"] == [host_id]
-        assert document["next_actions"] == []
+        assert document["next_actions"] == [
+            {
+                "rel": "show",
+                "command": f"infralink{action_output} --registry {tmp_path} host show '{{host_id}}'",
+                "description": "Show one host declaration",
+                "safe": True,
+                "templated": True,
+                "bindings": {
+                    "host_id": {
+                        "type": "string",
+                        "required": True,
+                        "source": "result.items[]",
+                    }
+                },
+            }
+        ]
 
     assert click_document["command"]["raw"] == (
         f"infralink --registry {tmp_path} host list --format json"
@@ -62,6 +99,124 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert mcp_document["command"]["raw"] == f"infralink --registry {tmp_path} host list"
     assert mcp_document["command"]["parsed"]["flags"] == ["--registry"]
     assert mcp_document["command"]["resolved"]["output"] == "json"
+
+
+def test_host_list_actions_pin_the_configured_checkout_for_cli_and_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    manifest = tmp_path / "registry" / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "operator.yml"
+    config.write_text(f"registry: {tmp_path / 'registry'}\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_CONFIG", str(config))
+    monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
+    monkeypatch.delenv("INFRALINK_EDGES", raising=False)
+
+    click_result = CliRunner().invoke(cli, ["--output", "json", "host", "list"])
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool("host.list", {})
+        assert result.is_error is False
+        return result.structured_content
+
+    assert click_result.exit_code == 0, click_result.output
+    documents = (
+        (json.loads(click_result.output), " --output json"),
+        (asyncio.run(call_mcp()), ""),
+    )
+    for document, action_output in documents:
+        show = next(action for action in document["next_actions"] if action["rel"] == "show")
+        assert show["command"] == (
+            f"infralink{action_output} --registry {tmp_path / 'registry'} host show '{{host_id}}'"
+        )
+
+
+def test_direct_mcp_uses_the_documented_environment_edge_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    manifest = tmp_path / "registry" / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    selected_edges = tmp_path / "selected-edges.yml"
+    selected_edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(tmp_path / "registry"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(selected_edges))
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool("edge.list", {})
+        assert result.is_error is False
+        return result.structured_content
+
+    document = asyncio.run(call_mcp())
+    assert document["command"]["resolved"]["registry"] == str(tmp_path / "registry")
+    assert document["command"]["resolved"]["edges"] == str(selected_edges)
+
+
+def test_mixed_cli_registry_and_environment_edges_stay_replayable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    selected_edges = tmp_path / "selected-edges.yml"
+    selected_edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_EDGES", str(selected_edges))
+
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(registry), "host", "list"],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.output)
+    show = next(action for action in document["next_actions"] if action["rel"] == "show")
+    assert show["command"] == (
+        f"infralink --output json --registry {registry} --edges {selected_edges} "
+        "host show '{host_id}'"
+    )
+
+
+def test_direct_mcp_resolves_relative_environment_edge_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    selected_edges = tmp_path / "selected-edges.yml"
+    selected_edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
+    monkeypatch.setenv("INFRALINK_EDGES", os.path.relpath(selected_edges, Path.cwd()))
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool("host.list", {})
+        assert result.is_error is False
+        return result.structured_content
+
+    document = asyncio.run(call_mcp())
+    show = next(action for action in document["next_actions"] if action["rel"] == "show")
+    assert f"--edges {selected_edges}" in show["command"]
 
 
 def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
@@ -87,8 +242,17 @@ def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
 
 
 def test_host_control_operations_are_all_declared_by_the_agent_surface() -> None:
-    """Host control schemas must not be inferred from a parallel Click command tree."""
-    expected = {"host.apply", "host.bootstrap", "host.logs", "host.status", "host.verifier"}
+    """The complete host family is declared once, without a parallel Click tree."""
+    expected = {
+        "host.apply",
+        "host.bootstrap",
+        "host.create",
+        "host.list",
+        "host.logs",
+        "host.show",
+        "host.status",
+        "host.verifier",
+    }
 
     assert expected <= {definition.name for definition in operator_surface.operations.list()}
 
@@ -278,7 +442,7 @@ def test_renderer_fails_closed_for_truncated_hateoas_action_frontiers() -> None:
             ["info"],
             "info",
             {"summary": {"host_count": 1, "service_count": 2, "edge_count": 1}},
-            ([], ["list", "list"]),
+            (["list", "list"], ["list", "list"]),
         ),
     ],
 )

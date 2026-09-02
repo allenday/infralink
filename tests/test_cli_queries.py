@@ -299,7 +299,7 @@ def _write_cli_inputs(
 
 
 def _invoke(registry_path: Path, edges_path: Path, *args: str):
-    if args[:1] == ("app",):
+    if registry_path.is_file():
         registry_path, edges_path = _app_checkout(registry_path, edges_path)
     return CliRunner().invoke(
         cli,
@@ -325,7 +325,8 @@ def _app_checkout(registry_path: Path, edges_path: Path) -> tuple[Path, Path]:
         path.write_text(json.dumps({"hosts": {host_id: manifest}}))
     applications = registry_path.parent / "applications.yml"
     (checkout / "hosts").mkdir(parents=True, exist_ok=True)
-    (checkout / "hosts" / "applications.yml").write_text(applications.read_text())
+    if applications.is_file():
+        (checkout / "hosts" / "applications.yml").write_text(applications.read_text())
     checkout_edges = checkout / "network/main-dev/edges/edges.yml"
     checkout_edges.parent.mkdir(parents=True, exist_ok=True)
     checkout_edges.write_text(edges_path.read_text())

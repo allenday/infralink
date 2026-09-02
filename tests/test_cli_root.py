@@ -248,7 +248,7 @@ def test_doctor_derives_standard_sources_from_configured_registry(
 
 
 def test_explicit_registry_sources_override_local_config(monkeypatch, tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[1]
+    checkout, _ = _examples_checkout(tmp_path)
     config_home = tmp_path / "config"
     (config_home / "infralink").mkdir(parents=True)
     (config_home / "infralink/config.yml").write_text(
@@ -256,9 +256,8 @@ def test_explicit_registry_sources_override_local_config(monkeypatch, tmp_path: 
         encoding="utf-8",
     )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
-    alternate = tmp_path / "alternate.yml"
-    alternate.write_text("hosts: {}\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
+    alternate, _ = _examples_checkout(tmp_path / "alternate")
 
     from_environment = CliRunner().invoke(cli, ["--output", "json", "host", "list"])
     with_flag = CliRunner().invoke(
@@ -268,9 +267,7 @@ def test_explicit_registry_sources_override_local_config(monkeypatch, tmp_path: 
     environment_payload = json.loads(from_environment.output)
     flag_payload = json.loads(with_flag.output)
     assert from_environment.exit_code == with_flag.exit_code == 0
-    assert environment_payload["command"]["resolved"]["registry"] == str(
-        root / "examples/registry.yml"
-    )
+    assert environment_payload["command"]["resolved"]["registry"] == str(checkout)
     assert flag_payload["command"]["resolved"]["registry"] == str(alternate)
 
 
@@ -340,10 +337,10 @@ def test_bare_group_usage_preserves_explicit_json_output() -> None:
     assert all(action["command"].startswith("infralink ") for action in payload["next_actions"])
 
 
-def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
-    monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch, tmp_path: Path) -> None:
+    checkout, edges = _examples_checkout(tmp_path)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges))
     result = CliRunner().invoke(
         cli,
         [
@@ -358,7 +355,11 @@ def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> Non
     show = next(action for action in payload["next_actions"] if action["rel"] == "show")
     host_id = payload["result"]["items"][0]
     replay = CliRunner().invoke(
-        cli, [host_id if value == "{id}" else value for value in shlex.split(show["command"])[1:]]
+        cli,
+        [
+            host_id if value in {"{id}", "{host_id}"} else value
+            for value in shlex.split(show["command"])[1:]
+        ],
     )
 
     assert replay.exit_code == 0
@@ -367,11 +368,11 @@ def test_explicit_json_is_preserved_by_generated_show_action(monkeypatch) -> Non
 
 
 def test_host_group_lists_its_real_children_and_host_list_matches_compatibility_alias(
-    monkeypatch,
+    monkeypatch, tmp_path: Path
 ) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
-    monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+    checkout, edges = _examples_checkout(tmp_path)
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
+    monkeypatch.setenv("INFRALINK_EDGES", str(edges))
     runner = CliRunner()
 
     help_result = runner.invoke(cli, ["help", "host"])
@@ -442,10 +443,9 @@ def test_root_help_is_a_compact_generated_command_index() -> None:
 def test_all_list_commands_have_uniform_executable_prefixed_actions(
     monkeypatch, tmp_path: Path
 ) -> None:
-    root = Path(__file__).resolve().parents[1]
     checkout, checkout_edges = _examples_checkout(tmp_path)
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
-    monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
+    monkeypatch.setenv("INFRALINK_EDGES", str(checkout_edges))
     runner = CliRunner()
 
     for command, resource in (
@@ -457,17 +457,12 @@ def test_all_list_commands_have_uniform_executable_prefixed_actions(
         (["services"], "service"),
         (["edges-list"], "edge"),
     ):
-        if resource == "app":
-            monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
-            monkeypatch.setenv("INFRALINK_EDGES", str(checkout_edges))
-            response = runner.invoke(
-                cli,
-                ["--registry", str(checkout), "--edges", str(checkout_edges), *command],
-            )
-        else:
-            monkeypatch.setenv("INFRALINK_REGISTRY", str(root / "examples/registry.yml"))
-            monkeypatch.setenv("INFRALINK_EDGES", str(root / "examples/edges.yml"))
-            response = runner.invoke(cli, command)
+        monkeypatch.setenv("INFRALINK_REGISTRY", str(checkout))
+        monkeypatch.setenv("INFRALINK_EDGES", str(checkout_edges))
+        response = runner.invoke(
+            cli,
+            ["--registry", str(checkout), "--edges", str(checkout_edges), *command],
+        )
         assert response.exit_code == 0, response.output
         assert "action: {" not in response.output
         payload = yaml.safe_load(response.output)
@@ -479,6 +474,13 @@ def test_all_list_commands_have_uniform_executable_prefixed_actions(
             assert show["command"].endswith("app show '{app_id}'")
             assert str(checkout) in show["command"]
             assert str(checkout_edges) in show["command"]
+        elif command == ["host", "list"]:
+            assert show["command"] == (
+                f"infralink --registry {checkout} --edges {checkout_edges} host show '{{host_id}}'"
+            )
+            assert show["bindings"] == {
+                "host_id": {"type": "string", "required": True, "source": "result.items[]"}
+            }
         else:
             assert show["command"] == f"infralink {resource} show '{{id}}'"
         assert "continue" not in {item["rel"] for item in actions}

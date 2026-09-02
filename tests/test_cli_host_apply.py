@@ -72,7 +72,7 @@ def _registry_checkout(tmp_path: Path, *, declared: bool = True) -> Path:
     _git(root, "config", "user.name", "Test")
     _git(root, "add", ".")
     _git(root, "commit", "--quiet", "-m", "registry")
-    return root / "hosts"
+    return root
 
 
 def _completed(stdout: str) -> subprocess.CompletedProcess[str]:
@@ -103,7 +103,7 @@ def _manifest_registry_checkout(tmp_path: Path) -> Path:
     _git(root, "config", "user.name", "Test")
     _git(root, "add", ".")
     _git(root, "commit", "--quiet", "-m", "manifest registry")
-    return root / "hosts"
+    return root
 
 
 def test_manifest_v2_apply_uses_the_declared_target_host_fingerprint(tmp_path: Path) -> None:
@@ -117,7 +117,7 @@ def test_manifest_v2_apply_uses_the_declared_target_host_fingerprint(tmp_path: P
         {"uuid": HOST_ID, "canonical_name": HOST_NAME},
     )()
 
-    request = resolve_apply_request(registry, target)
+    request = resolve_apply_request(registry / "hosts", target)
 
     assert request.host_key_fingerprint == TARGET_HOST_FINGERPRINT
 
@@ -129,7 +129,7 @@ def test_manifest_v2_apply_retains_legacy_transport_fingerprint_until_migrated(
     from infralink.cli.operations import resolve_apply_request
 
     registry = _manifest_registry_checkout(tmp_path)
-    manifest = registry / HOST_ID / "manifest.yml"
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8").replace(
             f"    self_deploy_v2_target_ssh_host_fingerprint: ssh-rsa {TARGET_HOST_FINGERPRINT}\n",
@@ -137,11 +137,11 @@ def test_manifest_v2_apply_retains_legacy_transport_fingerprint_until_migrated(
         ),
         encoding="utf-8",
     )
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "legacy V2 manifest")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "legacy V2 manifest")
     target = type("Target", (), {"uuid": HOST_ID, "canonical_name": HOST_NAME})()
 
-    request = resolve_apply_request(registry, target)
+    request = resolve_apply_request(registry / "hosts", target)
 
     assert request.host_key_fingerprint == MANIFEST_FINGERPRINT
 
@@ -153,7 +153,7 @@ def test_controller_bootstrap_metadata_does_not_disable_legacy_apply_contract(
     from infralink.cli.operations import resolve_apply_request
 
     registry = _registry_checkout(tmp_path)
-    manifest = registry / HOST_ID / "manifest.yml"
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8")
         + "    controller_bootstrap:\n"
@@ -164,17 +164,17 @@ def test_controller_bootstrap_metadata_does_not_disable_legacy_apply_contract(
         + "      registry_ref: refs/heads/main\n",
         encoding="utf-8",
     )
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "add controller bootstrap metadata")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "add controller bootstrap metadata")
     target = type("Target", (), {"uuid": HOST_ID, "canonical_name": HOST_NAME})()
 
-    request = resolve_apply_request(registry, target)
+    request = resolve_apply_request(registry / "hosts", target)
 
     assert request.host_key_fingerprint == FINGERPRINT
 
 
 def _release_admission_layout(registry: Path, host_id: str = HOST_ID) -> None:
-    operations = registry / host_id / "operations"
+    operations = registry / "hosts" / host_id / "operations"
     operations.mkdir(exist_ok=True)
     (operations / "release-admission-shadow-source.yml").write_text(
         "schema_version: infralink.release-admission-shadow-delivery.v1\n"
@@ -190,7 +190,7 @@ def _release_admission_layout(registry: Path, host_id: str = HOST_ID) -> None:
 
 
 def _explicit_legacy_verifier_layout(registry: Path) -> None:
-    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract = registry / "hosts" / HOST_ID / "operations" / "contract.yml"
     contract.write_text(
         contract.read_text(encoding="utf-8") + "verifier:\n"
         "  registry:\n"
@@ -220,13 +220,13 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
     assert response.exit_code == 0
     assert_schema(payload, "host-apply")
     assert payload["command"]["resolved"]["registry"] == str(registry)
-    assert payload["command"]["resolved"]["edges"] is None
+    assert "edges" not in payload["command"]["resolved"]
     assert payload["result"] == {
         "dry_run": True,
         "ssh_host_identity": "passed",
         "target": {"type": "host", "id": host_id, "canonical_name": canonical_name},
         "plan": {
-            "registry_revision": _git(registry.parent, "rev-parse", "HEAD"),
+            "registry_revision": _git(registry, "rev-parse", "HEAD"),
             "dispatch_provider": "ssh",
             "reconcile_mode": "timer",
             "action_categories": ["registry_checkout", "render", "reconcile"],
@@ -239,8 +239,8 @@ def test_host_verifier_uses_explicit_legacy_layout_without_path_fallback(
 ) -> None:
     registry = _registry_checkout(tmp_path)
     _explicit_legacy_verifier_layout(registry)
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "explicit legacy verifier layout")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "explicit legacy verifier layout")
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -387,7 +387,7 @@ def test_host_apply_scans_the_declared_ed25519_key_type_only(
     monkeypatch.setattr("infralink.cli.operations.subprocess.run", fake_run)
     response = CliRunner().invoke(
         cli,
-        ["--registry", str(registry / "hosts"), "host", "apply", HOST_ID, "--dry-run"],
+        ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"],
     )
 
     payload = yaml.safe_load(response.output)
@@ -440,7 +440,7 @@ def test_host_apply_refuses_malformed_or_disabled_manifest_declarations(
     tmp_path: Path, field: str, value: str
 ) -> None:
     registry = _manifest_registry_checkout(tmp_path)
-    manifest = registry / HOST_ID / "manifest.yml"
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8").replace(
             {
@@ -459,8 +459,8 @@ def test_host_apply_refuses_malformed_or_disabled_manifest_declarations(
         ),
         encoding="utf-8",
     )
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "malformed manifest")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "malformed manifest")
 
     response = CliRunner().invoke(
         cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"]
@@ -475,13 +475,13 @@ def test_host_apply_refuses_a_partial_v2_manifest_instead_of_using_legacy_contra
     tmp_path: Path,
 ) -> None:
     registry = _registry_checkout(tmp_path)
-    manifest = registry / HOST_ID / "manifest.yml"
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8") + "    self_deploy_v2_reconcile_packaged: true\n",
         encoding="utf-8",
     )
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "partial v2 manifest")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "partial v2 manifest")
 
     response = CliRunner().invoke(
         cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"]
@@ -496,19 +496,19 @@ def test_host_verifier_uses_legacy_contract_for_a_shadow_only_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _registry_checkout(tmp_path)
-    manifest = registry / HOST_ID / "manifest.yml"
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8") + "    self_deploy_v2_shadow_enabled: true\n",
         encoding="utf-8",
     )
-    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract = registry / "hosts" / HOST_ID / "operations" / "contract.yml"
     contract.write_text(
         contract.read_text(encoding="utf-8").replace(f"reconcile:\n  unit: {UNIT}\n", ""),
         encoding="utf-8",
     )
     _explicit_legacy_verifier_layout(registry)
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "legacy shadow contract")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "legacy shadow contract")
 
     calls: list[list[str]] = []
 
@@ -544,13 +544,13 @@ def test_host_apply_rejects_a_legacy_contract_with_a_different_reconcile_unit(
     tmp_path: Path,
 ) -> None:
     registry = _registry_checkout(tmp_path)
-    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract = registry / "hosts" / HOST_ID / "operations" / "contract.yml"
     contract.write_text(
         contract.read_text(encoding="utf-8").replace(UNIT, "not-the-supported-unit.service"),
         encoding="utf-8",
     )
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "invalid legacy unit")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "invalid legacy unit")
 
     response = CliRunner().invoke(
         cli, ["--registry", str(registry), "host", "apply", HOST_ID, "--dry-run"]
@@ -656,7 +656,7 @@ def test_host_apply_wait_polls_exact_run_until_converged(
     assert response.exit_code == 0
     assert_schema(payload, "host-apply")
     assert payload["result"]["operation"]["state"] == "converged"
-    assert payload["next_actions"][0]["rel"] == "doctor"
+    assert payload["next_actions"][0]["rel"] == "status"
 
 
 def test_host_apply_refuses_a_host_without_declared_ssh_reconcile_contract(tmp_path: Path) -> None:
@@ -934,12 +934,12 @@ def test_host_help_discovers_target_status_and_last_run_logs() -> None:
 
 def test_host_apply_refuses_a_noncanonical_ssh_fingerprint(tmp_path: Path) -> None:
     registry = _registry_checkout(tmp_path)
-    contract = registry / HOST_ID / "operations" / "contract.yml"
+    contract = registry / "hosts" / HOST_ID / "operations" / "contract.yml"
     contract.write_text(
         contract.read_text(encoding="utf-8").replace(FINGERPRINT, "SHA256:short"), encoding="utf-8"
     )
-    _git(registry.parent, "add", ".")
-    _git(registry.parent, "commit", "--quiet", "-m", "invalid fingerprint")
+    _git(registry, "add", ".")
+    _git(registry, "commit", "--quiet", "-m", "invalid fingerprint")
 
     response = CliRunner().invoke(cli, ["--registry", str(registry), "host", "apply", HOST_ID])
 
