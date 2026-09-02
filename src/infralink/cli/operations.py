@@ -77,7 +77,10 @@ unit=$1
 timer=${unit%.service}.timer
 timer_active=$(systemctl show "$timer" -p ActiveState --value 2>/dev/null || true)
 timer_next_raw=$(systemctl show "$timer" -p NextElapseUSecRealtime --value 2>/dev/null || true)
-timer_next=$(date -u -d "$timer_next_raw" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+timer_next=
+if [ -n "$timer_next_raw" ]; then
+  timer_next=$(date -u -d "$timer_next_raw" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+fi
 unit_active=$(systemctl show "$unit" -p ActiveState --value 2>/dev/null || true)
 unit_result=$(systemctl show "$unit" -p Result --value 2>/dev/null || true)
 unit_status=$(systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || true)
@@ -88,26 +91,31 @@ printf 'unit_result=%s\n' "$unit_result"
 printf 'unit_status=%s\n' "$unit_status"
 result=/var/lib/infralink/reconcile-result.yml
 if [ -f "$result" ]; then
-  sha=$(awk '
-    /^[[:space:]]*registry_sha:[[:space:]]*[0-9a-f]{40}[[:space:]]*$/ {
-      sub(/^[[:space:]]*registry_sha:[[:space:]]*/, ""); print; exit
-    }
-    /^[[:space:]]*head:[[:space:]]*[0-9a-f]{40}[[:space:]]*$/ {
-      sub(/^[[:space:]]*head:[[:space:]]*/, ""); print; exit
-    }
-    /^[[:space:]]*registry_head:[[:space:]]*[0-9a-f]{40}[[:space:]]*$/ {
-      sub(/^[[:space:]]*registry_head:[[:space:]]*/, ""); print; exit
-    }
-  ' "$result")
-  finished=$(awk '
-    /^[[:space:]]*(finished_at|observed_at):[[:space:]]*'"'"'?[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'"'"'?[[:space:]]*$/ {
-      sub(/^[[:space:]]*(finished_at|observed_at):[[:space:]]*/, "")
-      gsub(/'"'"'/, "")
-      print; exit
-    }
-  ' "$result")
-  printf 'registry_sha=%s\n' "$sha"
-  printf 'finished_at=%s\n' "$finished"
+  python3 - "$result" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+with Path(sys.argv[1]).open(encoding="utf-8", errors="replace") as evidence:
+    text = evidence.read(64 * 1024)
+
+
+def scalar_value(names: tuple[str, ...], pattern: str) -> str:
+    for name in names:
+        match = re.search(rf"^\\s*{re.escape(name)}:\\s*{pattern}\\s*$", text, re.MULTILINE)
+        if match is not None:
+            return match.group(1)
+    return ""
+
+
+sha = scalar_value(("registry_sha", "head", "registry_head"), r"([0-9a-f]{40})")
+finished = scalar_value(
+    ("finished_at", "observed_at"),
+    r"'?([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)'?",
+)
+print(f"registry_sha={sha}")
+print(f"finished_at={finished}")
+PY
 fi
 """
 _TARGET_LOGS_REMOTE = """set -eu

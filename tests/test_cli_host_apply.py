@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
@@ -707,6 +708,99 @@ def test_host_status_reads_target_timer_and_last_reconcile_evidence(
         },
     }
     assert_schema(payload, "host-status")
+
+
+def test_target_status_probe_reads_v2_evidence_without_gnu_awk_or_timer_epoch(
+    tmp_path: Path,
+) -> None:
+    """The target probe must work on the mawk/systemd shape used by fleet hosts."""
+    from infralink.cli.operations import _TARGET_STATUS_REMOTE
+
+    evidence = tmp_path / "reconcile-result.yml"
+    evidence.write_text(
+        "schema_version: infralink.controller-reconcile/v2\n"
+        "status: success\n"
+        "host_uuid: " + HOST_ID + "\n"
+        "registry_head: " + "a" * 40 + "\n"
+        "observed_at: '2026-09-02T20:56:46Z'\n",
+        encoding="utf-8",
+    )
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    systemctl = commands / "systemctl"
+    systemctl.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *'NextElapseUSecRealtime'*) exit 0 ;;\n"
+        "  *'ActiveState'*) printf '%s\\n' active ;;\n"
+        "  *'Result'*) printf '%s\\n' success ;;\n"
+        "  *'ExecMainStatus'*) printf '%s\\n' 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    systemctl.chmod(0o755)
+    awk = commands / "awk"
+    awk.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    awk.chmod(0o755)
+    script = _TARGET_STATUS_REMOTE.replace(
+        "result=/var/lib/infralink/reconcile-result.yml", f"result={evidence}"
+    )
+    completed = subprocess.run(
+        ["sh", "-s", "--", UNIT],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"PATH": f"{commands}:{os.environ['PATH']}"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "registry_sha=" + "a" * 40 in completed.stdout
+    assert "finished_at=2026-09-02T20:56:46Z" in completed.stdout
+    assert "timer_next=\n" in completed.stdout
+
+
+def test_target_status_probe_reads_only_a_bounded_evidence_prefix(tmp_path: Path) -> None:
+    """A malformed runtime record cannot make every status read consume unbounded data."""
+    from infralink.cli.operations import _TARGET_STATUS_REMOTE
+
+    evidence = tmp_path / "reconcile-result.yml"
+    evidence.write_text(
+        "#" * (64 * 1024)
+        + "\nregistry_head: "
+        + "b" * 40
+        + "\nobserved_at: '2026-09-02T20:56:46Z'\n",
+        encoding="utf-8",
+    )
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    systemctl = commands / "systemctl"
+    systemctl.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *'NextElapseUSecRealtime'*) exit 0 ;;\n"
+        "  *'ActiveState'*) printf '%s\\n' active ;;\n"
+        "  *'Result'*) printf '%s\\n' success ;;\n"
+        "  *'ExecMainStatus'*) printf '%s\\n' 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    systemctl.chmod(0o755)
+    script = _TARGET_STATUS_REMOTE.replace(
+        "result=/var/lib/infralink/reconcile-result.yml", f"result={evidence}"
+    )
+    completed = subprocess.run(
+        ["sh", "-s", "--", UNIT],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"PATH": f"{commands}:{os.environ['PATH']}"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "registry_sha=\n" in completed.stdout
+    assert "finished_at=\n" in completed.stdout
 
 
 def test_host_status_reports_failed_target_health_as_typed_success(
