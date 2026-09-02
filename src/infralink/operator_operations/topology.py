@@ -31,7 +31,12 @@ from infralink.cli.queries import (
     show_host,
     show_service,
 )
-from infralink.operator_sources import SourceRequest, load_registry, load_sources
+from infralink.operator_sources import (
+    SourceRequest,
+    load_registry,
+    load_sources,
+    resolve_registry_companion,
+)
 
 
 class PagedTopologyRequest(SourceRequest):
@@ -311,5 +316,7 @@ def _host_edges_path(request: SourceRequest, registry_source_path: Path) -> Path
     """Retain legacy host-show cursor binding without loading edge declarations."""
     if request.edges is not None:
         return request.edges.expanduser()
-    candidate = registry_source_path / "network/main-dev/edges/edges.yml"
-    return candidate if candidate.exists() else None
+    try:
+        return resolve_registry_companion(registry_source_path, filename="edges.yml")
+    except OperationError:
+        return None

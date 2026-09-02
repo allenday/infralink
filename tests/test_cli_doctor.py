@@ -10,7 +10,8 @@ import yaml
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
-from infralink.cli.main import cli
+from infralink.cli.errors import CliFailure
+from infralink.cli.main import Context, cli
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
@@ -481,6 +482,109 @@ def test_normal_doctor_requires_a_configured_gatus_observer(
     assert payload["error"]["code"] == "configuration_required"
     assert payload["error"]["details"] == {"source": "gatus_url"}
     assert payload["command"]["resolved"]["gatus_configured"] is False
+
+
+def test_doctor_derives_a_unique_declared_gatus_endpoint_from_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live Doctor reads the one declared Gatus service without an ambient URL."""
+    checkout = tmp_path / "registry"
+    gatus_host = "a2b9e5d5-36b0-459d-a556-96622811fbd5"
+    for host_id, host in {
+        HOST_ID: {
+            "canonical_name": "database.example.com",
+            "status": "active",
+            "tailscale_ip": "100.64.0.10",
+        },
+        gatus_host: {
+            "canonical_name": "gatus.example.com",
+            "status": "active",
+            "tailscale_ip": "100.64.0.20",
+            "services": {"gatus": {"port": 8080, "protocol": "http"}},
+        },
+    }.items():
+        manifest = checkout / "hosts" / host_id / "manifest.yml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            yaml.safe_dump({"hosts": {host_id: host}}, sort_keys=False), encoding="utf-8"
+        )
+    (checkout / "hosts" / "applications.yml").write_text("applications: {}\n", encoding="utf-8")
+    edges = yaml.safe_load((EXAMPLES / "edges.yml").read_text(encoding="utf-8"))
+    edge_source = checkout / "network" / "main-dev" / "edges" / "edges.yml"
+    edge_source.parent.mkdir(parents=True)
+    edge_source.write_text(yaml.safe_dump(edges, sort_keys=False), encoding="utf-8")
+    observation = checkout / "observer-inputs" / "declared"
+    observation.mkdir(parents=True)
+    plan, bindings = _observation_inputs(observation)
+    for source in (plan, bindings):
+        source.write_text(
+            source.read_text(encoding="utf-8").replace(OBSERVATION_ID, EDGE_ID),
+            encoding="utf-8",
+        )
+    calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda url, token: (
+            calls.append((url, token))
+            or [{"key": f"gatus-key-for-{EDGE_ID}", "results": [{"success": True}]}]
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(checkout), "doctor", "edge", EDGE_ID],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0, result.output
+    assert calls == [("http://100.64.0.20:8080", None)]
+    assert payload["command"]["resolved"]["gatus_url"] == "http://100.64.0.20:8080"
+    assert "--gatus-url http://100.64.0.20:8080" in payload["next_actions"][0]["command"]
+
+    global_result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(checkout), "doctor"],
+    )
+    global_payload = json.loads(global_result.output)
+    assert global_result.exit_code == 0, global_result.output
+    assert calls == [("http://100.64.0.20:8080", None)] * 2
+    assert global_payload["command"]["resolved"]["gatus_url"] == "http://100.64.0.20:8080"
+
+
+def test_declared_gatus_endpoint_fails_closed_when_registry_has_multiple_candidates(
+    tmp_path: Path,
+) -> None:
+    from infralink.cli.doctor import _declared_gatus_url
+
+    checkout = tmp_path / "registry"
+    for index, address in enumerate(("100.64.0.20", "100.64.0.21"), start=1):
+        host_id = f"a2b9e5d5-36b0-459d-a556-{index:012d}"
+        manifest = checkout / "hosts" / host_id / "manifest.yml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            yaml.safe_dump(
+                {
+                    "hosts": {
+                        host_id: {
+                            "canonical_name": f"gatus-{index}.example.com",
+                            "status": "active",
+                            "tailscale_ip": address,
+                            "services": {"gatus": {"port": 8080, "protocol": "http"}},
+                        }
+                    }
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+    context = Context()
+    context.registry_path = checkout
+
+    with pytest.raises(CliFailure) as error:
+        _declared_gatus_url(context)
+
+    assert error.value.code.value == "configuration_required"
+    assert error.value.details == {"source": "gatus_url", "reason": "ambiguous_registry_endpoint"}
 
 
 def test_verbose_doctor_includes_all_declared_evidence(tmp_path: Path) -> None:

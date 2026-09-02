@@ -294,6 +294,39 @@ def test_public_app_provenance_resolves_inferred_edges_for_cli_and_mcp(tmp_path:
     assert mcp_resolved["verbose"] is False
 
 
+def test_public_app_actions_replay_with_a_nonstandard_declared_edge_companion(
+    tmp_path: Path,
+) -> None:
+    registry = _paged_registry(tmp_path)
+    legacy_edges = registry / "network/main-dev/edges/edges.yml"
+    declared_edges = registry / "topology/production/edges/edges.yml"
+    declared_edges.parent.mkdir(parents=True)
+    declared_edges.write_text(legacy_edges.read_text(encoding="utf-8"), encoding="utf-8")
+    legacy_edges.unlink()
+
+    result = CliRunner().invoke(cli, ["--registry", str(registry), "app", "list"])
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(result.output)
+    assert payload["command"]["resolved"]["edges"] == str(declared_edges)
+    show = next(action for action in payload["next_actions"] if action["rel"] == "show")
+    assert str(declared_edges) in show["command"]
+    replay = shlex.split(show["command"].replace("{app_id}", "relay"))[1:]
+    replay_result = CliRunner().invoke(cli, replay)
+    assert replay_result.exit_code == 0, replay_result.output
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(app_mcp_adapter().server) as client:
+            response = await client.call_tool("app.list", {"registry": str(registry)})
+        assert response.is_error is False
+        return response.structured_content
+
+    mcp_payload = asyncio.run(call_mcp())
+    assert mcp_payload["command"]["resolved"]["edges"] == str(declared_edges)
+    mcp_show = next(action for action in mcp_payload["next_actions"] if action["rel"] == "show")
+    assert str(declared_edges) in mcp_show["command"]
+
+
 def test_public_app_configured_sources_are_resolved_and_actions_replay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

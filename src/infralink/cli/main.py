@@ -13,6 +13,7 @@ from typing import Any, NoReturn
 
 import click
 import yaml
+from agent_surface import OperationError
 
 from infralink import __version__
 from infralink.cli import command_plugins
@@ -63,6 +64,7 @@ from infralink.operator_operations.host_bootstrap import (
     _require_remote_tailnet_identity,
     _validate_bootstrap_bws_access,
 )
+from infralink.operator_sources import resolve_registry_companion
 
 # Transitional re-exports preserve the existing test and extension import path
 # while bootstrap ownership moves behind the transport-neutral operation module.
@@ -1613,9 +1615,16 @@ def cli(
         selected_registry = registry
         if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
             selected_registry = _configured_registry()
-        selected_edges = edges or registry_companion(
-            selected_registry, "network/main-dev/edges/edges.yml"
-        )
+        selected_edges = edges
+        if selected_edges is None:
+            registry_root = registry_checkout_root(selected_registry)
+            if registry_root is not None:
+                try:
+                    selected_edges = resolve_registry_companion(registry_root, filename="edges.yml")
+                except OperationError:
+                    # Operations that require edges report the typed source error.
+                    # Read-only registry-only commands remain usable without them.
+                    pass
     ctx.registry_path = selected_registry
     ctx.hosts_path = None
     ctx.edges_path = selected_edges
