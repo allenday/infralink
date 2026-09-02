@@ -157,6 +157,17 @@ def info_click_command() -> click.Command:
     return command
 
 
+def host_click_command() -> click.Group:
+    """Return the generated host subtree mounted under the public root."""
+    from infralink.agent_surface import mounted_click_command
+    from infralink.operator_actions import OperatorActionProvider
+
+    root = mounted_click_command(operator_surface, action_provider=OperatorActionProvider())
+    command = root.get_command(click.Context(root), "host")
+    assert isinstance(command, click.Group)
+    return command
+
+
 def app_click_command() -> click.Group:
     """Return the generated application subtree mounted under the root CLI."""
     from infralink.agent_surface import (
@@ -279,8 +290,6 @@ class HostBootstrapRequest(SourceRequest):
     def validate_mode(self) -> HostBootstrapRequest:
         if self.plan and self.apply:
             raise ValueError("pass at most one of plan or apply")
-        if self.apply and self.bws_token is None:
-            raise ValueError("apply requires bws_token")
         return self
 
 
@@ -358,18 +367,38 @@ class HostBootstrapOperationResult(_OperationModel):
 @operator_surface.operation(  # type: ignore[type-var]
     "host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True
 )
-def host_bootstrap_operation(request: HostBootstrapRequest) -> HostBootstrapOperationResult:
+def host_bootstrap_operation(
+    request: HostBootstrapRequest,
+) -> OperationOutcome[HostBootstrapOperationResult]:
     """Execute bootstrap from an explicit source, without a Click parse context."""
+    from infralink.cli.errors import CliFailure, ErrorCode, ExitCode
     from infralink.cli.main import Context
     from infralink.operator_operations.host_bootstrap import execute_bootstrap
+
+    if request.apply and request.bws_token is None:
+        _raise_operation_failure(
+            CliFailure(
+                code=ErrorCode.CONFIGURATION_REQUIRED,
+                message="Host bootstrap apply requires a BWS token on standard input",
+                exit_code=ExitCode.INPUT_ERROR,
+                fix="Pipe the host machine token to infralink host bootstrap --bws-token-stdin --apply",
+                details={"host": request.host_id, "requirement": "bws_token_stdin"},
+            )
+        )
 
     sources = load_registry(request)
     context = Context()
     context.registry_path = sources.registry_path
     context.edges_path = request.edges
     context._registry = sources.registry
-    result, _actions, succeeded = execute_bootstrap(context, request)
-    return HostBootstrapOperationResult(result=result, succeeded=succeeded)
+    try:
+        result, _actions, succeeded = execute_bootstrap(context, request)
+    except Exception as error:
+        _raise_operation_failure(error)
+    return OperationOutcome(
+        HostBootstrapOperationResult(result=result, succeeded=succeeded),
+        exit_code=0 if succeeded else 1,
+    )
 
 
 @operator_surface.operation(  # type: ignore[type-var]
@@ -428,7 +457,9 @@ def host_status_operation(request: HostTargetRequest) -> HostStatusResult:
 @operator_surface.operation(  # type: ignore[type-var]
     "host.verifier", summary="Inspect public host verifier facts", read_only=True
 )
-def host_verifier_operation(request: HostTargetRequest) -> HostVerifierResult:
+def host_verifier_operation(
+    request: HostTargetRequest,
+) -> OperationOutcome[HostVerifierResult]:
     """Read the declared target's V2 signature verifier facts."""
     from infralink.cli.operations import inspect_verifier, resolve_apply_request
 
@@ -440,10 +471,12 @@ def host_verifier_operation(request: HostTargetRequest) -> HostVerifierResult:
         verifier = inspect_verifier(resolve_apply_request(sources.registry_path / "hosts", target))
     except Exception as error:
         _raise_operation_failure(error)
-    return HostVerifierResult(
+    result = HostVerifierResult(
         target=DoctorTarget(type="host", id=target.uuid, canonical_name=target.canonical_name),
         verifier=verifier,
     )
+    valid = verifier.signature_verification == "passed" and not verifier.unavailable
+    return OperationOutcome(result, exit_code=0 if valid else 1)
 
 
 @operator_surface.operation(  # type: ignore[type-var]
@@ -573,7 +606,7 @@ def host_list(request: HostListRequest) -> HostListResult:
     return list_declared_hosts(request)
 
 
-@operator_surface.operation("host.show", summary="Show one declared host", read_only=True)  # type: ignore[type-var]
+@operator_surface.operation("host.show", summary="Show one host declaration", read_only=True)  # type: ignore[type-var]
 def host_show(request: HostShowRequest) -> HostShowResult:
     """Return one bounded host view without a Click context."""
     return show_declared_host(request)

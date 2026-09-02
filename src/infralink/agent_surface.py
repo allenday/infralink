@@ -188,6 +188,11 @@ class InfralinkEnvelopeRenderer:
 
     def render(self, invocation: Invocation) -> BaseModel:
         action_sources = self._action_sources(invocation.request)
+        if invocation.command is not None:
+            # The adapter redacts sensitive request fields before rendering.
+            # A CLI command's explicit root selectors remain the authoritative,
+            # replayable source spelling for its HATEOAS actions.
+            action_sources = _command_declared_sources(invocation.command.raw)
         if invocation.operation.name == "info":
             # Info's follow-ups inspect both topology documents. Preserve the
             # effective companion edge source even when callers selected only
@@ -418,6 +423,29 @@ def _declared_source_argv(request: Mapping[str, Any] | None) -> list[str]:
         if value is not None:
             argv.extend((f"--{name.replace('_', '-')}", str(value)))
     return argv
+
+
+def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, str]:
+    """Return only root selectors explicitly present in one CLI invocation."""
+    sources: dict[str, str] = {}
+    index = 0
+    names = {"--registry": "registry", "--edges": "edges"}
+    while index < len(tokens):
+        token = tokens[index]
+        option, separator, inline_value = token.partition("=")
+        source = names.get(option)
+        if source is None:
+            index += 1
+            continue
+        if separator:
+            sources[source] = inline_value
+            index += 1
+            continue
+        if index + 1 >= len(tokens):
+            raise ValueError(f"Infralink command source {option} is missing its value")
+        sources[source] = tokens[index + 1]
+        index += 2
+    return sources
 
 
 def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any]:

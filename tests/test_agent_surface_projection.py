@@ -14,11 +14,31 @@ from mcp import Client
 
 from infralink.agent_surface import InfralinkEnvelopeRenderer
 from infralink.cli.contracts import HostListResult
+from infralink.cli.main import cli
 from infralink.operator_surface import (
     operator_click_adapter,
     operator_mcp_adapter,
     operator_surface,
 )
+
+
+def test_public_host_help_exposes_the_complete_generated_operation_family() -> None:
+    result = CliRunner().invoke(cli, ["help", "host"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(
+        CliRunner().invoke(cli, ["--output", "json", "help", "host"]).output
+    )
+    assert {child["name"] for child in document["result"]["children"]} == {
+        "apply",
+        "bootstrap",
+        "create",
+        "list",
+        "logs",
+        "show",
+        "status",
+        "verifier",
+    }
 
 
 def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
@@ -87,8 +107,17 @@ def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
 
 
 def test_host_control_operations_are_all_declared_by_the_agent_surface() -> None:
-    """Host control schemas must not be inferred from a parallel Click command tree."""
-    expected = {"host.apply", "host.bootstrap", "host.logs", "host.status", "host.verifier"}
+    """The complete host family is declared once, without a parallel Click tree."""
+    expected = {
+        "host.apply",
+        "host.bootstrap",
+        "host.create",
+        "host.list",
+        "host.logs",
+        "host.show",
+        "host.status",
+        "host.verifier",
+    }
 
     assert expected <= {definition.name for definition in operator_surface.operations.list()}
 

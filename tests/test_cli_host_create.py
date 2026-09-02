@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from uuid import UUID
 
@@ -93,13 +94,47 @@ def test_host_create_write_materializes_a_valid_directory_manifest(tmp_path: Pat
         "value": "new-node.internal",
         "reason": "input is a DNS hostname and maps to tailscale_name",
     }
-    git_status = next(item for item in payload["next_actions"] if item["rel"] == "git-status")
-    assert git_status == {
-        "rel": "git-status",
-        "command": f"git -C {tmp_path} status --short",
-        "description": "Inspect the uncommitted registry change",
-        "safe": True,
-    }
+    assert payload["next_actions"] == [
+        {
+            "rel": "show",
+            "command": f"infralink --registry {registry_root} host show {payload['result']['host_id']}",
+            "description": "Show the created host declaration",
+            "safe": True,
+        }
+    ]
+
+
+def test_host_create_action_preserves_a_literal_redacted_registry_name() -> None:
+    """A valid selector spelling must not be mistaken for a secret redaction marker."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        registry_root = Path("<redacted>")
+        (registry_root / "hosts").mkdir(parents=True)
+        result = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(registry_root),
+                "host",
+                "create",
+                "--name",
+                "new-node",
+                "--address",
+                "100.64.1.9",
+                "--write",
+            ],
+        )
+
+    payload = yaml.safe_load(result.output)
+    assert result.exit_code == 0
+    assert shlex.split(payload["next_actions"][0]["command"]) == [
+        "infralink",
+        "--registry",
+        "<redacted>",
+        "host",
+        "show",
+        payload["result"]["host_id"],
+    ]
 
 
 def test_host_create_rejects_non_directory_registry_and_invalid_address(tmp_path: Path) -> None:
@@ -135,7 +170,7 @@ def test_host_create_rejects_non_directory_registry_and_invalid_address(tmp_path
     )
 
     assert non_directory.exit_code == 3
-    assert yaml.safe_load(non_directory.output)["error"]["code"] == "input_load_failed"
+    assert yaml.safe_load(non_directory.output)["error"]["code"] == "source_invalid"
     assert invalid_address.exit_code == 2
     assert yaml.safe_load(invalid_address.output)["error"]["code"] == "usage_error"
 
