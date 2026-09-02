@@ -19,6 +19,21 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
 
 
+def _examples_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    checkout = tmp_path / "registry"
+    registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    for host_id, manifest in registry["hosts"].items():
+        path = checkout / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
+        )
+    edges = checkout / "network" / "main-dev" / "edges" / "edges.yml"
+    edges.parent.mkdir(parents=True, exist_ok=True)
+    edges.write_text((EXAMPLES / "edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    return checkout, edges
+
+
 def invoke(*args: str):
     return CliRunner().invoke(cli, ["--output", "json", *args])
 
@@ -415,12 +430,13 @@ def raise_system_exit(code: object) -> None:
     raise SystemExit(code)
 
 
-def test_resolve_absent_is_one_json_entity_failure() -> None:
+def test_resolve_absent_is_one_json_entity_failure(tmp_path: Path) -> None:
+    checkout, edges = _examples_checkout(tmp_path)
     result = invoke(
         "--registry",
-        str(EXAMPLES / "registry.yml"),
+        str(checkout),
         "--edges",
-        str(EXAMPLES / "edges.yml"),
+        str(edges),
         "resolve",
         "absent",
     )
@@ -431,7 +447,8 @@ def test_resolve_absent_is_one_json_entity_failure() -> None:
     assert payload["error"]["code"] == "entity_not_found"
 
 
-def test_advertised_typed_commands_produce_their_schemas() -> None:
+def test_advertised_typed_commands_produce_their_schemas(tmp_path: Path) -> None:
+    checkout, edges = _examples_checkout(tmp_path)
     invocations = {
         "help": (("help",), "help"),
         "version": (("version",), "version"),
@@ -442,9 +459,9 @@ def test_advertised_typed_commands_produce_their_schemas() -> None:
         "resolve": (
             (
                 "--registry",
-                str(EXAMPLES / "registry.yml"),
+                str(checkout),
                 "--edges",
-                str(EXAMPLES / "edges.yml"),
+                str(edges),
                 "resolve",
                 "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
             ),
@@ -514,7 +531,8 @@ def test_live_command_discovery_is_locked_to_checked_in_schema_coverage() -> Non
     assert set().union(*schema_coverage.values()) | {"root"} == schema_names
 
 
-def test_successful_info_and_resolve_match_checked_in_schemas() -> None:
+def test_successful_info_and_resolve_match_checked_in_schemas(tmp_path: Path) -> None:
+    checkout, edges = _examples_checkout(tmp_path)
     source_args = (
         "--registry",
         str(EXAMPLES / "registry.yml"),
@@ -523,7 +541,10 @@ def test_successful_info_and_resolve_match_checked_in_schemas() -> None:
     )
     info_result = invoke(*source_args, "info")
     resolve_result = invoke(
-        *source_args,
+        "--registry",
+        str(checkout),
+        "--edges",
+        str(edges),
         "resolve",
         "058e29ff-57b9-47c8-b6fa-0914ac03e25c",
     )

@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     SerializerFunctionWrapHandler,
     field_validator,
     model_serializer,
@@ -671,6 +672,7 @@ class CheckCommandResult(ContractModel):
     healthy: bool
     checks: Page[CheckResult]
     summary: CheckSummary
+    _failed_edge_id: str | None = PrivateAttr(default=None)
 
 
 class DoctorTarget(ContractModel):

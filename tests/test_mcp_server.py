@@ -14,6 +14,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from infralink.cli import command_plugins
 from infralink.cli.main import cli
+from infralink.health.checks import HealthCheckResult
 from infralink.mcp_server import (
     _arguments,
     _native_argv,
@@ -23,6 +24,24 @@ from infralink.mcp_server import (
     create_server,
     invoke_cli,
 )
+
+
+def _example_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    root = Path(__file__).resolve().parents[1]
+    checkout = tmp_path / "registry"
+    registry = yaml.safe_load((root / "examples" / "registry.yml").read_text(encoding="utf-8"))
+    for host_id, manifest in registry["hosts"].items():
+        path = checkout / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
+        )
+    edges = checkout / "network" / "main-dev" / "edges" / "edges.yml"
+    edges.parent.mkdir(parents=True, exist_ok=True)
+    edges.write_text(
+        (root / "examples" / "edges.yml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return checkout, edges
 
 
 def test_mcp_allows_command_local_artifact_output_without_root_format_override() -> None:
@@ -103,6 +122,57 @@ def test_native_mcp_preserves_bounded_integer_option_types() -> None:
 
             timeout = apply.input_schema["properties"]["timeout"]
             assert timeout == {"type": "integer", "minimum": 1, "maximum": 3600}
+
+    asyncio.run(exercise_protocol())
+
+
+def test_native_mcp_projects_generated_edge_operations_and_their_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout, edges = _example_checkout(tmp_path)
+    edge_id = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
+    monkeypatch.setattr(
+        "infralink.operator_operations.edge_health.check_edge_health",
+        lambda edge, resolver, timeout: HealthCheckResult(
+            edge_id=edge.id,
+            edge_type=edge.type.value,
+            target_endpoint="redacted",
+            healthy=False,
+            latency_ms=None,
+            message=None,
+            criticality=edge.criticality.value,
+            check_type="tcp",
+            timestamp=0.0,
+            error_code="timeout",
+        ),
+    )
+
+    async def exercise_protocol() -> None:
+        async with Client(create_server()) as client:
+            tools = await client.list_tools()
+            by_name = {tool.name: tool for tool in tools.tools}
+            assert by_name["infralink_check"].input_schema["properties"]["edge"] == {
+                "type": "array",
+                "items": {"type": "string"},
+            }
+            assert by_name["infralink_resolve"].input_schema["required"] == ["edge_id"]
+
+            check = await client.call_tool(
+                "infralink_check",
+                {"registry": str(checkout), "edges": str(edges), "edge": [edge_id]},
+            )
+            missing = await client.call_tool(
+                "infralink_resolve",
+                {"registry": str(checkout), "edges": str(edges), "edge_id": "missing"},
+            )
+
+            assert check.is_error is False
+            assert check.structured_content["ok"] is True
+            assert check.structured_content["result"]["healthy"] is False
+            assert check.structured_content["next_actions"][0]["rel"] == "show"
+            assert missing.is_error is True
+            assert missing.structured_content["error"]["code"] == "entity_not_found"
+            assert missing.structured_content["next_actions"][0]["rel"] == "list"
 
     asyncio.run(exercise_protocol())
 

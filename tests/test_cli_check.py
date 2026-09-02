@@ -14,6 +14,27 @@ from infralink.health.checks import HealthCheckResult
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
+REGISTRY_CHECKOUT: Path
+DEFAULT_EDGES: Path
+
+
+@pytest.fixture(autouse=True)
+def _example_checkout(tmp_path: Path) -> None:
+    """Materialize the examples as the checkout-root public contract."""
+    global REGISTRY_CHECKOUT, DEFAULT_EDGES
+    registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    checkout = tmp_path / "registry"
+    for host_id, manifest in registry["hosts"].items():
+        path = checkout / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
+        )
+    edges = checkout / "network" / "main-dev" / "edges" / "edges.yml"
+    edges.parent.mkdir(parents=True, exist_ok=True)
+    edges.write_text((EXAMPLES / "edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    REGISTRY_CHECKOUT = checkout
+    DEFAULT_EDGES = edges
 
 
 def _health(
@@ -47,9 +68,9 @@ def _invoke(*args: str, edges_path: Path | None = None):
             "--output",
             "json",
             "--registry",
-            str(EXAMPLES / "registry.yml"),
+            str(REGISTRY_CHECKOUT),
             "--edges",
-            str(edges_path or EXAMPLES / "edges.yml"),
+            str(edges_path or DEFAULT_EDGES),
             "check",
             *args,
         ],
@@ -106,7 +127,7 @@ def test_check_returns_typed_completed_result_without_sensitive_fields(
     exit_code: int,
 ) -> None:
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(
             edge.id,
             healthy=healthy,
@@ -169,7 +190,7 @@ def test_failed_check_advertises_edge_inspection_and_resolution_repairs(
 ) -> None:
     edge_id = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(
             edge.id,
             healthy=False,
@@ -189,12 +210,10 @@ def test_failed_check_advertises_edge_inspection_and_resolution_repairs(
 def test_failed_check_repair_actions_survive_a_healthy_first_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    edge_ids = sorted(
-        item["id"] for item in yaml.safe_load((EXAMPLES / "edges.yml").read_text())["edges"]
-    )
+    edge_ids = sorted(item["id"] for item in yaml.safe_load(DEFAULT_EDGES.read_text())["edges"])
     failed_id = edge_ids[1]
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(
             edge.id,
             healthy=edge.id != failed_id,
@@ -217,11 +236,11 @@ def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     edges_path = tmp_path / "edges.yml"
-    edges = yaml.safe_load((EXAMPLES / "edges.yml").read_text(encoding="utf-8"))
+    edges = yaml.safe_load(DEFAULT_EDGES.read_text(encoding="utf-8"))
     edges["edges"][0]["metadata"]["criticality"] = "medium"
     edges_path.write_text(yaml.safe_dump(edges))
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(edge.id, healthy=True),
     )
     first = json.loads(
@@ -243,7 +262,7 @@ def test_check_filters_and_repeated_edges_are_preserved_in_continuation(
     )
     action = next(item for item in first["next_actions"] if item["rel"] == "continue")
 
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(EXAMPLES / "registry.yml"))
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(REGISTRY_CHECKOUT))
     monkeypatch.setenv("INFRALINK_EDGES", str(edges_path))
 
     assert action["command"].endswith(
@@ -264,7 +283,7 @@ def test_check_critical_only_is_preserved_in_continuation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(edge.id, healthy=True),
     )
     first = json.loads(_invoke("--critical-only", "--limit", "1").output)
@@ -290,7 +309,7 @@ def test_check_cursor_ignores_recomputed_health_observations_but_binds_timeout(
         )
 
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         changing_health,
     )
     first = json.loads(_invoke("--type", "database", "--timeout", "9", "--limit", "1").output)
@@ -376,7 +395,7 @@ def test_check_cursor_binds_canonical_requested_ids_including_unmatched_and_dupl
     changed_requested_ids: tuple[str, ...],
 ) -> None:
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(edge.id, healthy=True),
     )
     requested_ids = (
@@ -421,7 +440,7 @@ def test_check_expected_load_failure_and_unexpected_failure_use_boundary(
     assert malformed_payload["error"]["code"] == "input_load_failed"
 
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: (_ for _ in ()).throw(RuntimeError("provider canary")),
     )
     internal = _invoke("--edge", "058e29ff-57b9-47c8-b6fa-0914ac03e25c")
@@ -438,7 +457,7 @@ def test_check_more_than_1000_results_has_no_loss_or_duplication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     edges_path = tmp_path / "edges.yml"
-    source = yaml.safe_load((EXAMPLES / "edges.yml").read_text(encoding="utf-8"))
+    source = yaml.safe_load(DEFAULT_EDGES.read_text(encoding="utf-8"))
     template = source["edges"][0]
     generated = []
     for index in range(1005):
@@ -448,7 +467,7 @@ def test_check_more_than_1000_results_has_no_loss_or_duplication(
     source["edges"] = generated
     edges_path.write_text(yaml.safe_dump(source))
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: _health(edge.id, healthy=True),
     )
 

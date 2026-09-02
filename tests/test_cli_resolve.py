@@ -15,6 +15,27 @@ from infralink.health.checks import HealthCheckResult
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
 EDGE_ID = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
+REGISTRY_CHECKOUT: Path
+DEFAULT_EDGES: Path
+
+
+@pytest.fixture(autouse=True)
+def _example_checkout(tmp_path: Path) -> None:
+    """Materialize the examples as the checkout-root public contract."""
+    global REGISTRY_CHECKOUT, DEFAULT_EDGES
+    registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
+    checkout = tmp_path / "registry"
+    for host_id, manifest in registry["hosts"].items():
+        path = checkout / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
+        )
+    edges = checkout / "network" / "main-dev" / "edges" / "edges.yml"
+    edges.parent.mkdir(parents=True, exist_ok=True)
+    edges.write_text((EXAMPLES / "edges.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    REGISTRY_CHECKOUT = checkout
+    DEFAULT_EDGES = edges
 
 
 def invoke(*args: str):
@@ -24,9 +45,9 @@ def invoke(*args: str):
 def resolve(*args: str):
     result = invoke(
         "--registry",
-        str(EXAMPLES / "registry.yml"),
+        str(REGISTRY_CHECKOUT),
         "--edges",
-        str(EXAMPLES / "edges.yml"),
+        str(DEFAULT_EDGES),
         "resolve",
         EDGE_ID,
         *args,
@@ -40,11 +61,16 @@ def canary_topology(tmp_path: Path, canary: str) -> tuple[Path, Path]:
     registry = yaml.safe_load((EXAMPLES / "registry.yml").read_text(encoding="utf-8"))
     target = registry["hosts"]["d1b9e5d5-36b0-459d-a556-96622811fbd5"]
     target.setdefault("provider_metadata", {})["password_value"] = canary
-    registry_path = tmp_path / "registry.yml"
-    registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
+    registry_path = tmp_path / "registry"
+    for host_id, manifest in registry["hosts"].items():
+        path = registry_path / "hosts" / host_id / "manifest.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
+        )
 
     edges_path = tmp_path / "edges.yml"
-    edges_path.write_text((EXAMPLES / "edges.yml").read_text(encoding="utf-8"))
+    edges_path.write_text(DEFAULT_EDGES.read_text(encoding="utf-8"))
     return registry_path, edges_path
 
 
@@ -72,8 +98,8 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
             "--prefer-ip",
         ],
     }
-    assert payload["command"]["resolved"]["registry"] == str(EXAMPLES / "registry.yml")
-    assert payload["command"]["resolved"]["edges"] == str(EXAMPLES / "edges.yml")
+    assert payload["command"]["resolved"]["registry"] == str(REGISTRY_CHECKOUT)
+    assert payload["command"]["resolved"]["edges"] == str(DEFAULT_EDGES)
     assert payload["result"] == {
         "edge": {
             "id": EDGE_ID,
@@ -120,23 +146,21 @@ def test_resolve_emits_fixed_v1_result_and_source_qualified_actions() -> None:
     Draft202012Validator(schema).validate(payload)
 
     actions = {item["rel"]: item for item in payload["next_actions"]}
-    validate_command = shlex.split(actions["validate"]["command"])
     check_command = shlex.split(actions["check"]["command"])
-    assert validate_command[-2:] == ["validate", "--check-resolution"]
     assert check_command[-3:] == ["check", "--edge", EDGE_ID]
-    assert ["--registry", str(EXAMPLES / "registry.yml")] == validate_command[3:5]
-    assert all(item["safe"] and "templated" not in item for item in actions.values())
+    assert actions["check"]["safe"] is True
+    assert all("templated" not in item for item in actions.values())
 
 
 def test_resolve_actions_are_executable_typed_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, payload = resolve()
-    monkeypatch.setenv("INFRALINK_REGISTRY", str(EXAMPLES / "registry.yml"))
-    monkeypatch.setenv("INFRALINK_EDGES", str(EXAMPLES / "edges.yml"))
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(REGISTRY_CHECKOUT))
+    monkeypatch.setenv("INFRALINK_EDGES", str(DEFAULT_EDGES))
     actions = {item["rel"]: item for item in payload["next_actions"]}
     monkeypatch.setattr(
-        "infralink.cli.check.check_edge_health",
+        "infralink.operator_operations.edge_health.check_edge_health",
         lambda edge, resolver, timeout: HealthCheckResult(
             edge_id=edge.id,
             edge_type=edge.type.value,
@@ -150,31 +174,49 @@ def test_resolve_actions_are_executable_typed_commands(
         ),
     )
 
-    for rel, schema_name in (("validate", "validate"), ("check", "check")):
-        replay = invoke(*shlex.split(actions[rel]["command"])[1:])
-        assert replay.exit_code == 0, replay.output
-        replay_payload = json.loads(replay.output)
-        schema = json.loads(
-            (ROOT / "src/infralink/schemas/cli/v1" / f"{schema_name}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        Draft202012Validator(schema).validate(replay_payload)
+    replay = invoke(*shlex.split(actions["check"]["command"])[1:])
+    assert replay.exit_code == 0, replay.output
+    replay_payload = json.loads(replay.output)
+    schema = json.loads(
+        (ROOT / "src/infralink/schemas/cli/v1/check.json").read_text(encoding="utf-8")
+    )
+    Draft202012Validator(schema).validate(replay_payload)
 
 
 @pytest.mark.parametrize(
-    "source_args",
+    "inline",
     [
-        [f"--registry={EXAMPLES / 'registry.yml'}", f"--edges={EXAMPLES / 'edges.yml'}"],
-        ["-r", str(EXAMPLES / "registry.yml"), "-e", str(EXAMPLES / "edges.yml")],
+        True,
+        False,
     ],
 )
-def test_explicit_source_spellings_remain_replayable_in_actions(source_args: list[str]) -> None:
+def test_explicit_source_spellings_remain_replayable_in_actions(
+    inline: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_args = (
+        [f"--registry={REGISTRY_CHECKOUT}", f"--edges={DEFAULT_EDGES}"]
+        if inline
+        else ["-r", str(REGISTRY_CHECKOUT), "-e", str(DEFAULT_EDGES)]
+    )
+    monkeypatch.setattr(
+        "infralink.operator_operations.edge_health.check_edge_health",
+        lambda edge, resolver, timeout: HealthCheckResult(
+            edge_id=edge.id,
+            edge_type=edge.type.value,
+            target_endpoint="redacted",
+            healthy=True,
+            latency_ms=1.0,
+            message=None,
+            criticality=edge.criticality.value,
+            check_type="tcp",
+            timestamp=0.0,
+        ),
+    )
     result = invoke(*source_args, "resolve", EDGE_ID)
     payload = json.loads(result.output)
 
     assert result.exit_code == 0
-    action = next(item for item in payload["next_actions"] if item["rel"] == "validate")
+    action = next(item for item in payload["next_actions"] if item["rel"] == "check")
     assert "--registry" in action["command"]
     assert "--edges" in action["command"]
     replay = invoke(*shlex.split(action["command"])[1:])
@@ -217,7 +259,7 @@ def test_live_resolve_surface_never_leaks_loaded_secret_value(
 ) -> None:
     canary = "loaded-topology-secret-value-canary"
     registry_path, edges_path = canary_topology(tmp_path, canary)
-    loaded = Registry.load(registry_path)
+    loaded = Registry.load_dir(registry_path / "hosts")
     assert (
         loaded.get_by_uuid("d1b9e5d5-36b0-459d-a556-96622811fbd5").provider_metadata[
             "password_value"
@@ -228,7 +270,9 @@ def test_live_resolve_surface_never_leaks_loaded_secret_value(
     command = cli.get_command(click.Context(cli), "resolve")
     assert command is not None
     option_names = {
-        parameter.name for parameter in command.params if isinstance(parameter, click.Option)
+        parameter.name
+        for parameter in command.params
+        if isinstance(parameter, click.Option) and not parameter.name.startswith("_surface_")
     }
     invocations = {
         "default": (),
@@ -279,7 +323,7 @@ def test_resolve_endpoint_and_template_use_the_same_preferred_ip(prefer_ip: str)
 def test_resolve_never_renders_token_or_certificate_as_uri_password(
     tmp_path: Path, auth_type: str
 ) -> None:
-    edges = yaml.safe_load((EXAMPLES / "edges.yml").read_text(encoding="utf-8"))
+    edges = yaml.safe_load(DEFAULT_EDGES.read_text(encoding="utf-8"))
     edge = edges["edges"][0]
     edge["auth"] = {"type": auth_type, "secret_ref": "opaque-canary-ref"}
     edge_path = tmp_path / "edges.yml"
@@ -287,7 +331,7 @@ def test_resolve_never_renders_token_or_certificate_as_uri_password(
 
     result = invoke(
         "--registry",
-        str(EXAMPLES / "registry.yml"),
+        str(REGISTRY_CHECKOUT),
         "--edges",
         str(edge_path),
         "resolve",

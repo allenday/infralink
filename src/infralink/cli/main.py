@@ -1229,9 +1229,9 @@ def _load_command(
 
         return analyze
     if name == "check":
-        from infralink.cli.check import check
+        from infralink.operator_surface import check_click_command
 
-        return check
+        return check_click_command()
     if name == "doctor":
         from infralink.cli.doctor import doctor
 
@@ -1247,9 +1247,9 @@ def _load_command(
 
         return docs
     if name == "resolve":
-        from infralink.cli.resolve import resolve
+        from infralink.operator_surface import resolve_click_command
 
-        return resolve
+        return resolve_click_command()
     if name == "validate":
         from infralink.cli.validate import validate
 
@@ -1338,6 +1338,14 @@ class JsonGroup(click.Group):
             # that exact mounted command so its default map reaches the active
             # operation tree rather than a second freshly-created tree.
             ctx.meta.setdefault("infralink_resolved_commands", {})[cmd_name] = command
+            if cmd_name in {"app", "check", "fleet", "host", "info", "resolve"}:
+                # Extracted Agent Surface leaves parse after the public root
+                # resolved the command. Seed their inherited error context
+                # now so parse failures retain root output/source selections.
+                ctx.meta.setdefault(
+                    "agent_surface.raw_argv",
+                    ("infralink", *redact_argv(list(current_invocation_argv()))),
+                )
         return command
 
     def resolve_command(
@@ -1642,7 +1650,7 @@ def cli(
         is not click.core.ParameterSource.DEFAULT
     )
 
-    mounted_commands = {"app", "fleet", "host", "info"}
+    mounted_commands = {"app", "check", "fleet", "host", "info", "resolve"}
     if click_ctx.invoked_subcommand is not None and (
         _is_external_command(click_ctx.invoked_subcommand)
         or click_ctx.invoked_subcommand in mounted_commands

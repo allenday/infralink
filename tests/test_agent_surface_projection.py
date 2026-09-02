@@ -257,6 +257,13 @@ def test_host_control_operations_are_all_declared_by_the_agent_surface() -> None
     assert expected <= {definition.name for definition in operator_surface.operations.list()}
 
 
+def test_edge_resolution_and_health_operations_are_declared_once() -> None:
+    """Public edge reads must not retain an independent Click parser."""
+    declared = {definition.name for definition in operator_surface.operations.list()}
+
+    assert {"check", "resolve"} <= declared
+
+
 def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() -> None:
     definition = operator_surface.operations.describe("host.list")
     renderer = InfralinkEnvelopeRenderer()

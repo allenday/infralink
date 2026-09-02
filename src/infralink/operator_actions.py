@@ -8,7 +8,7 @@ from agent_surface.contracts import Action, ActionCollection
 from agent_surface.outcomes import ActionProvider
 from pydantic import BaseModel
 
-from infralink.cli.contracts import HostListResult, InfoResult
+from infralink.cli.contracts import CheckCommandResult, HostListResult, InfoResult, ResolveResult
 from infralink.cli.operation_contracts import (
     HostApplyResult,
     HostLogsResult,
@@ -16,6 +16,7 @@ from infralink.cli.operation_contracts import (
     HostVerifierResult,
 )
 from infralink.fleet.validation import FleetValidationResult
+from infralink.operator_operations.edge_health import EdgeCheckRequest, EdgeResolveRequest
 from infralink.operator_surface import (
     FleetValidateRequest,
     HostApplyRequest,
@@ -40,6 +41,24 @@ class OperatorActionProvider(ActionProvider):
         result: object | None = None,
         error: Any = None,
     ) -> ActionCollection:
+        if (
+            error is not None
+            and operation == "resolve"
+            and isinstance(request, EdgeResolveRequest)
+            and getattr(error, "code", None) in {"entity_not_found", "input_load_failed"}
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="list",
+                        description="List edge records",
+                        command=("edge", "list"),
+                        operation="edge.list",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
         if (
             error is not None
             and operation == "host.bootstrap"
@@ -167,6 +186,29 @@ class OperatorActionProvider(ActionProvider):
                 returned=1,
             )
         if (
+            operation == "check"
+            and isinstance(request, EdgeCheckRequest)
+            and isinstance(result, CheckCommandResult)
+        ):
+            return _check_actions(request, result)
+        if (
+            operation == "resolve"
+            and isinstance(request, EdgeResolveRequest)
+            and isinstance(result, ResolveResult)
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="check",
+                        description="Check this edge",
+                        command=("check", "--edge", request.edge_id),
+                        operation="check",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if (
             operation == "info"
             and isinstance(request, InfoRequest)
             and isinstance(result, InfoResult)
@@ -198,6 +240,66 @@ class OperatorActionProvider(ActionProvider):
 
     def explain(self, operation: str) -> Action | None:
         return None
+
+
+def _check_actions(request: EdgeCheckRequest, result: CheckCommandResult) -> ActionCollection:
+    """Return failure repair and bounded continuation actions for one health result."""
+    actions: list[Action] = []
+    if result._failed_edge_id is not None:
+        actions.extend(
+            (
+                Action(
+                    rel="show",
+                    description="Inspect the failed edge",
+                    command=("edge", "show", result._failed_edge_id),
+                    operation="edge.show",
+                ),
+                Action(
+                    rel="resolve",
+                    description="Resolve the failed edge target",
+                    command=("resolve", result._failed_edge_id),
+                    operation="resolve",
+                ),
+            )
+        )
+    if result.checks.page.next_cursor is not None:
+        command: list[str] = ["check"]
+        for edge_id in request.edge_ids:
+            command.extend(("--edge", edge_id))
+        if request.edge_type is not None:
+            command.extend(("--type", request.edge_type))
+        if request.criticality is not None:
+            command.extend(("--criticality", request.criticality))
+        if request.critical_only:
+            command.append("--critical-only")
+        command.extend(
+            (
+                "--timeout",
+                str(request.timeout),
+                "--collection",
+                "checks",
+                "--cursor",
+                "{cursor}",
+                "--limit",
+                str(request.limit),
+            )
+        )
+        actions.append(
+            Action(
+                rel="continue",
+                description="Continue checks",
+                command_template=tuple(command),
+                operation="check",
+                slots={
+                    "cursor": {
+                        "type": "string",
+                        "required": True,
+                        "source": "result.checks.page.next_cursor",
+                    }
+                },
+            )
+        )
+    return ActionCollection(items=tuple(actions), total=len(actions), returned=len(actions))
 
 
 def _host_apply_actions(request: HostApplyRequest, result: HostApplyResult) -> ActionCollection:
