@@ -611,10 +611,17 @@ def test_commands_delegate_missing_registry_to_json_boundary(
     # render JSON as a complete formatted document rather than a one-line blob.
     assert result.output.endswith("\n")
     assert payload["error"]["code"] == "input_load_failed"
-    assert payload["error"]["details"] == {
-        "source": "registry",
-        "path": "missing.yml",
-    }
+    if command_args[0] == "docs":
+        assert payload["error"]["details"] == {
+            "source": "registry",
+            "path": str((Path.cwd() / "missing.yml").resolve()),
+            "reason": "checkout_root_required",
+        }
+    else:
+        assert payload["error"]["details"] == {
+            "source": "registry",
+            "path": "missing.yml",
+        }
 
 
 def test_wrapper_and_click_object_have_identical_parse_errors(

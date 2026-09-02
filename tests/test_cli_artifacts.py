@@ -85,7 +85,7 @@ def _analyze_checkout(registry: Path, edges: Path) -> tuple[Path, Path]:
 
 def _artifact_sources(command: str, registry: Path, edges: Path) -> tuple[Path, Path]:
     """Return source paths matching each artifact command's input contract."""
-    if command == "analyze":
+    if command in {"analyze", "docs"}:
         return _analyze_checkout(registry, edges)
     return registry, edges
 
@@ -116,8 +116,8 @@ def test_artifact_commands_require_explicit_output(tmp_path: Path, command: str)
 
     assert result.exit_code == 2
     assert payload["error"]["code"] == "usage_error"
-    if command == "analyze":
-        assert payload["fix"] == "Run infralink help analyze."
+    if command in {"analyze", "docs"}:
+        assert payload["fix"] == f"Run infralink help {command}."
     else:
         assert "--output" in payload["fix"]
     assert payload["command"]["parsed"]["path"] == [command]
@@ -346,6 +346,7 @@ def test_artifact_commands_reject_preexisting_output_symlink(tmp_path: Path, com
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")
 def test_docs_does_not_overwrite_nested_artifact_symlink(tmp_path: Path) -> None:
     registry, edges = _write_topology(tmp_path)
+    registry, edges = _artifact_sources("docs", registry, edges)
     with CliRunner().isolated_filesystem(temp_dir=tmp_path):
         Path("generated").mkdir()
         Path("outside").write_text("unchanged", encoding="utf-8")
@@ -487,6 +488,47 @@ def test_analyze_continuation_replays_root_checkout_source(tmp_path: Path) -> No
     assert second.exit_code == 0
     assert replay.count("--registry") == 1
     assert replay.index("--registry") < replay.index("analyze")
+    second_payload = _payload(second)
+    assert second_payload["result"]["artifacts"]["page"]["returned"] == 1
+
+
+def test_docs_continuation_replays_root_checkout_source(tmp_path: Path) -> None:
+    registry, edges = _write_topology(tmp_path)
+    checkout, checkout_edges = _analyze_checkout(registry, edges)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        first = runner.invoke(
+            cli,
+            [
+                "--registry",
+                str(checkout),
+                "--edges",
+                str(checkout_edges),
+                "docs",
+                "--output",
+                "generated",
+                "--limit",
+                "1",
+            ],
+        )
+        first_payload = _payload(first)
+        continuation = next(
+            item
+            for item in first_payload["next_actions"]
+            if item["rel"] == "continue"
+            and item["bindings"]["cursor"]["source"] == "result.artifacts.page.next_cursor"
+        )
+        cursor = first_payload["result"]["artifacts"]["page"]["next_cursor"]
+        replay = [
+            cursor if item == "{cursor}" else item for item in shlex.split(continuation["command"])
+        ]
+        second = runner.invoke(cli, ["--output", "json", *replay[1:]])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert replay.count("--registry") == 1
+    assert replay.index("--registry") < replay.index("docs")
     second_payload = _payload(second)
     assert second_payload["result"]["artifacts"]["page"]["returned"] == 1
 
@@ -839,6 +881,7 @@ def test_docs_rejects_duplicate_generated_paths_before_writing(
     for host, canonical_name in zip(data["hosts"].values(), canonical_names, strict=True):
         host["canonical_name"] = canonical_name
     registry.write_text(yaml.safe_dump(data), encoding="utf-8")
+    registry, edges = _artifact_sources("docs", registry, edges)
 
     with CliRunner().isolated_filesystem(temp_dir=tmp_path):
         result = CliRunner().invoke(
