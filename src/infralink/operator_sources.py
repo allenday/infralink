@@ -119,9 +119,12 @@ def load_registry(request: SourceRequest) -> LoadedRegistry:
 def load_sources(request: SourceRequest) -> LoadedSources:
     """Load the selected registry checkout and its edge declaration."""
     loaded_registry = load_registry(request)
+    environment_edges = os.environ.get("INFRALINK_EDGES")
     edges_source_path = (
         request.edges.expanduser()
         if request.edges is not None
+        else Path(environment_edges).expanduser()
+        if environment_edges
         else resolve_registry_companion(loaded_registry.registry_source_path, filename="edges.yml")
     )
     edges_path = edges_source_path.resolve()

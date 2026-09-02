@@ -100,6 +100,68 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert mcp_document["command"]["resolved"]["output"] == "json"
 
 
+def test_host_list_actions_pin_the_configured_checkout_for_cli_and_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    manifest = tmp_path / "registry" / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "operator.yml"
+    config.write_text(f"registry: {tmp_path / 'registry'}\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_CONFIG", str(config))
+    monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
+    monkeypatch.delenv("INFRALINK_EDGES", raising=False)
+
+    click_result = CliRunner().invoke(cli, ["--output", "json", "host", "list"])
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool("host.list", {})
+        assert result.is_error is False
+        return result.structured_content
+
+    assert click_result.exit_code == 0, click_result.output
+    documents = (
+        (json.loads(click_result.output), " --output json"),
+        (asyncio.run(call_mcp()), ""),
+    )
+    for document, action_output in documents:
+        show = next(action for action in document["next_actions"] if action["rel"] == "show")
+        assert show["command"] == (
+            f"infralink{action_output} --registry {tmp_path / 'registry'} host show '{{host_id}}'"
+        )
+
+
+def test_direct_mcp_uses_the_documented_environment_edge_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    manifest = tmp_path / "registry" / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    selected_edges = tmp_path / "selected-edges.yml"
+    selected_edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(tmp_path / "registry"))
+    monkeypatch.setenv("INFRALINK_EDGES", str(selected_edges))
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool("edge.list", {})
+        assert result.is_error is False
+        return result.structured_content
+
+    document = asyncio.run(call_mcp())
+    assert document["command"]["resolved"]["registry"] == str(tmp_path / "registry")
+    assert document["command"]["resolved"]["edges"] == str(selected_edges)
+
+
 def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:
     """The diagnostic query is declared once, rather than reflected from Click."""
     definition = operator_surface.operations.describe("host.logs")

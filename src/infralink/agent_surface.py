@@ -49,7 +49,7 @@ class _MountedClickAdapter(ClickAdapter):
 
     def _payload(self, context: click.Context, plan: Any, params: dict[str, Any]) -> dict[str, Any]:
         payload = super()._payload(context, plan, params)
-        for field in plan.fields:
+        for field in (*self._shared_fields, *plan.fields):
             if field.source != "argv" or field.name not in {"registry", "edges"}:
                 continue
             value = params.get(field.name)
@@ -192,17 +192,20 @@ class InfralinkEnvelopeRenderer:
     output_model: type[BaseModel] = Envelope[Any]
 
     def render(self, invocation: Invocation) -> BaseModel:
-        action_sources = self._action_sources(invocation.request)
+        action_sources = _effective_source_values(invocation.request)
         if invocation.command is not None:
             # The adapter redacts sensitive request fields before rendering.
-            # A CLI command's explicit root selectors remain the authoritative,
-            # replayable source spelling for its HATEOAS actions.
-            action_sources = _command_declared_sources(invocation.command.raw)
+            # Explicit root selectors retain their replayable spelling. When
+            # there are no explicit selectors, use the resolved operation
+            # source so config and MCP actions stay pinned and replayable.
+            declared_sources = _command_declared_sources(invocation.command.raw)
+            if declared_sources:
+                action_sources = declared_sources
         if invocation.operation.name == "info":
             # Info's follow-ups inspect both topology documents. Preserve the
             # effective companion edge source even when callers selected only
             # a checkout root.
-            action_sources = _info_action_sources(invocation.request)
+            action_sources = dict(_info_action_sources(invocation.request) or {})
         next_actions = _project_actions(
             invocation.next_actions,
             action_sources,
@@ -491,10 +494,14 @@ def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any
             return {"edges": edges} if edges is not None else {}
     registry_path = Path(str(registry)).expanduser().resolve()
     if edges is None:
-        try:
-            edges = resolve_registry_companion(registry_path, filename="edges.yml")
-        except (OperationError, OSError):
-            return {"registry": registry_path}
+        environment_edges = os.environ.get("INFRALINK_EDGES")
+        if environment_edges:
+            edges = Path(environment_edges).expanduser()
+        else:
+            try:
+                edges = resolve_registry_companion(registry_path, filename="edges.yml")
+            except (OperationError, OSError):
+                return {"registry": registry_path}
     else:
         edges = Path(str(edges)).expanduser().resolve()
     return {"registry": registry_path, "edges": edges}
