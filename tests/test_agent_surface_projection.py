@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -160,6 +161,62 @@ def test_direct_mcp_uses_the_documented_environment_edge_selector(
     document = asyncio.run(call_mcp())
     assert document["command"]["resolved"]["registry"] == str(tmp_path / "registry")
     assert document["command"]["resolved"]["edges"] == str(selected_edges)
+
+
+def test_mixed_cli_registry_and_environment_edges_stay_replayable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    selected_edges = tmp_path / "selected-edges.yml"
+    selected_edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_EDGES", str(selected_edges))
+
+    result = CliRunner().invoke(
+        cli,
+        ["--output", "json", "--registry", str(registry), "host", "list"],
+    )
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.output)
+    show = next(action for action in document["next_actions"] if action["rel"] == "show")
+    assert show["command"] == (
+        f"infralink --output json --registry {registry} --edges {selected_edges} "
+        "host show '{host_id}'"
+    )
+
+
+def test_direct_mcp_resolves_relative_environment_edge_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    selected_edges = tmp_path / "selected-edges.yml"
+    selected_edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.setenv("INFRALINK_REGISTRY", str(registry))
+    monkeypatch.setenv("INFRALINK_EDGES", os.path.relpath(selected_edges, Path.cwd()))
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool("host.list", {})
+        assert result.is_error is False
+        return result.structured_content
+
+    document = asyncio.run(call_mcp())
+    show = next(action for action in document["next_actions"] if action["rel"] == "show")
+    assert f"--edges {selected_edges}" in show["command"]
 
 
 def test_host_logs_is_a_typed_operation_with_the_diagnostic_parameter() -> None:

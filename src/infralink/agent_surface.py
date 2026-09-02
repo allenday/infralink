@@ -195,12 +195,15 @@ class InfralinkEnvelopeRenderer:
         action_sources = _effective_source_values(invocation.request)
         if invocation.command is not None:
             # The adapter redacts sensitive request fields before rendering.
-            # Explicit root selectors retain their replayable spelling. When
+            # Explicit root selectors retain their resolved selection. When
             # there are no explicit selectors, use the resolved operation
             # source so config and MCP actions stay pinned and replayable.
             declared_sources = _command_declared_sources(invocation.command.raw)
             if declared_sources:
-                action_sources = declared_sources
+                # Preserve each explicitly selected source, while retaining
+                # independently resolved companion
+                # selectors (for example INFRALINK_EDGES with --registry).
+                action_sources = {**action_sources, **declared_sources}
         if invocation.operation.name == "info":
             # Info's follow-ups inspect both topology documents. Preserve the
             # effective companion edge source even when callers selected only
@@ -456,9 +459,9 @@ def _declared_source_argv(request: Mapping[str, Any] | None) -> list[str]:
     return argv
 
 
-def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, str]:
-    """Return only root selectors explicitly present in one CLI invocation."""
-    sources: dict[str, str] = {}
+def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, Path]:
+    """Return canonical root selectors explicitly present in one CLI invocation."""
+    sources: dict[str, Path] = {}
     index = 0
     names = {"--registry": "registry", "--edges": "edges"}
     while index < len(tokens):
@@ -469,12 +472,12 @@ def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, str]:
             index += 1
             continue
         if separator:
-            sources[source] = inline_value
+            sources[source] = Path(inline_value).expanduser().resolve()
             index += 1
             continue
         if index + 1 >= len(tokens):
             raise ValueError(f"Infralink command source {option} is missing its value")
-        sources[source] = tokens[index + 1]
+        sources[source] = Path(tokens[index + 1]).expanduser().resolve()
         index += 2
     return sources
 
@@ -496,7 +499,7 @@ def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any
     if edges is None:
         environment_edges = os.environ.get("INFRALINK_EDGES")
         if environment_edges:
-            edges = Path(environment_edges).expanduser()
+            edges = Path(environment_edges).expanduser().resolve()
         else:
             try:
                 edges = resolve_registry_companion(registry_path, filename="edges.yml")
