@@ -26,9 +26,7 @@ def test_public_host_help_exposes_the_complete_generated_operation_family() -> N
     result = CliRunner().invoke(cli, ["help", "host"])
 
     assert result.exit_code == 0, result.output
-    document = json.loads(
-        CliRunner().invoke(cli, ["--output", "json", "help", "host"]).output
-    )
+    document = json.loads(CliRunner().invoke(cli, ["--output", "json", "help", "host"]).output)
     assert {child["name"] for child in document["result"]["children"]} == {
         "apply",
         "bootstrap",

@@ -796,9 +796,7 @@ def test_controller_bootstrap_uses_invoking_seed_for_preservation_state(
     )
     monkeypatch.setenv("INFRALINK_CONTROLLER_IMAGE", "ghcr.io/example/controller:main")
 
-    state = _controller_bootstrap_state(
-        registry / "hosts", type("Target", (), {"uuid": HOST_ID})()
-    )
+    state = _controller_bootstrap_state(registry / "hosts", type("Target", (), {"uuid": HOST_ID})())
 
     assert state.controller_image == "ghcr.io/example/controller:main"
     assert state.registry_ref == "main"
@@ -850,9 +848,7 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
         "details": {
             "host": HOST_ID,
             "manifest_path": str(manifest),
-            "deployment_path": str(
-                registry / "hosts" / HOST_ID / "operations" / "deployment.yml"
-            ),
+            "deployment_path": str(registry / "hosts" / HOST_ID / "operations" / "deployment.yml"),
             "required_manifest_fields": [
                 "controller_bootstrap.registry_read_identity_secret.project",
                 "controller_bootstrap.registry_read_identity_secret.id",

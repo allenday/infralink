@@ -167,9 +167,7 @@ class OperatorActionProvider(ActionProvider):
         return None
 
 
-def _host_apply_actions(
-    request: HostApplyRequest, result: HostApplyResult
-) -> ActionCollection:
+def _host_apply_actions(request: HostApplyRequest, result: HostApplyResult) -> ActionCollection:
     """Return only registered, source-inheriting host operation follow-ups."""
     target_id = result.target.id
     if target_id is None:
