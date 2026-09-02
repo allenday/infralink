@@ -65,18 +65,19 @@ def test_release_validates_identity_and_absent_remote_state_before_building() ->
     for required in (
         "$${RELEASE_VERSION:?}",
         "$${CI_COMMIT_SHA}",
-        "git fetch --no-tags origin main",
-        "git rev-parse FETCH_HEAD",
+        "repos/$${CI_REPO}/git/ref/heads/main",
         "scripts/release.py validate",
         'RELEASE_TAG="v$${RELEASE_VERSION:?}"',
-        'git ls-remote --exit-code --tags origin "refs/tags/$${RELEASE_TAG}"',
+        "repos/$${CI_REPO}/git/ref/tags/$${RELEASE_TAG}",
         "repos/$${CI_REPO}/releases/tags/$${RELEASE_TAG}",
     ):
         assert required in text
+    assert "git fetch --no-tags origin main" not in text
+    assert "git ls-remote --exit-code --tags origin" not in text
     assert all(
         index < build_index
         for index, command in enumerate(commands)
-        if "validate" in command or "ls-remote" in command or "releases/tags" in command
+        if "validate" in command or "git/ref/" in command or "releases/tags" in command
     )
 
 
