@@ -219,6 +219,8 @@ def test_host_apply_dry_run_derives_each_core_transport_from_its_manifest(
     payload = yaml.safe_load(response.output)
     assert response.exit_code == 0
     assert_schema(payload, "host-apply")
+    assert payload["command"]["resolved"]["registry"] == str(registry)
+    assert payload["command"]["resolved"]["edges"] is None
     assert payload["result"] == {
         "dry_run": True,
         "ssh_host_identity": "passed",

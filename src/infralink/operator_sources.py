@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -11,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
 from infralink.operator_config import OperatorConfigError, configured_registry
+
+REGISTRY_COMPANION_SCAN_MAX_ENTRIES = 10_000
 
 
 def managed_runtime_registry_root() -> Path:
@@ -118,7 +122,7 @@ def load_sources(request: SourceRequest) -> LoadedSources:
     edges_source_path = (
         request.edges.expanduser()
         if request.edges is not None
-        else loaded_registry.registry_source_path / "network/main-dev/edges/edges.yml"
+        else resolve_registry_companion(loaded_registry.registry_source_path, filename="edges.yml")
     )
     edges_path = edges_source_path.resolve()
     if not edges_path.is_file():
@@ -126,7 +130,7 @@ def load_sources(request: SourceRequest) -> LoadedSources:
             "source_not_found",
             "Edge declaration source does not exist",
             details=({"source": "edges", "path": str(edges_path)},),
-            fix="Pass --edges or provide network/main-dev/edges/edges.yml in the registry checkout.",
+            fix="Pass --edges with a readable edge declaration file.",
         )
     try:
         edges = EdgeSet.load(edges_path)
@@ -233,6 +237,117 @@ def load_info_sources(request: SourceRequest) -> LoadedSources:
         edges_source_path=edges_source_path,
         registry=registry,
         edges=edges,
+    )
+
+
+def resolve_registry_companion(
+    root: Path,
+    *,
+    filename: str | None,
+    source: str = "edges",
+    predicate: Callable[[Path], bool] | None = None,
+    unique_by_parent: bool = False,
+) -> Path:
+    """Resolve one bounded companion declaration from a Registry checkout."""
+    source_label = "edge" if source == "edges" else source.replace("_", " ")
+    candidates: list[Path] = []
+    candidate_keys: set[Path] = set()
+    inspected = 0
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        inspected += 1
+        if inspected > REGISTRY_COMPANION_SCAN_MAX_ENTRIES:
+            raise _companion_scan_limit_error(root, source, filename)
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    inspected += 1
+                    if inspected > REGISTRY_COMPANION_SCAN_MAX_ENTRIES:
+                        raise _companion_scan_limit_error(root, source, filename)
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name != ".git":
+                            pending.append(Path(entry.path))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    candidate = Path(entry.path)
+                    if (filename is None or entry.name == filename) and (
+                        predicate is None or predicate(candidate)
+                    ):
+                        key = candidate.parent if unique_by_parent else candidate
+                        if key in candidate_keys:
+                            continue
+                        candidate_keys.add(key)
+                        candidates.append(candidate)
+                        if len(candidates) == 2:
+                            break
+        except OSError:
+            raise _companion_scan_error(root, source, filename) from None
+        if len(candidates) == 2:
+            break
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise OperationError(
+            "configuration_required",
+            f"Registry checkout has no {source_label} declaration",
+            details=(
+                {
+                    "source": source,
+                    "registry": str(root),
+                    "filename": filename,
+                    "reason": "missing",
+                },
+            ),
+            fix=(
+                f"Pass --{source.replace('_', '-')} with the declaration path or add exactly one "
+                f"{filename or 'matching declaration'} to the registry checkout."
+            ),
+        )
+    raise OperationError(
+        "configuration_required",
+        f"Registry checkout has ambiguous {source_label} declarations",
+        details=(
+            {"source": source, "registry": str(root), "filename": filename, "reason": "ambiguous"},
+        ),
+        fix=(
+            "Pass --edges with the intended edge declaration path."
+            if source == "edges"
+            else f"Pass --{source.replace('_', '-')} with the intended declaration path."
+        ),
+    )
+
+
+def _companion_scan_limit_error(root: Path, source: str, filename: str | None) -> OperationError:
+    return OperationError(
+        "configuration_required",
+        "Registry companion scan exceeded its fixed entry limit",
+        details=(
+            {
+                "source": source,
+                "registry": str(root),
+                "filename": filename,
+                "reason": "scan_limit_exceeded",
+            },
+        ),
+        fix=f"Pass --{source.replace('_', '-')} with the declaration path.",
+    )
+
+
+def _companion_scan_error(root: Path, source: str, filename: str | None) -> OperationError:
+    return OperationError(
+        "configuration_required",
+        "Registry companion source could not be scanned",
+        details=(
+            {
+                "source": source,
+                "registry": str(root),
+                "filename": filename,
+                "reason": "scan_failed",
+            },
+        ),
+        fix=f"Pass --{source.replace('_', '-')} with the declaration path.",
     )
 
 

@@ -17,7 +17,7 @@ from infralink.operator_sources import SourceRequest, load_registry, load_source
 from infralink.operator_surface import app_surface, operator_click_adapter, operator_surface
 
 
-def test_load_sources_resolves_registry_root_and_default_edge_companion(tmp_path: Path) -> None:
+def test_load_sources_discovers_one_declared_edge_file(tmp_path: Path) -> None:
     hosts = tmp_path / "hosts" / "11111111-1111-4111-8111-111111111111"
     hosts.mkdir(parents=True)
     (hosts / "manifest.yml").write_text(
@@ -25,7 +25,7 @@ def test_load_sources_resolves_registry_root_and_default_edge_companion(tmp_path
         "    canonical_name: host-1\n    status: provisioning\n",
         encoding="utf-8",
     )
-    edges = tmp_path / "network/main-dev/edges"
+    edges = tmp_path / "topology/production/declared"
     edges.mkdir(parents=True)
     (edges / "edges.yml").write_text("edges: []\n", encoding="utf-8")
 
@@ -102,10 +102,89 @@ def test_typed_operation_exit_taxonomy_is_unambiguous(code: str, expected: ExitC
 def test_load_sources_reports_a_missing_edge_declaration(tmp_path: Path) -> None:
     (tmp_path / "hosts").mkdir()
 
-    with pytest.raises(OperationError, match="Edge declaration source does not exist"):
+    with pytest.raises(OperationError, match="no edge declaration") as error:
         load_sources(SourceRequest(registry=tmp_path))
 
+    assert error.value.code == "configuration_required"
+    assert error.value.fix == (
+        "Pass --edges with the declaration path or add exactly one edges.yml to the registry checkout."
+    )
     assert load_registry(SourceRequest(registry=tmp_path)).registry_path == tmp_path.resolve()
+
+
+def test_load_sources_rejects_ambiguous_discovered_edge_files(tmp_path: Path) -> None:
+    (tmp_path / "hosts").mkdir()
+    first = tmp_path / "topology/first/edges.yml"
+    second = tmp_path / "topology/second/edges.yml"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_text("edges: []\n", encoding="utf-8")
+    second.write_text("edges: []\n", encoding="utf-8")
+
+    with pytest.raises(OperationError, match="ambiguous edge declarations") as error:
+        load_sources(SourceRequest(registry=tmp_path))
+
+    assert error.value.code == "configuration_required"
+    assert error.value.fix == "Pass --edges with the intended edge declaration path."
+
+
+def test_load_sources_keeps_an_explicit_edge_file_authoritative(tmp_path: Path) -> None:
+    (tmp_path / "hosts").mkdir()
+    for name in ("first", "second"):
+        candidate = tmp_path / "topology" / name / "edges.yml"
+        candidate.parent.mkdir(parents=True)
+        candidate.write_text("edges: []\n", encoding="utf-8")
+    explicit = tmp_path / "selected-edge-declaration.yml"
+    explicit.write_text("edges: []\n", encoding="utf-8")
+
+    loaded = load_sources(SourceRequest(registry=tmp_path, edges=explicit))
+
+    assert loaded.edges_path == explicit.resolve()
+
+
+def test_load_sources_fails_closed_when_companion_scan_exceeds_its_fixed_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "hosts").mkdir()
+    (tmp_path / "empty-one").mkdir()
+    (tmp_path / "empty-two").mkdir()
+    monkeypatch.setattr("infralink.operator_sources.REGISTRY_COMPANION_SCAN_MAX_ENTRIES", 2)
+
+    with pytest.raises(OperationError, match="fixed entry limit") as error:
+        load_sources(SourceRequest(registry=tmp_path))
+
+    assert error.value.code == "configuration_required"
+    assert error.value.details == (
+        {
+            "source": "edges",
+            "registry": str(tmp_path),
+            "filename": "edges.yml",
+            "reason": "scan_limit_exceeded",
+        },
+    )
+
+
+def test_load_sources_translates_companion_scan_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "hosts").mkdir()
+    monkeypatch.setattr(
+        "infralink.operator_sources.os.scandir",
+        lambda _path: (_ for _ in ()).throw(OSError("fixture scan failure")),
+    )
+
+    with pytest.raises(OperationError, match="could not be scanned") as error:
+        load_sources(SourceRequest(registry=tmp_path))
+
+    assert error.value.code == "configuration_required"
+    assert error.value.details == (
+        {
+            "source": "edges",
+            "registry": str(tmp_path),
+            "filename": "edges.yml",
+            "reason": "scan_failed",
+        },
+    )
 
 
 @pytest.mark.parametrize("relative", ["hosts", "legacy-registry.yml"])

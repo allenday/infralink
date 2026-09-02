@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Literal
@@ -34,13 +35,14 @@ from infralink.cli.main import (
     _emit,
     _root_source_argv,
     pass_context,
-    registry_companion,
+    registry_checkout_root,
 )
 from infralink.cli.output import ok_envelope
 from infralink.host_registry_state import HostManifestGitState, inspect_host_manifest
 from infralink.host_transport import SshReadinessTransport
 from infralink.observation.loader import load_observation_documents
 from infralink.observation.v2 import ObservationV2Document
+from infralink.operator_sources import resolve_registry_companion
 from infralink.operator_surface import DoctorBootstrapPlanRequest, doctor_host_bootstrap_plan
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
@@ -48,7 +50,6 @@ OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
 ADAPTER_BINDINGS_ENVVAR = "INFRALINK_ADAPTER_BINDINGS"
 GATUS_URL_ENVVAR = "INFRALINK_GATUS_URL"
 GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
-V2_OBSERVATION_RELATIVE = "service-catalog/v2"
 
 
 def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
@@ -161,6 +162,69 @@ def _result_status(
     return "unknown", "no_live_observation_evidence"
 
 
+def _declared_gatus_url(ctx: Context) -> str | None:
+    """Return the one HTTP(S) Gatus endpoint declared by the selected Registry."""
+    candidates: set[str] = set()
+    for host in ctx.registry:
+        service = host.services.get("gatus")
+        if not isinstance(service, dict):
+            continue
+        protocol = service.get("protocol")
+        port = service.get("port")
+        address = host.tailscale_ip or host.public_ip
+        if protocol not in {"http", "https"} or not isinstance(port, int) or not address:
+            continue
+        candidates.add(f"{protocol}://{address}:{port}")
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if len(candidates) > 1:
+        raise _configuration_required(ctx, "gatus_url", reason="ambiguous_registry_endpoint")
+    return None
+
+
+def _resolve_gatus_url(
+    ctx: Context, evidence: list[DoctorEvidence], configured: str | None
+) -> str | None:
+    """Prefer explicit Gatus input, otherwise use one Registry-declared endpoint."""
+    if configured is not None or not any(item.adapter == "gatus" for item in evidence):
+        return configured
+    return _declared_gatus_url(ctx)
+
+
+def _discover_registry_companion(
+    ctx: Context,
+    *,
+    filename: str | None,
+    source: str,
+    predicate: Callable[[Path], bool] | None = None,
+    unique_by_parent: bool = False,
+) -> Path | None:
+    """Find one optional Doctor input from the selected checkout without path defaults."""
+    root = registry_checkout_root(ctx.registry_path)
+    if root is None:
+        return None
+    try:
+        return resolve_registry_companion(
+            root,
+            filename=filename,
+            source=source,
+            predicate=predicate,
+            unique_by_parent=unique_by_parent,
+        )
+    except OperationError as error:
+        details = error.details[0] if error.details else {}
+        if details.get("reason") == "missing":
+            return None
+        raise _configuration_required(
+            ctx, source, reason=str(details.get("reason", "invalid"))
+        ) from None
+
+
+def _is_v2_profile(path: Path) -> bool:
+    """Recognize a V2 catalog directory even when its content is invalid."""
+    return path.parent.name == "v2" and path.suffix in {".yaml", ".yml"}
+
+
 def _doctor_prefix(
     ctx: Context,
     observation_plan: Path | None = None,
@@ -216,23 +280,30 @@ def _missing(
     )
 
 
-def _configuration_required(ctx: Context, source: str) -> CliFailure:
+def _configuration_required(ctx: Context, source: str, *, reason: str | None = None) -> CliFailure:
     labels = {
         "observation_plan": "Observation plan",
         "adapter_bindings": "Adapter bindings",
         "gatus_url": "Gatus URL",
+        "v2_observation_source": "V2 observation catalog",
     }
     envvars = {
         "observation_plan": OBSERVATION_PLAN_ENVVAR,
         "adapter_bindings": ADAPTER_BINDINGS_ENVVAR,
         "gatus_url": GATUS_URL_ENVVAR,
+        "v2_observation_source": None,
     }
+    configured_fix = (
+        "Keep exactly one infralink.observation/v2 profiles.yml catalog in the registry checkout."
+        if source == "v2_observation_source"
+        else f"Provide --{source.replace('_', '-')} or set {envvars[source]}"
+    )
     return CliFailure(
         code=ErrorCode.CONFIGURATION_REQUIRED,
         message=f"{labels[source]} configuration is required",
         exit_code=ExitCode.USAGE_ERROR,
-        fix=f"Provide --{source.replace('_', '-')} or set {envvars[source]}",
-        details={"source": source},
+        fix=configured_fix,
+        details={"source": source, **({"reason": reason} if reason is not None else {})},
         next_actions=[
             action("help", [*_root_source_argv(ctx), "help", "doctor"], "Show doctor usage"),
         ],
@@ -1102,15 +1173,15 @@ def doctor(
     target_ref: str | None,
 ) -> int:
     """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
-    observation_plan = observation_plan or registry_companion(
-        ctx.registry_path, "operations/observation/core-plan.json"
+    observation_plan = observation_plan or _discover_registry_companion(
+        ctx, filename="core-plan.json", source="observation_plan"
     )
-    adapter_bindings = adapter_bindings or registry_companion(
-        ctx.registry_path, "operations/observation/adapter-bindings.yml"
+    adapter_bindings = adapter_bindings or _discover_registry_companion(
+        ctx, filename="adapter-bindings.yml", source="adapter_bindings"
     )
     if observation_plan is not None and adapter_bindings is not None:
         _require_same_observer_source_directory(observation_plan, adapter_bindings)
-    v2_observation_source = registry_companion(ctx.registry_path, V2_OBSERVATION_RELATIVE)
+    v2_observation_source: Path | None = None
     if target_type is None:
         if target_ref is not None:
             raise click.UsageError("a target type is required")
@@ -1124,6 +1195,7 @@ def doctor(
         assert adapter_bindings is not None
         bindings = _load_adapter_bindings(adapter_bindings)
         coverage, evidence = _coverage(plan, bindings, None, "") if plan is not None else (None, [])
+        gatus_url = _resolve_gatus_url(ctx, evidence, gatus_url)
         if (
             not declaration_only
             and gatus_url is None
@@ -1168,6 +1240,9 @@ def doctor(
             ],
             observation_plan,
             adapter_bindings,
+            gatus_url,
+            gatus_token_env,
+            v2_observation_source,
         )
         return (
             0
@@ -1177,6 +1252,15 @@ def doctor(
 
     if target_ref is None:
         raise click.UsageError("a target reference is required")
+    if declaration_only and target_type == "host":
+        v2_profile = _discover_registry_companion(
+            ctx,
+            filename=None,
+            source="v2_observation_source",
+            predicate=_is_v2_profile,
+            unique_by_parent=True,
+        )
+        v2_observation_source = v2_profile.parent if v2_profile is not None else None
     static_v2_host_validation = (
         declaration_only and target_type == "host" and v2_observation_source is not None
     )
@@ -1203,6 +1287,7 @@ def doctor(
         adapter_bindings,
     )
     coverage, evidence = _coverage(plan, bindings, target_type, target_id)
+    gatus_url = _resolve_gatus_url(ctx, evidence, gatus_url)
     if (
         not declaration_only
         and gatus_url is None

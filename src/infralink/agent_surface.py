@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import agent_surface.adapters.click as agent_surface_click
 import click
+from agent_surface import OperationError
 from agent_surface.adapters.click import ClickAdapter
 from agent_surface.budgets import OutputBudget
 from agent_surface.outcomes import ActionProvider
@@ -22,6 +23,7 @@ from infralink import __version__
 from infralink.cli.contracts import Action, Binding, CommandContext, Envelope, ErrorDetail
 from infralink.cli.errors import ErrorCode, ExitCode
 from infralink.operator_config import OperatorConfigError, configured_registry
+from infralink.operator_sources import resolve_registry_companion
 
 if TYPE_CHECKING:
     from agent_surface import App, Invocation
@@ -433,7 +435,10 @@ def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any
             return {"edges": edges} if edges is not None else {}
     registry_path = Path(str(registry)).expanduser().resolve()
     if edges is None:
-        edges = registry_path / "network/main-dev/edges/edges.yml"
+        try:
+            edges = resolve_registry_companion(registry_path, filename="edges.yml")
+        except (OperationError, OSError):
+            return {"registry": registry_path}
     else:
         edges = Path(str(edges)).expanduser().resolve()
     return {"registry": registry_path, "edges": edges}
