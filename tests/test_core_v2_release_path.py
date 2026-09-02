@@ -276,18 +276,25 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     )
 
     verifier = CliRunner().invoke(
-        cli, ["--registry", str(release.registry_path), "host", "verifier", release.host_id]
+        cli, ["--registry", str(release.registry_path.parent), "host", "verifier", release.host_id]
     )
     dry_apply = CliRunner().invoke(
         cli,
-        ["--registry", str(release.registry_path), "host", "apply", release.host_id, "--dry-run"],
+        [
+            "--registry",
+            str(release.registry_path.parent),
+            "host",
+            "apply",
+            release.host_id,
+            "--dry-run",
+        ],
     )
     _add_ready_deployment_contract(release)
     doctor = CliRunner().invoke(
         cli,
         [
             "--registry",
-            str(release.registry_path),
+            str(release.registry_path.parent),
             "doctor",
             "--observation-plan",
             str(FIXTURES / "observation-plan.json"),
@@ -448,10 +455,10 @@ def test_host_verifier_marks_controller_manifests_unavailable_without_mixing_leg
         lambda request: nullcontext(Path("/tmp/core-v2-known-hosts")),
     )
     legacy_result = CliRunner().invoke(
-        cli, ["--registry", str(legacy.registry_path), "host", "verifier", HOST_ID]
+        cli, ["--registry", str(legacy.registry_path.parent), "host", "verifier", HOST_ID]
     )
     current_result = CliRunner().invoke(
-        cli, ["--registry", str(current_registry), "host", "verifier", HOST_ID]
+        cli, ["--registry", str(current_registry.parent), "host", "verifier", HOST_ID]
     )
 
     assert legacy_result.exit_code == 0
@@ -471,7 +478,14 @@ def test_release_path_rejects_legacy_contract_when_a_partial_v2_manifest_is_sele
     )
     response = CliRunner().invoke(
         cli,
-        ["--registry", str(release.registry_path), "host", "apply", release.host_id, "--dry-run"],
+        [
+            "--registry",
+            str(release.registry_path.parent),
+            "host",
+            "apply",
+            release.host_id,
+            "--dry-run",
+        ],
     )
 
     payload = yaml.safe_load(response.output)

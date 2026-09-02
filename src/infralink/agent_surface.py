@@ -460,7 +460,7 @@ def _declared_source_argv(request: Mapping[str, Any] | None) -> list[str]:
 
 
 def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, Path]:
-    """Return canonical root selectors explicitly present in one CLI invocation."""
+    """Return explicit root selectors with shell-home expansion for replay."""
     sources: dict[str, Path] = {}
     index = 0
     names = {"--registry": "registry", "--edges": "edges"}
@@ -472,12 +472,12 @@ def _command_declared_sources(tokens: tuple[str, ...]) -> dict[str, Path]:
             index += 1
             continue
         if separator:
-            sources[source] = Path(inline_value).expanduser().resolve()
+            sources[source] = Path(inline_value).expanduser()
             index += 1
             continue
         if index + 1 >= len(tokens):
             raise ValueError(f"Infralink command source {option} is missing its value")
-        sources[source] = Path(tokens[index + 1]).expanduser().resolve()
+        sources[source] = Path(tokens[index + 1]).expanduser()
         index += 2
     return sources
 

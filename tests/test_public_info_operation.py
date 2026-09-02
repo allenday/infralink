@@ -65,10 +65,13 @@ def test_info_click_and_mcp_share_the_registered_operation_and_actions(tmp_path:
     assert cli_payload["command"]["resolved"]["output"] == "json"
     assert cli_payload["command"]["resolved"]["registry"] == str(registry)
     assert cli_payload["result"] == mcp_payload["result"]
-    assert cli_payload["next_actions"] == mcp_payload["next_actions"]
     assert [item["command"] for item in cli_payload["next_actions"]] == [
-        f"infralink --registry {registry} --edges {registry / 'network/main-dev/edges/edges.yml'} host list",
-        f"infralink --registry {registry} --edges {registry / 'network/main-dev/edges/edges.yml'} edge list",
+        "infralink --output json " + item["command"].removeprefix("infralink ")
+        for item in mcp_payload["next_actions"]
+    ]
+    assert [item["command"] for item in cli_payload["next_actions"]] == [
+        f"infralink --output json --registry {registry} --edges {registry / 'network/main-dev/edges/edges.yml'} host list",
+        f"infralink --output json --registry {registry} --edges {registry / 'network/main-dev/edges/edges.yml'} edge list",
     ]
 
 
