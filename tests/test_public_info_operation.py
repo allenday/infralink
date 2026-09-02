@@ -61,9 +61,7 @@ def test_info_click_and_mcp_share_the_registered_operation_and_actions(tmp_path:
     assert cli_result.exit_code == 0, cli_result.output
     cli_payload = json.loads(cli_result.output)
     mcp_payload = asyncio.run(call_mcp())
-    assert cli_payload["command"]["raw"] == (
-        f"infralink --registry {registry} --output json info"
-    )
+    assert cli_payload["command"]["raw"] == (f"infralink --registry {registry} --output json info")
     assert cli_payload["command"]["resolved"]["output"] == "json"
     assert cli_payload["command"]["resolved"]["registry"] == str(registry)
     assert cli_payload["result"] == mcp_payload["result"]

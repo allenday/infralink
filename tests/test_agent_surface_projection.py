@@ -268,7 +268,12 @@ def test_renderer_fails_closed_for_truncated_hateoas_action_frontiers() -> None:
     ("path", "operation", "expected_result", "expected_action_rels"),
     [
         (["service", "list"], "service.list", {"items": ["api", "nginx"]}, ([], [])),
-        (["edge", "list"], "edge.list", {"items": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}, ([], [])),
+        (
+            ["edge", "list"],
+            "edge.list",
+            {"items": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]},
+            ([], []),
+        ),
         (
             ["info"],
             "info",
