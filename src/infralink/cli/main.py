@@ -29,7 +29,6 @@ from infralink.cli.contracts import (
     HelpSubcommand,
     OptionDescriptor,
     RootResult,
-    VersionResult,
 )
 from infralink.cli.errors import CliFailure, ErrorCode, ExitCode, internal_failure
 from infralink.cli.output import (
@@ -1555,10 +1554,12 @@ def help_command(path: tuple[str, ...]) -> None:
 @click.command(name="version")
 def version_command() -> None:
     """Show CLI and schema versions."""
+    from infralink.operator_surface import VersionRequest, version_operation
+
     _emit(
         ok_envelope(
             _context_for(path=["version"]),
-            VersionResult(version=__version__, cli_schema_version="infralink.cli/v1"),
+            version_operation(VersionRequest()),
             [],
         )
     )

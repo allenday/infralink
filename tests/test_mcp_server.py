@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from mcp import Client, ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from infralink import __version__
 from infralink.cli import command_plugins
 from infralink.cli.main import cli
 from infralink.health.checks import HealthCheckResult
@@ -101,6 +102,13 @@ def test_mcp_protocol_discovers_and_calls_infralink_command() -> None:
             assert result.is_error is False
             assert result.structured_content["schema_version"] == "infralink.cli/v1"
             assert result.structured_content["command"]["parsed"]["path"] == ["version"]
+
+            version = await client.call_tool("infralink_version", {})
+            assert version.is_error is False
+            assert version.structured_content["result"] == {
+                "version": __version__,
+                "cli_schema_version": "infralink.cli/v1",
+            }
 
             help_result = await client.call_tool("infralink_help", {"path": ["host"]})
             assert help_result.is_error is False
