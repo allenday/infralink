@@ -164,6 +164,38 @@ def test_release_attestation_inspection_uses_the_retained_immutable_contract(
     assert result.attestation.tag == "releases/core-v2/42"
 
 
+def test_release_publisher_request_inspection_uses_the_declared_immutable_document() -> None:
+    """Publisher-request inspection never invokes the trusted publisher."""
+    request = Path(__file__).resolve().parents[1] / "examples/release/publisher-request.v3.json"
+
+    result = asyncio.run(
+        release_surface.invoke("render-publisher-request", {"publisher_request": request})
+    )
+
+    assert result.publisher_request.schema_version == "infralink.publisher-request.v3"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {
+            "candidate": Path("candidate.json"),
+            "publisher_request": Path("publisher-request.json"),
+        },
+    ],
+)
+def test_release_publisher_request_preserves_retained_domain_input_errors(
+    payload: dict[str, Path],
+) -> None:
+    """Input-form failures retain release-specific code, details, and repair text."""
+    with pytest.raises(OperationError) as captured:
+        asyncio.run(release_surface.invoke("render-publisher-request", payload))
+
+    assert captured.value.code == "release_publisher_request_invalid"
+    assert captured.value.fix == "Provide a valid immutable release publisher-request document"
+
+
 @pytest.mark.parametrize(
     ("operation_code", "expected_code", "expected_exit"),
     [

@@ -47,6 +47,7 @@ from infralink.cli.contracts import (
     InfoResult,
     InfoSources,
     InfoSummary,
+    PublisherRequestResult,
     RegistryHostGetResult,
     RegistryHostIdentity,
     RegistryHostPatchResult,
@@ -565,6 +566,14 @@ class ReleaseAttestationRequest(_OperationModel):
     """Select one immutable publisher attestation document."""
 
     attestation: Path
+
+
+class ReleasePublisherRequest(_OperationModel):
+    """Select one rendered request or the bounded legacy rendering inputs."""
+
+    candidate: Path | None = None
+    admission: Path | None = None
+    publisher_request: Path | None = None
 
 
 class HostCreateAddress(_OperationModel):
@@ -1098,6 +1107,25 @@ def release_inspect_attestation_operation(
 
     try:
         return release._release_attestation_result(request.attestation)
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@release_surface.operation(  # type: ignore[type-var]
+    "render-publisher-request", summary="Inspect a release publisher request", read_only=True
+)
+def release_publisher_request_operation(
+    request: ReleasePublisherRequest,
+) -> PublisherRequestResult:
+    """Read or render a local request without invoking a trusted publisher."""
+    from infralink.cli import release
+
+    try:
+        return release._release_publisher_request_result(
+            request.candidate,
+            request.admission,
+            request.publisher_request,
+        )
     except Exception as error:
         _raise_operation_failure(error)
 
