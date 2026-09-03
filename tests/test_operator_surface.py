@@ -17,13 +17,16 @@ from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_
 from infralink.cli.operations import OperationRecord
 from infralink.operator_operations.doctor import DoctorBootstrapPlanRequest
 from infralink.operator_surface import (
+    ExplainRequest,
     HostBootstrapRequest,
     HostCreateRequest,
     OperationStatusRequest,
     RegistryHostGetRequest,
     RegistryHostPatchRequest,
     doctor_host_bootstrap_plan,
+    explain_operation,
     host_create_operation,
+    observation_surface,
     operation_status_operation,
     operator_click_adapter,
     operator_mcp_adapter,
@@ -610,3 +613,14 @@ def test_operation_status_is_discoverable_through_the_typed_mcp_adapter() -> Non
         None,
     }
     assert {branch.get("format") for branch in properties["edges"]["anyOf"]} == {"path", None}
+
+
+def test_observation_discovery_operations_preserve_the_typed_diagnostic_contract() -> None:
+    capability = asyncio.run(observation_surface.invoke("capabilities", {}))
+    assert capability.projections == ["observation", "secrets", "view", "readiness"]
+    explanation = explain_operation(ExplainRequest(error_code="schema-version-missing"))
+    assert explanation.code == "schema-version-missing"
+
+    with pytest.raises(OperationError) as captured:
+        explain_operation(ExplainRequest(error_code="not-a-real-code"))
+    assert captured.value.code == "diagnostic-code-not-found"
