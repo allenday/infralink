@@ -90,6 +90,128 @@ def test_release_inspect_uses_a_source_independent_typed_surface(tmp_path: Path)
     assert result.publisher.state == "unavailable"
 
 
+def test_secrets_inspect_uses_the_typed_registry_source_boundary(tmp_path: Path) -> None:
+    """Declared secret metadata remains bounded and never reads a provider."""
+    host_id = "11111111-1111-4111-8111-111111111111"
+    project = "33333333-3333-4333-8333-333333333333"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    bws_project: {project}\n",
+        encoding="utf-8",
+    )
+    edges = registry / "edges.yml"
+    edges.write_text(
+        "edges:\n"
+        "  - id: 22222222-2222-4222-8222-222222222222\n"
+        "    type: database\n"
+        "    from: {hosts: [], service: app}\n"
+        f"    to: {{host: {host_id}, service: postgres, port: 5432}}\n"
+        "    auth: {type: password, secret_ref: database-password}\n",
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        operator_surface.invoke("secrets.inspect", {"registry": registry, "edges": edges})
+    )
+
+    assert result.summary.total == 1
+    assert result.references.items[0].ref == "database-password"
+    assert result.references.items[0].project == project
+    assert result.references.items[0].present is None
+
+
+def test_secrets_inspect_preserves_bounded_navigation_and_repair_actions(
+    tmp_path: Path,
+) -> None:
+    """Click and MCP retain the offline inspect frontier through one action provider."""
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n"
+        "    bws_project: 33333333-3333-4333-8333-333333333333\n",
+        encoding="utf-8",
+    )
+    edges = [
+        {
+            "id": f"00000000-0000-4000-8000-{index:012d}",
+            "type": "database",
+            "from": {"hosts": [], "service": "app"},
+            "to": {"host": host_id, "service": "postgres", "port": 5432},
+            "auth": {"type": "password", "secret_ref": "database-password"},
+        }
+        for index in range(18)
+    ]
+    edges.append(
+        {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "type": "database",
+            "from": {"hosts": [], "service": "app"},
+            "to": {"host": host_id, "service": "postgres", "port": 5432},
+            "auth": {"type": "password", "secret_ref": "z-cache-password"},
+        }
+    )
+    edges_path = registry / "edges.yml"
+    edges_path.write_text(yaml.safe_dump({"edges": edges}), encoding="utf-8")
+
+    click_result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "--registry",
+            str(registry),
+            "--edges",
+            str(edges_path),
+            "secrets",
+            "inspect",
+            "--limit",
+            "1",
+            "--format",
+            "json",
+        ],
+    )
+    assert click_result.exit_code == 0, click_result.output
+    click_payload = json.loads(click_result.output)
+    assert {action["rel"] for action in click_payload["next_actions"]} == {"continue", "inspect"}
+    assert any(
+        action["rel"] == "continue"
+        and action["bindings"]["cursor"]["source"] == "result.references.page.next_cursor"
+        for action in click_payload["next_actions"]
+    )
+    assert any(
+        action["rel"] == "inspect"
+        and "--ref database-password --collection locations" in action["command"]
+        for action in click_payload["next_actions"]
+    )
+
+    async def exercise_mcp() -> tuple[dict[str, object], dict[str, object]]:
+        async with Client(operator_mcp_adapter().server) as client:
+            inspected = await client.call_tool(
+                "secrets.inspect",
+                {"registry": str(registry), "edges": str(edges_path), "limit": 1},
+            )
+            missing = await client.call_tool(
+                "secrets.inspect",
+                {
+                    "registry": str(registry),
+                    "edges": str(edges_path),
+                    "requested_ref": "missing",
+                },
+            )
+        assert inspected.is_error is False
+        assert missing.is_error is True
+        return inspected.structured_content, missing.structured_content
+
+    inspected, missing = asyncio.run(exercise_mcp())
+    assert {action["rel"] for action in inspected["next_actions"]} == {"continue", "inspect"}
+    assert missing["error"]["code"] == "entity_not_found"
+    assert missing["next_actions"][0]["rel"] == "inspect"
+    assert "--registry" in missing["next_actions"][0]["command"]
+    assert missing["next_actions"][0]["command"].endswith("secrets inspect")
+
+
 def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_path: Path) -> None:
     """Candidate validation does not need a Registry checkout or provider."""
     candidate = tmp_path / "candidate.json"

@@ -18,6 +18,7 @@ from infralink.cli.contracts import (
     HostListResult,
     InfoResult,
     ResolveResult,
+    SecretsInspectResult,
 )
 from infralink.cli.operation_contracts import (
     HostApplyResult,
@@ -44,6 +45,7 @@ from infralink.operator_surface import (
     RegistryHostGetRequest,
     RegistryHostPatchOperationResult,
     RegistryHostPatchRequest,
+    SecretsInspectRequest,
 )
 
 
@@ -93,6 +95,25 @@ class OperatorActionProvider(ActionProvider):
                         description="List edge records",
                         command=("edge", "list"),
                         operation="edge.list",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if (
+            error is not None
+            and operation == "secrets.inspect"
+            and isinstance(request, SecretsInspectRequest)
+            and getattr(error, "code", None) == "entity_not_found"
+            and _error_entity_type(error) == "secret_reference"
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="inspect",
+                        description="Inspect declared secret references",
+                        command=("secrets", "inspect"),
+                        operation="secrets.inspect",
                     ),
                 ),
                 total=1,
@@ -222,6 +243,12 @@ class OperatorActionProvider(ActionProvider):
                 total=1,
                 returned=1,
             )
+        if (
+            operation == "secrets.inspect"
+            and isinstance(request, SecretsInspectRequest)
+            and isinstance(result, SecretsInspectResult)
+        ):
+            return _secrets_inspect_actions(request, result)
         if operation == "host.list" and isinstance(result, HostListResult) and result.items:
             return ActionCollection(
                 items=(
@@ -389,6 +416,80 @@ def _doctor_error_actions(error: Any) -> ActionCollection:
             operation="help",
         )
     return ActionCollection(items=(item,), total=1, returned=1)
+
+
+def _error_entity_type(error: Any) -> str | None:
+    """Read the one retained domain discriminator from typed error details."""
+    details: tuple[object, ...] = tuple(getattr(error, "details", ()))
+    if len(details) != 1:
+        return None
+    detail = details[0]
+    if not isinstance(detail, dict):
+        return None
+    entity_type = detail.get("entity_type")
+    return entity_type if isinstance(entity_type, str) else None
+
+
+def _secrets_inspect_actions(
+    request: SecretsInspectRequest,
+    result: SecretsInspectResult,
+) -> ActionCollection:
+    """Preserve bounded secret-inspection navigation without provider access."""
+    actions: list[Action] = []
+    for collection, page, source in (
+        (
+            "references",
+            result.references.page,
+            "result.references.page.next_cursor",
+        ),
+        (
+            "locations",
+            result.locations.page,
+            "result.locations.page.next_cursor",
+        ),
+    ):
+        if page.next_cursor is None:
+            continue
+        command = ["secrets", "inspect"]
+        if request.requested_ref is not None:
+            command.extend(("--ref", request.requested_ref))
+        command.extend(
+            ("--collection", collection, "--cursor", "{cursor}", "--limit", str(request.limit))
+        )
+        actions.append(
+            Action(
+                rel="continue",
+                description=f"Continue secret {collection}",
+                command_template=tuple(command),
+                operation="secrets.inspect",
+                slots={
+                    "cursor": {
+                        "type": "string",
+                        "required": True,
+                        "source": source,
+                    }
+                },
+            )
+        )
+    for reference in result.references.items:
+        if not reference.locations_truncated:
+            continue
+        actions.append(
+            Action(
+                rel="inspect",
+                description="Inspect all declaration locations",
+                command=(
+                    "secrets",
+                    "inspect",
+                    "--ref",
+                    reference.ref,
+                    "--collection",
+                    "locations",
+                ),
+                operation="secrets.inspect",
+            )
+        )
+    return ActionCollection(items=tuple(actions), total=len(actions), returned=len(actions))
 
 
 def _analyze_actions(request: AnalyzeRequest, result: AnalyzeResult) -> ActionCollection:

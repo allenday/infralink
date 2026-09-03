@@ -56,6 +56,7 @@ from infralink.cli.contracts import (
     ReleaseCandidateResult,
     ReleaseInspectResult,
     ResolveResult,
+    SecretsInspectResult,
     ServiceListResult,
     ServiceShowResult,
 )
@@ -576,6 +577,17 @@ class ReleasePublisherRequest(_OperationModel):
     publisher_request: Path | None = None
 
 
+class SecretsInspectRequest(SourceRequest):
+    """Select bounded declared secret-reference metadata from a Registry checkout."""
+
+    requested_ref: str | None = Field(
+        default=None, json_schema_extra={"cli": {"options": ["--ref"]}}
+    )
+    limit: int = Field(default=20, ge=1, le=1000)
+    cursor: str | None = None
+    collection: str | None = None
+
+
 class HostCreateAddress(_OperationModel):
     field: Literal["tailscale_ip", "tailscale_name"]
     value: str
@@ -913,6 +925,33 @@ def registry_host_patch_operation(
             changes=[RegistryMutation(**change) for change in changes],
         )
         result._checkout = checkout
+        return result
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "secrets.inspect", summary="Inspect declared secret-reference metadata", read_only=True
+)
+def secrets_inspect_operation(request: SecretsInspectRequest) -> SecretsInspectResult:
+    """Reuse the retained offline collector without loading a secret provider."""
+    from infralink.cli import secrets
+    from infralink.cli.main import Context
+
+    sources = load_sources(request)
+    context = Context()
+    context.registry_path = sources.registry_path
+    context.edges_path = sources.edges_path
+    context._registry = sources.registry
+    context._edges = sources.edges
+    try:
+        result, _statuses = secrets._inspect_result(
+            context,
+            requested_ref=request.requested_ref,
+            limit=request.limit,
+            cursor=request.cursor,
+            collection=request.collection,
+        )
         return result
     except Exception as error:
         _raise_operation_failure(error)

@@ -129,6 +129,64 @@ def _fingerprint(
     )
 
 
+def _inspect_result(
+    ctx: Context,
+    *,
+    requested_ref: str | None,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> tuple[SecretsInspectResult, list[SecretReferenceStatus]]:
+    """Build offline declared-secret metadata shared by public transports."""
+    selected_collection = _active_collection(collection, cursor, _COLLECTIONS)
+    fingerprint = _fingerprint(ctx, requested_ref=requested_ref)
+    offset = _page_offset(
+        command="secrets inspect",
+        collection=selected_collection,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    references = _select_references(ctx, requested_ref)
+    statuses = [_status(item, include_preview=True) for item in references]
+    all_locations = (
+        sorted(
+            {
+                (location.source, location.path): location
+                for item in references
+                for location in _locations(item)
+            }.values(),
+            key=lambda item: (item.source, item.path),
+        )
+        if requested_ref is not None
+        else []
+    )
+    result = SecretsInspectResult(
+        references=page_items(
+            statuses,
+            limit=limit,
+            offset=offset if selected_collection == "references" else 0,
+            next_cursor=None,
+        ),
+        locations=page_items(
+            all_locations,
+            limit=limit,
+            offset=offset if selected_collection == "locations" else 0,
+            next_cursor=None,
+        ),
+        summary=_summary(statuses),
+    )
+    _attach_next_cursors(
+        result,
+        command="secrets inspect",
+        collections=_COLLECTIONS,
+        selected=selected_collection,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    return result, statuses
+
+
 def _provider_failure(code: ErrorCode, *, missing_sdk: bool = False) -> CliFailure:
     actions = []
     fix = "Verify hosted provider configuration and retry"
@@ -246,51 +304,12 @@ def inspect_secrets(
     collection: str | None,
 ) -> None:
     """Inspect declared secret references without provider access."""
-    selected_collection = _active_collection(collection, cursor, _COLLECTIONS)
-    fingerprint = _fingerprint(ctx, requested_ref=requested_ref)
-    offset = _page_offset(
-        command="secrets inspect",
-        collection=selected_collection,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    references = _select_references(ctx, requested_ref)
-    statuses = [_status(item, include_preview=True) for item in references]
-    all_locations = (
-        sorted(
-            {
-                (location.source, location.path): location
-                for item in references
-                for location in _locations(item)
-            }.values(),
-            key=lambda item: (item.source, item.path),
-        )
-        if requested_ref is not None
-        else []
-    )
-    result = SecretsInspectResult(
-        references=page_items(
-            statuses,
-            limit=limit,
-            offset=offset if selected_collection == "references" else 0,
-            next_cursor=None,
-        ),
-        locations=page_items(
-            all_locations,
-            limit=limit,
-            offset=offset if selected_collection == "locations" else 0,
-            next_cursor=None,
-        ),
-        summary=_summary(statuses),
-    )
-    _attach_next_cursors(
-        result,
-        command="secrets inspect",
-        collections=_COLLECTIONS,
-        selected=selected_collection,
-        offset=offset,
+    result, statuses = _inspect_result(
+        ctx,
+        requested_ref=requested_ref,
         limit=limit,
-        fingerprint=fingerprint,
+        cursor=cursor,
+        collection=collection,
     )
     command_argv = ["secrets", "inspect"]
     if requested_ref is not None:
