@@ -45,6 +45,10 @@ from infralink.cli.contracts import (
     InfoResult,
     InfoSources,
     InfoSummary,
+    RegistryHostGetResult,
+    RegistryHostIdentity,
+    RegistryHostPatchResult,
+    RegistryMutation,
     ResolveResult,
     ServiceListResult,
     ServiceShowResult,
@@ -475,6 +479,22 @@ class HostCreateRequest(SourceRequest):
     write: bool = False
 
 
+class RegistryHostGetRequest(SourceRequest):
+    """Read one host declaration from an operator Registry checkout."""
+
+    host_ref: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+
+
+class RegistryHostPatchRequest(RegistryHostGetRequest):
+    """Preview or explicitly write existing host fields in an operator checkout."""
+
+    assignments: tuple[str, ...] = Field(
+        min_length=1,
+        json_schema_extra={"cli": {"options": ["--set"], "multiple": True}},
+    )
+    write: bool = False
+
+
 class OperationStatusRequest(SourceRequest):
     """Read one declared host-local reconcile operation."""
 
@@ -698,6 +718,84 @@ def host_create_operation(request: HostCreateRequest) -> HostCreateResult:
 
     try:
         return HostCreateResult.model_validate(create_host(request))
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+def _registry_authoring_context(request: SourceRequest) -> Any:
+    """Create the retained authoring evaluator context from one checkout-root input."""
+    from infralink.cli.main import Context
+
+    sources = load_registry(request)
+    context = Context()
+    context.registry_path = sources.registry_path
+    context.hosts_path = sources.registry_path / "hosts"
+    return context
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "registry.host.get", summary="Show an authoritative host declaration", read_only=True
+)
+def registry_host_get_operation(request: RegistryHostGetRequest) -> RegistryHostGetResult:
+    """Use the retained authoring evaluator through one typed source contract."""
+    from infralink.cli import registry_authoring
+
+    try:
+        context = _registry_authoring_context(request)
+        root = registry_authoring._registry_root(context)
+        host_id, manifest_path, _source, _document, declaration = registry_authoring._find_host(
+            root, request.host_ref
+        )
+        return RegistryHostGetResult(
+            host=RegistryHostIdentity(id=host_id, canonical_name=declaration.get("canonical_name")),
+            manifest_path=str(manifest_path),
+            declaration=registry_authoring._public_value(declaration),
+        )
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "registry.host.patch",
+    summary="Preview or write a typed host declaration mutation",
+    idempotent=True,
+)
+def registry_host_patch_operation(request: RegistryHostPatchRequest) -> RegistryHostPatchResult:
+    """Apply the retained mutation evaluator behind explicit typed write intent."""
+    from copy import deepcopy
+
+    from infralink.cli import registry_authoring
+
+    try:
+        context = _registry_authoring_context(request)
+        root = registry_authoring._registry_root(context, for_write=request.write)
+        host_id, manifest_path, source, document, _declaration = registry_authoring._find_host(
+            root, request.host_ref
+        )
+        assignments = registry_authoring._resolve_assignments(request.assignments)
+        candidate = deepcopy(document)
+        candidate_hosts = candidate.get("hosts")
+        assert isinstance(candidate_hosts, dict)
+        candidate_declaration = candidate_hosts[host_id]
+        assert isinstance(candidate_declaration, dict)
+        changes = [
+            registry_authoring._apply_assignment(candidate_declaration, assignment)
+            for assignment in assignments
+        ]
+        registry_authoring._validate_candidate(candidate, host_id)
+        if request.write:
+            registry_authoring._write_document(
+                manifest_path,
+                registry_authoring._replace_scalar_assignments(source, host_id, assignments),
+            )
+        return RegistryHostPatchResult(
+            mode="written" if request.write else "preview",
+            host=RegistryHostIdentity(
+                id=host_id, canonical_name=candidate_declaration.get("canonical_name")
+            ),
+            manifest_path=str(manifest_path),
+            changes=[RegistryMutation(**change) for change in changes],
+        )
     except Exception as error:
         _raise_operation_failure(error)
 

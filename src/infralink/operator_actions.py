@@ -17,6 +17,8 @@ from infralink.cli.contracts import (
     CheckCommandResult,
     HostListResult,
     InfoResult,
+    RegistryHostGetResult,
+    RegistryHostPatchResult,
     ResolveResult,
 )
 from infralink.cli.operation_contracts import (
@@ -40,6 +42,8 @@ from infralink.operator_surface import (
     HostLogsRequest,
     HostTargetRequest,
     InfoRequest,
+    RegistryHostGetRequest,
+    RegistryHostPatchRequest,
 )
 
 
@@ -152,6 +156,63 @@ class OperatorActionProvider(ActionProvider):
                         description="Show the created host declaration",
                         command=("host", "show", result.host_id),
                         operation="host.show",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if (
+            operation == "registry.host.get"
+            and isinstance(request, RegistryHostGetRequest)
+            and isinstance(result, RegistryHostGetResult)
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="patch",
+                        description="Preview a typed host declaration mutation",
+                        command_template=(
+                            "registry",
+                            "host",
+                            "patch",
+                            result.host.id,
+                            "--set",
+                            "{assignment}",
+                        ),
+                        operation="registry.host.patch",
+                        slots={
+                            "assignment": {
+                                "type": "string",
+                                "required": True,
+                                "source": "operator.input",
+                                "syntax": "PATH=YAML_VALUE | PATH=@text:FILE | PATH=@yaml:FILE",
+                            }
+                        },
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if (
+            operation == "registry.host.patch"
+            and isinstance(request, RegistryHostPatchRequest)
+            and isinstance(result, RegistryHostPatchResult)
+            and not request.write
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="write",
+                        description="Write this reviewed host declaration mutation",
+                        command=(
+                            "registry",
+                            "host",
+                            "patch",
+                            result.host.id,
+                            *sum((("--set", assignment) for assignment in request.assignments), ()),
+                            "--write",
+                        ),
+                        operation="registry.host.patch",
                     ),
                 ),
                 total=1,
