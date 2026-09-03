@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
@@ -53,7 +55,17 @@ from infralink.cli.contracts import (
     ServiceListResult,
     ServiceShowResult,
 )
-from infralink.cli.observation_contracts import CapabilitiesResult, ExplainResult
+from infralink.cli.observation_contracts import (
+    CapabilitiesResult,
+    ExplainResult,
+    ObservationPlan,
+    ObservationReadinessSuite,
+    ProjectObservationResult,
+    ProjectReadinessResult,
+    ProjectSecretsResult,
+    ProjectViewResult,
+    SourceProvenanceResult,
+)
 from infralink.cli.operation_contracts import (
     HostApplyPlan,
     HostApplyResult,
@@ -516,6 +528,20 @@ class ExplainRequest(_OperationModel):
     error_code: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
 
 
+class ObservationProjectRequest(_OperationModel):
+    """Shared immutable inputs for one offline observation projection."""
+
+    source: Path
+    as_of: datetime
+    registry_revision: str | None = None
+
+
+class ObservationProjectItemRequest(ObservationProjectRequest):
+    """Select one named view or readiness suite from a projected plan."""
+
+    item_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+
+
 class HostCreateAddress(_OperationModel):
     field: Literal["tailscale_ip", "tailscale_name"]
     value: str
@@ -910,6 +936,102 @@ def explain_operation(request: ExplainRequest) -> ExplainResult:
             details=({"available_codes": list(error.available_codes)},),
             fix="Use one of the available diagnostic codes.",
         ) from None
+
+
+@observation_surface.operation(  # type: ignore[type-var]
+    "project.observation", summary="Project one offline observation plan", read_only=True
+)
+def project_observation_operation(request: ObservationProjectRequest) -> ProjectObservationResult:
+    """Project the existing planner result without a parallel source model."""
+    from infralink.observation import ProjectValidationError, project
+
+    try:
+        projected = project(
+            [request.source], as_of=request.as_of, registry_revision=request.registry_revision
+        )
+    except ProjectValidationError as error:
+        first = error.report.diagnostics.diagnostics[0]
+        raise OperationError(
+            first.code,
+            first.message,
+            details=(asdict(error.report.diagnostics),),
+            fix="Validate the observation source and correct the reported diagnostic.",
+        ) from None
+    return ProjectObservationResult(
+        plan=ObservationPlan.model_validate(projected.plan.model_dump(mode="python")),
+        sources=tuple(SourceProvenanceResult(**asdict(source)) for source in projected.sources),
+    )
+
+
+def _project_observation_plan(request: ObservationProjectRequest) -> Any:
+    from infralink.observation import ProjectValidationError, project
+
+    try:
+        return project(
+            [request.source], as_of=request.as_of, registry_revision=request.registry_revision
+        ).plan
+    except ProjectValidationError as error:
+        first = error.report.diagnostics.diagnostics[0]
+        raise OperationError(
+            first.code,
+            first.message,
+            details=(asdict(error.report.diagnostics),),
+            fix="Validate the observation source and correct the reported diagnostic.",
+        ) from None
+
+
+@observation_surface.operation(  # type: ignore[type-var]
+    "project.secrets", summary="Project offline secret requirements", read_only=True
+)
+def project_secrets_operation(request: ObservationProjectRequest) -> ProjectSecretsResult:
+    """Return existing planner secret requirements without provider access."""
+    plan = _project_observation_plan(request)
+    return ProjectSecretsResult(
+        plan_digest=plan.plan_digest or "",
+        secret_requirements=plan.secret_requirements,
+        secret_bindings=plan.secret_bindings,
+        provider_aliases=plan.provider_aliases,
+        opaque_identities=plan.opaque_identities,
+    )
+
+
+@observation_surface.operation(  # type: ignore[type-var]
+    "project.view", summary="Project one offline operations view", read_only=True
+)
+def project_view_operation(request: ObservationProjectItemRequest) -> ProjectViewResult:
+    """Select one declared operations view from the existing planner output."""
+    plan = _project_observation_plan(request)
+    selected = next((item for item in plan.operations_views if item.id == request.item_id), None)
+    if selected is None:
+        raise OperationError(
+            "view-not-found",
+            "View not found",
+            details=({"view_id": request.item_id},),
+            fix="Use a declared operations view identifier.",
+        )
+    return ProjectViewResult(plan_digest=plan.plan_digest or "", view=selected)
+
+
+@observation_surface.operation(  # type: ignore[type-var]
+    "project.readiness", summary="Project one offline readiness suite", read_only=True
+)
+def project_readiness_operation(request: ObservationProjectItemRequest) -> ProjectReadinessResult:
+    """Select one declared readiness suite from the existing planner output."""
+    plan = _project_observation_plan(request)
+    selected = next((item for item in plan.readiness_suites if item.id == request.item_id), None)
+    if selected is None:
+        raise OperationError(
+            "readiness-not-found",
+            "Readiness not found",
+            details=({"readiness_id": request.item_id},),
+            fix="Use a declared readiness suite identifier.",
+        )
+    return ProjectReadinessResult(
+        plan_digest=plan.plan_digest or "",
+        readiness_suite=ObservationReadinessSuite.model_validate(
+            selected.model_dump(mode="python")
+        ),
+    )
 
 
 @operator_surface.operation(  # type: ignore[type-var]
