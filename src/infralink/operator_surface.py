@@ -117,6 +117,9 @@ class _OperationModel(BaseModel):
 
 
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
+# Observation discovery is source-independent. It stays a separate typed app
+# until #270 mounts it with its legacy envelope compatibility projection.
+observation_surface = App("infralink-observation")
 # The public MCP entrypoint starts with only the low-risk application reads.
 # This registry is the sole authority for their CLI and MCP projections.
 app_surface = App("infralink", shared_input_model=OperatorInputs)
@@ -503,11 +506,11 @@ class OperationStatusRequest(SourceRequest):
     operation_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
 
 
-class CapabilitiesRequest(SourceRequest):
+class CapabilitiesRequest(_OperationModel):
     """Read the fixed offline observation capability contract."""
 
 
-class ExplainRequest(SourceRequest):
+class ExplainRequest(_OperationModel):
     """Explain one stable observation diagnostic code."""
 
     error_code: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
@@ -548,7 +551,7 @@ class HostBootstrapOperationResult(_OperationModel):
     succeeded: bool
 
 
-@operator_surface.operation(  # type: ignore[type-var]
+@observation_surface.operation(  # type: ignore[type-var]
     "host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True
 )
 def host_bootstrap_operation(
@@ -585,7 +588,7 @@ def host_bootstrap_operation(
     )
 
 
-@operator_surface.operation(  # type: ignore[type-var]
+@observation_surface.operation(  # type: ignore[type-var]
     "host.logs", summary="Read bounded evidence from a host reconcile run", read_only=True
 )
 def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
@@ -855,7 +858,7 @@ def registry_host_patch_operation(
         _raise_operation_failure(error)
 
 
-@operator_surface.operation(  # type: ignore[type-var]
+@observation_surface.operation(  # type: ignore[type-var]
     "capabilities", summary="Describe the offline observation contract surface", read_only=True
 )
 def capabilities_operation(_request: CapabilitiesRequest) -> CapabilitiesResult:
@@ -889,7 +892,7 @@ def capabilities_operation(_request: CapabilitiesRequest) -> CapabilitiesResult:
     )
 
 
-@operator_surface.operation(  # type: ignore[type-var]
+@observation_surface.operation(  # type: ignore[type-var]
     "explain", summary="Explain one offline observation diagnostic", read_only=True
 )
 def explain_operation(request: ExplainRequest) -> ExplainResult:
@@ -902,7 +905,7 @@ def explain_operation(request: ExplainRequest) -> ExplainResult:
         return ExplainResult(**asdict(explain(request.error_code)))
     except DiagnosticCodeNotFoundError as error:
         raise OperationError(
-            "diagnostic_code_not_found",
+            "diagnostic-code-not-found",
             str(error),
             details=({"available_codes": list(error.available_codes)},),
             fix="Use one of the available diagnostic codes.",
