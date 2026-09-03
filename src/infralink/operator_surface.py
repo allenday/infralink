@@ -53,6 +53,7 @@ from infralink.cli.contracts import (
     ServiceListResult,
     ServiceShowResult,
 )
+from infralink.cli.observation_contracts import CapabilitiesResult, ExplainResult
 from infralink.cli.operation_contracts import (
     HostApplyPlan,
     HostApplyResult,
@@ -66,7 +67,6 @@ from infralink.cli.operation_contracts import (
     OperationSummary,
     TargetReconcileStatus,
 )
-from infralink.cli.observation_contracts import CapabilitiesResult, ExplainResult
 from infralink.cli.queries import entity_not_found, list_services
 from infralink.fleet.validation import FleetValidationResult, validate_fleet
 from infralink.observation.api import ProjectValidationError, project_v2_topology_diagram

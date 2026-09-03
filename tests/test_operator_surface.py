@@ -17,10 +17,10 @@ from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_
 from infralink.cli.operations import OperationRecord
 from infralink.operator_operations.doctor import DoctorBootstrapPlanRequest
 from infralink.operator_surface import (
+    ExplainRequest,
     HostBootstrapRequest,
     HostCreateRequest,
     OperationStatusRequest,
-    ExplainRequest,
     RegistryHostGetRequest,
     RegistryHostPatchRequest,
     doctor_host_bootstrap_plan,
