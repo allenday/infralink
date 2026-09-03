@@ -139,6 +139,16 @@ def test_doctor_derives_standard_sources_from_configured_registry(
                                 "project": "infra",
                                 "id": "registry-reader",
                             },
+                            "ghcr_auth": {
+                                "username_secret": {
+                                    "project": "infra",
+                                    "id": "ghcr-username",
+                                },
+                                "token_secret": {
+                                    "project": "infra",
+                                    "id": "ghcr-token",
+                                },
+                            },
                             "registry_repo_url": "ssh://git@example.invalid/infra-registry.git",
                             "registry_ref": "main",
                         },
