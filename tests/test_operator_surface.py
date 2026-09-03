@@ -20,9 +20,11 @@ from infralink.operator_surface import (
     HostBootstrapRequest,
     HostCreateRequest,
     OperationStatusRequest,
+    ExplainRequest,
     RegistryHostGetRequest,
     RegistryHostPatchRequest,
     doctor_host_bootstrap_plan,
+    explain_operation,
     host_create_operation,
     operation_status_operation,
     operator_click_adapter,
@@ -610,3 +612,27 @@ def test_operation_status_is_discoverable_through_the_typed_mcp_adapter() -> Non
         None,
     }
     assert {branch.get("format") for branch in properties["edges"]["anyOf"]} == {"path", None}
+
+
+def test_observation_discovery_operations_have_one_typed_click_and_mcp_surface() -> None:
+    capability = asyncio.run(operator_surface.invoke("capabilities", {}))
+    assert capability.projections == ["observation", "secrets", "view", "readiness"]
+    explanation = explain_operation(ExplainRequest(error_code="schema-version-missing"))
+    assert explanation.code == "schema-version-missing"
+
+    click_result = CliRunner().invoke(
+        operator_click_adapter().command(), ["capabilities", "--format", "json"]
+    )
+    assert click_result.exit_code == 0, click_result.output
+    assert json.loads(click_result.output)["result"]["projections"] == capability.projections
+
+    async def invoke_mcp() -> tuple[set[str], dict[str, object]]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+            response = await client.call_tool("capabilities", {})
+        assert response.is_error is False
+        return {tool.name for tool in tools.tools}, response.structured_content
+
+    tools, payload = asyncio.run(invoke_mcp())
+    assert {"capabilities", "explain"} <= tools
+    assert payload["result"]["projections"] == capability.projections

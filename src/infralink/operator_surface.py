@@ -66,6 +66,7 @@ from infralink.cli.operation_contracts import (
     OperationSummary,
     TargetReconcileStatus,
 )
+from infralink.cli.observation_contracts import CapabilitiesResult, ExplainResult
 from infralink.cli.queries import entity_not_found, list_services
 from infralink.fleet.validation import FleetValidationResult, validate_fleet
 from infralink.observation.api import ProjectValidationError, project_v2_topology_diagram
@@ -502,6 +503,16 @@ class OperationStatusRequest(SourceRequest):
     operation_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
 
 
+class CapabilitiesRequest(SourceRequest):
+    """Read the fixed offline observation capability contract."""
+
+
+class ExplainRequest(SourceRequest):
+    """Explain one stable observation diagnostic code."""
+
+    error_code: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+
+
 class HostCreateAddress(_OperationModel):
     field: Literal["tailscale_ip", "tailscale_name"]
     value: str
@@ -842,6 +853,60 @@ def registry_host_patch_operation(
         return result
     except Exception as error:
         _raise_operation_failure(error)
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "capabilities", summary="Describe the offline observation contract surface", read_only=True
+)
+def capabilities_operation(_request: CapabilitiesRequest) -> CapabilitiesResult:
+    """Return the established observation capability declaration."""
+    from infralink.observation.models import HealthEvaluator, LogEvaluator, MetricsEvaluator
+
+    return CapabilitiesResult(
+        document_schema_versions=["infralink.observation/v1", "infralink.observation/v2"],
+        plan_schema_versions=["infralink.plan.v1"],
+        input_schemas={
+            **{
+                name: f"infralink/schemas/observation/v1/{name}.json"
+                for name in (
+                    "profile",
+                    "instance",
+                    "application",
+                    "dependency",
+                    "secrets",
+                    "operations-view",
+                    "readiness-suite",
+                )
+            },
+            "v2-document": "infralink/schemas/observation/v2/document.json",
+        },
+        evaluator_types={
+            "health": sorted(value.value for value in HealthEvaluator),
+            "metrics": sorted(value.value for value in MetricsEvaluator),
+            "logs": sorted(value.value for value in LogEvaluator),
+        },
+        projections=["observation", "secrets", "view", "readiness"],
+    )
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "explain", summary="Explain one offline observation diagnostic", read_only=True
+)
+def explain_operation(request: ExplainRequest) -> ExplainResult:
+    """Resolve an existing diagnostic without introducing a second taxonomy."""
+    from dataclasses import asdict
+
+    from infralink.observation import DiagnosticCodeNotFoundError, explain
+
+    try:
+        return ExplainResult(**asdict(explain(request.error_code)))
+    except DiagnosticCodeNotFoundError as error:
+        raise OperationError(
+            "diagnostic_code_not_found",
+            str(error),
+            details=({"available_codes": list(error.available_codes)},),
+            fix="Use one of the available diagnostic codes.",
+        ) from None
 
 
 @operator_surface.operation(  # type: ignore[type-var]
