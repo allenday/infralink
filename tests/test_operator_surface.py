@@ -413,6 +413,27 @@ def test_registry_host_authoring_operations_preserve_preview_then_explicit_write
     assert f"--registry {registry}" in action_payload["next_actions"][0]["command"]
     assert action_payload["next_actions"][0]["command"].endswith("--set '{assignment}'")
 
+    preview_action = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "--registry",
+            str(registry),
+            "registry",
+            "host",
+            "patch",
+            "host-1",
+            "--set",
+            "status=active",
+            "--format",
+            "json",
+        ],
+    )
+    assert preview_action.exit_code == 0, preview_action.output
+    preview_payload = json.loads(preview_action.output)
+    assert preview_payload["next_actions"][0]["rel"] == "write"
+    assert f"--registry {registry}" in preview_payload["next_actions"][0]["command"]
+    assert preview_payload["next_actions"][0]["command"].endswith("status=active --write")
+
 
 def test_registry_host_patch_refuses_the_managed_runtime_checkout(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
