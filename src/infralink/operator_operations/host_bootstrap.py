@@ -58,11 +58,18 @@ def execute_bootstrap(ctx: Any, request: Any) -> tuple[Any, list[Action], bool]:
     projects = _bootstrap_declared_bws_projects(ctx, target)
     controller_state = _controller_bootstrap_state(ctx.hosts_path, target)
     if request.bws_token is not None:
+        ghcr_auth = controller_state.ghcr_auth
+        if ghcr_auth is None:
+            raise RuntimeError("controller bootstrap GHCR auth must be declared")
         _validate_bootstrap_bws_access(
             ctx,
             projects,
             request.bws_token,
-            controller_secret=controller_state.registry_read_identity_secret,
+            controller_secrets={
+                "registry_read_identity": controller_state.registry_read_identity_secret,
+                "ghcr_username": ghcr_auth.username_secret,
+                "ghcr_token": ghcr_auth.token_secret,
+            },
         )
     with _bootstrap_pinned_transport(ctx, target, address) as transport:
         probe = transport.probe(address)
@@ -341,7 +348,11 @@ def _bws_project_catalog(ctx: Context) -> dict[str, str]:
 
 
 def _validate_bootstrap_bws_access(
-    ctx: Context, aliases: tuple[str, ...], token: str, *, controller_secret: Any | None = None
+    ctx: Context,
+    aliases: tuple[str, ...],
+    token: str,
+    *,
+    controller_secrets: dict[str, Any] | None = None,
 ) -> None:
     catalog = _bws_project_catalog(ctx)
     missing = [alias for alias in aliases if alias not in catalog]
@@ -352,6 +363,21 @@ def _validate_bootstrap_bws_access(
             exit_code=ExitCode.INPUT_ERROR,
             fix="Declare only catalogued BWS project aliases",
             details={"projects": missing},
+        )
+    undeclared_secret_projects = sorted(
+        {
+            secret.project
+            for secret in (controller_secrets or {}).values()
+            if secret.project not in aliases
+        }
+    )
+    if undeclared_secret_projects:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Controller bootstrap secret project is not declared for this host",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Add every controller bootstrap secret project to the host bws_projects list",
+            details={"projects": undeclared_secret_projects},
         )
     environment = {**os.environ, "BWS_ACCESS_TOKEN": token}
     for alias in aliases:
@@ -371,15 +397,15 @@ def _validate_bootstrap_bws_access(
                 fix="Grant the declared machine account access to every bws_projects entry",
                 details={"project": alias},
             )
-    if controller_secret is not None:
+    for secret_name, controller_secret in (controller_secrets or {}).items():
         expected_project = catalog.get(controller_secret.project)
         if expected_project is None:
             raise CliFailure(
                 code=ErrorCode.CONFIGURATION_REQUIRED,
                 message="Controller bootstrap secret project is absent from the registry catalog",
                 exit_code=ExitCode.INPUT_ERROR,
-                fix="Declare a catalogued project for controller_bootstrap.registry_read_identity_secret",
-                details={"project": controller_secret.project},
+                fix="Declare a catalogued project for the controller bootstrap secret",
+                details={"secret": secret_name, "project": controller_secret.project},
             )
         completed = subprocess.run(
             ["bws", "secret", "get", controller_secret.id, "--output", "json"],
@@ -397,10 +423,14 @@ def _validate_bootstrap_bws_access(
         if actual_project != expected_project:
             raise CliFailure(
                 code=ErrorCode.PROVIDER_AUTHORIZATION_FAILED,
-                message="BWS token cannot read the declared controller registry secret",
+                message="BWS token cannot read a declared controller bootstrap secret",
                 exit_code=ExitCode.PROVIDER_ERROR,
                 fix="Grant the host machine account access to the declared secret project",
-                details={"project": controller_secret.project, "secret_id": controller_secret.id},
+                details={
+                    "secret": secret_name,
+                    "project": controller_secret.project,
+                    "secret_id": controller_secret.id,
+                },
             )
 
 
@@ -755,6 +785,7 @@ def _controller_bootstrap_state(
             {
                 "controller_image": controller_image,
                 "registry_read_identity_secret": bootstrap["registry_read_identity_secret"],
+                "ghcr_auth": bootstrap.get("ghcr_auth"),
                 "registry_repo_url": bootstrap["registry_repo_url"],
                 "registry_ref": bootstrap["registry_ref"],
                 "registry_known_hosts": bootstrap["registry_known_hosts"],
@@ -798,6 +829,14 @@ def _controller_bootstrap_state(
                 )
             ],
         ) from None
+    if state.ghcr_auth is None:
+        raise CliFailure(
+            code=ErrorCode.CONFIGURATION_REQUIRED,
+            message="Controller bootstrap requires declared GHCR authentication references",
+            exit_code=ExitCode.INPUT_ERROR,
+            fix="Declare controller_bootstrap.ghcr_auth with username and token secret references",
+            details={"host": target.uuid, "missing": ["controller_bootstrap.ghcr_auth"]},
+        )
     return state
 
 

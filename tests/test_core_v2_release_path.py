@@ -189,6 +189,16 @@ def _add_ready_deployment_contract(release: CoreReleasePath) -> None:
             "project": "example-project",
             "id": "registry-read-key",
         },
+        "ghcr_auth": {
+            "username_secret": {
+                "project": "example-project",
+                "id": "ghcr-username",
+            },
+            "token_secret": {
+                "project": "example-project",
+                "id": "ghcr-token",
+            },
+        },
         "registry_repo_url": "ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git",
         "registry_ref": "refs/heads/main",
     }
