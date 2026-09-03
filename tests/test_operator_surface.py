@@ -104,7 +104,7 @@ def test_secrets_inspect_uses_the_typed_registry_source_boundary(tmp_path: Path)
     edges = registry / "edges.yml"
     edges.write_text(
         "edges:\n"
-        "  - id: database-auth\n"
+        "  - id: 22222222-2222-4222-8222-222222222222\n"
         "    type: database\n"
         "    from: {hosts: [], service: app}\n"
         f"    to: {{host: {host_id}, service: postgres, port: 5432}}\n"
