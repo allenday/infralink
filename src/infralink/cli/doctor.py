@@ -949,6 +949,18 @@ def _host_deployment_contract(ctx: Context, host: Any) -> dict[str, Any] | None:
             "controller_bootstrap.registry_read_identity_secret.id": _nested_value(
                 bootstrap, "registry_read_identity_secret", "id"
             ),
+            "controller_bootstrap.ghcr_auth.username_secret.project": _nested_value(
+                bootstrap, "ghcr_auth", "username_secret", "project"
+            ),
+            "controller_bootstrap.ghcr_auth.username_secret.id": _nested_value(
+                bootstrap, "ghcr_auth", "username_secret", "id"
+            ),
+            "controller_bootstrap.ghcr_auth.token_secret.project": _nested_value(
+                bootstrap, "ghcr_auth", "token_secret", "project"
+            ),
+            "controller_bootstrap.ghcr_auth.token_secret.id": _nested_value(
+                bootstrap, "ghcr_auth", "token_secret", "id"
+            ),
             "controller_bootstrap.registry_repo_url": _nested_value(bootstrap, "registry_repo_url"),
             "controller_bootstrap.registry_ref": _nested_value(bootstrap, "registry_ref"),
         }

@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from infralink.cli.contracts import (
     HostBootstrapAction,
+    HostBootstrapRequest,
+    HostControllerBootstrapSecretRef,
     HostControllerBootstrapState,
     HostReadinessCheck,
     HostReadinessResult,
@@ -729,6 +731,101 @@ def test_controller_bootstrap_requires_a_registry_with_a_structured_remediation(
     )
 
 
+def test_controller_bootstrap_requires_declared_ghcr_auth(tmp_path: Path) -> None:
+    registry = tmp_path
+    manifest = registry / "hosts" / HOST_ID / "manifest.yml"
+    deployment = registry / "hosts" / HOST_ID / "operations" / "deployment.yml"
+    deployment.parent.mkdir(parents=True)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        "    controller_bootstrap:\n"
+        "      registry_read_identity_secret:\n"
+        "        project: fleet\n"
+        "        id: 11111111-1111-4111-8111-111111111111\n"
+        "      registry_repo_url: ssh://git@example.invalid:2222/registry.git\n"
+        "      registry_ref: main\n"
+        "      registry_known_hosts: git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/\n",
+        encoding="utf-8",
+    )
+    deployment.write_text(
+        "controller:\n  image:\n    repository: ghcr.io/example/controller\n    tag: main\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliFailure) as raised:
+        _controller_bootstrap_state(registry / "hosts", type("Target", (), {"uuid": HOST_ID})())
+
+    assert raised.value.code is ErrorCode.CONFIGURATION_REQUIRED
+    assert raised.value.details["missing"] == ["controller_bootstrap.ghcr_auth"]
+
+
+def test_controller_bootstrap_projects_ghcr_auth_references() -> None:
+    state = HostControllerBootstrapState.model_validate(
+        {
+            "controller_image": "ghcr.io/example/controller:main",
+            "registry_read_identity_secret": {
+                "project": "fleet",
+                "id": "11111111-1111-4111-8111-111111111111",
+            },
+            "ghcr_auth": {
+                "username_secret": {
+                    "project": "fleet",
+                    "id": "22222222-2222-4222-8222-222222222222",
+                },
+                "token_secret": {
+                    "project": "fleet",
+                    "id": "33333333-3333-4333-8333-333333333333",
+                },
+            },
+            "registry_repo_url": "https://example.invalid/registry.git",
+            "registry_ref": "main",
+            "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
+        }
+    )
+    request = HostBootstrapRequest.model_validate(
+        {
+            "host_address": "100.64.68.83",
+            "host_uuid": HOST_ID,
+            "canonical_name": HOST_NAME,
+            "bootstrap_actions": ["bootstrap_infralink_controller"],
+            "controller_bootstrap": state,
+        }
+    )
+
+    assert request.ansible_extra_vars()["ghcr_username_secret_uuid"] == (
+        "22222222-2222-4222-8222-222222222222"
+    )
+    assert request.ansible_extra_vars()["ghcr_token_secret_project"] == "fleet"
+
+
+def test_controller_bootstrap_rejects_reusing_registry_identity_as_ghcr_credential() -> None:
+    with pytest.raises(ValidationError, match="must not reuse"):
+        HostControllerBootstrapState.model_validate(
+            {
+                "controller_image": "ghcr.io/example/controller:main",
+                "registry_read_identity_secret": {
+                    "project": "fleet",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                },
+                "ghcr_auth": {
+                    "username_secret": {
+                        "project": "fleet",
+                        "id": "11111111-1111-4111-8111-111111111111",
+                    },
+                    "token_secret": {
+                        "project": "fleet",
+                        "id": "33333333-3333-4333-8333-333333333333",
+                    },
+                },
+                "registry_repo_url": "https://example.invalid/registry.git",
+                "registry_ref": "main",
+                "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
+            }
+        )
+
+
 def test_controller_bootstrap_requires_declared_registry_known_hosts(tmp_path: Path) -> None:
     registry = tmp_path
     manifest = registry / "hosts" / HOST_ID / "manifest.yml"
@@ -778,6 +875,13 @@ def test_controller_bootstrap_uses_invoking_seed_for_preservation_state(
         "      registry_read_identity_secret:\n"
         "        project: fleet\n"
         "        id: 11111111-1111-4111-8111-111111111111\n"
+        "      ghcr_auth:\n"
+        "        username_secret:\n"
+        "          project: fleet\n"
+        "          id: 22222222-2222-4222-8222-222222222222\n"
+        "        token_secret:\n"
+        "          project: fleet\n"
+        "          id: 33333333-3333-4333-8333-333333333333\n"
         "      registry_repo_url: ssh://git@example.invalid:2222/registry.git\n"
         "      registry_ref: main\n"
         "      registry_known_hosts: git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/\n",
@@ -1020,6 +1124,76 @@ def test_bootstrap_bws_validation_uses_only_environment_for_the_token(
     ]
     assert token not in " ".join(calls[0][0])
     assert calls[0][1]["env"]["BWS_ACCESS_TOKEN"] == token
+
+
+def test_bootstrap_bws_validation_checks_declared_ghcr_secret_references(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    catalog = registry.parent / "ansible/inventory/bws_projects.yml"
+    catalog.parent.mkdir(parents=True)
+    project_id = "11111111-1111-4111-8111-111111111111"
+    catalog.write_text(f"projects:\n  fleet:\n    uuid: {project_id}\n", encoding="utf-8")
+    context = type("Context", (), {"registry_path": registry})()
+    token = "bws-token-not-for-output"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        output = json.dumps({"projectId": project_id}) if args[1:3] == ["secret", "get"] else ""
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", fake_run)
+
+    _validate_bootstrap_bws_access(
+        context,
+        ("fleet",),
+        token,
+        controller_secrets={
+            "ghcr_username": HostControllerBootstrapSecretRef(
+                project="fleet", id="22222222-2222-4222-8222-222222222222"
+            ),
+            "ghcr_token": HostControllerBootstrapSecretRef(
+                project="fleet", id="33333333-3333-4333-8333-333333333333"
+            ),
+        },
+    )
+
+    assert [call[3] for call in calls if call[1:3] == ["secret", "get"]] == [
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    ]
+    assert token not in " ".join(" ".join(call) for call in calls)
+
+
+def test_bootstrap_bws_validation_rejects_ghcr_secret_from_undeclared_project(
+    tmp_path: Path
+) -> None:
+    registry = tmp_path / "hosts"
+    catalog = registry.parent / "ansible/inventory/bws_projects.yml"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(
+        "projects:\n"
+        "  fleet:\n    uuid: 11111111-1111-4111-8111-111111111111\n"
+        "  elsewhere:\n    uuid: 22222222-2222-4222-8222-222222222222\n",
+        encoding="utf-8",
+    )
+    context = type("Context", (), {"registry_path": registry})()
+
+    with pytest.raises(CliFailure) as raised:
+        _validate_bootstrap_bws_access(
+            context,
+            ("fleet",),
+            "bws-token-not-for-output",
+            controller_secrets={
+                "ghcr_token": HostControllerBootstrapSecretRef(
+                    project="elsewhere", id="33333333-3333-4333-8333-333333333333"
+                )
+            },
+        )
+
+    assert raised.value.code is ErrorCode.CONFIGURATION_REQUIRED
+    assert raised.value.details["projects"] == ["elsewhere"]
 
 
 def test_controller_refresh_materializes_an_exact_detached_source(

@@ -114,14 +114,37 @@ class HostControllerBootstrapSecretRef(ContractModel):
     )
 
 
+class HostControllerBootstrapGhcrAuth(ContractModel):
+    """Non-secret BWS references needed before the first private controller pull."""
+
+    username_secret: HostControllerBootstrapSecretRef
+    token_secret: HostControllerBootstrapSecretRef
+
+    @model_validator(mode="after")
+    def require_distinct_secret_objects(self) -> HostControllerBootstrapGhcrAuth:
+        if self.username_secret == self.token_secret:
+            raise ValueError("GHCR username and token must use distinct secret references")
+        return self
+
+
 class HostControllerBootstrapState(ContractModel):
     """Non-secret desired inputs for the sole host controller bootstrap path."""
 
     controller_image: str = Field(min_length=1, max_length=512)
     registry_read_identity_secret: HostControllerBootstrapSecretRef
+    ghcr_auth: HostControllerBootstrapGhcrAuth | None = None
     registry_repo_url: str = Field(min_length=1, max_length=1024)
     registry_ref: str = Field(pattern=r"^[A-Za-z0-9._/-]{1,255}$")
     registry_known_hosts: str = Field(min_length=1, max_length=16384)
+
+    @model_validator(mode="after")
+    def require_distinct_bootstrap_secret_objects(self) -> HostControllerBootstrapState:
+        if self.ghcr_auth is not None and (
+            self.registry_read_identity_secret == self.ghcr_auth.username_secret
+            or self.registry_read_identity_secret == self.ghcr_auth.token_secret
+        ):
+            raise ValueError("GHCR credentials must not reuse the registry read-identity secret")
+        return self
 
     @field_validator("registry_known_hosts")
     @classmethod
@@ -215,6 +238,15 @@ class HostBootstrapRequest(ContractModel):
                     "registry_known_hosts": self.controller_bootstrap.registry_known_hosts,
                 }
             )
+            if self.controller_bootstrap.ghcr_auth is not None:
+                values.update(
+                    {
+                        "ghcr_username_secret_project": self.controller_bootstrap.ghcr_auth.username_secret.project,
+                        "ghcr_username_secret_uuid": self.controller_bootstrap.ghcr_auth.username_secret.id,
+                        "ghcr_token_secret_project": self.controller_bootstrap.ghcr_auth.token_secret.project,
+                        "ghcr_token_secret_uuid": self.controller_bootstrap.ghcr_auth.token_secret.id,
+                    }
+                )
         return values
 
 
