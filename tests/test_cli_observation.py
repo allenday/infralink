@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from infralink.cli.main import cli
+from infralink.operator_surface import CapabilitiesRequest, capabilities_operation
 
 SOURCE = """\
 schema_version: infralink.observation/v1
@@ -110,6 +111,16 @@ def test_project_observation_and_capabilities_are_offline_yaml(tmp_path: Path) -
     )
     assert "observation" in advertised["projections"]
     assert "redis-ready" in advertised["evaluator_types"]["health"]
+
+
+def test_capabilities_cli_delegates_to_the_typed_operation() -> None:
+    """The retained CLI leaf must not maintain a second capability result builder."""
+    expected = capabilities_operation(CapabilitiesRequest()).model_dump(mode="json")
+
+    result = CliRunner().invoke(cli, ["--output", "json", "capabilities"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["result"] == expected
 
 
 def test_observation_validate_accepts_declared_v2_source(tmp_path: Path) -> None:

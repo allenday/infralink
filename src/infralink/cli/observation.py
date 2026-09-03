@@ -16,7 +16,6 @@ import yaml
 from infralink.cli.actions import action, redact_argv, render_action
 from infralink.cli.contracts import Action, Binding
 from infralink.cli.observation_contracts import (
-    CapabilitiesResult,
     DiagnosticSetResult,
     ExplainResult,
     ObservationCommand,
@@ -300,33 +299,9 @@ def _project_failure(
 @click.pass_obj
 def capabilities(ctx: Any) -> int:
     """Describe the offline observation contract surface."""
-    from infralink.observation.models import HealthEvaluator, LogEvaluator, MetricsEvaluator
+    from infralink.operator_surface import CapabilitiesRequest, capabilities_operation
 
-    result = CapabilitiesResult(
-        document_schema_versions=["infralink.observation/v1", "infralink.observation/v2"],
-        plan_schema_versions=["infralink.plan.v1"],
-        input_schemas={
-            **{
-                name: f"infralink/schemas/observation/v1/{name}.json"
-                for name in (
-                    "profile",
-                    "instance",
-                    "application",
-                    "dependency",
-                    "secrets",
-                    "operations-view",
-                    "readiness-suite",
-                )
-            },
-            "v2-document": "infralink/schemas/observation/v2/document.json",
-        },
-        evaluator_types={
-            "health": sorted(evaluator.value for evaluator in HealthEvaluator),
-            "metrics": sorted(evaluator.value for evaluator in MetricsEvaluator),
-            "logs": sorted(evaluator.value for evaluator in LogEvaluator),
-        },
-        projections=["observation", "secrets", "view", "readiness"],
-    )
+    result = capabilities_operation(CapabilitiesRequest())
     _emit(ctx, _envelope(_command(["capabilities"], {}), result=result))
     return 0
 
