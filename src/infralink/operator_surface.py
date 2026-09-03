@@ -551,7 +551,7 @@ class HostBootstrapOperationResult(_OperationModel):
     succeeded: bool
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "host.bootstrap", summary="Plan or apply declared host bootstrap", idempotent=True
 )
 def host_bootstrap_operation(
@@ -588,7 +588,7 @@ def host_bootstrap_operation(
     )
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "host.logs", summary="Read bounded evidence from a host reconcile run", read_only=True
 )
 def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:

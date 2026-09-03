@@ -26,11 +26,11 @@ from infralink.operator_surface import (
     doctor_host_bootstrap_plan,
     explain_operation,
     host_create_operation,
+    observation_surface,
     operation_status_operation,
     operator_click_adapter,
     operator_mcp_adapter,
     operator_surface,
-    observation_surface,
     registry_host_get_operation,
     registry_host_patch_operation,
 )
