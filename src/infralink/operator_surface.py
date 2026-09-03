@@ -51,6 +51,8 @@ from infralink.cli.contracts import (
     RegistryHostIdentity,
     RegistryHostPatchResult,
     RegistryMutation,
+    ReleaseCandidateResult,
+    ReleaseInspectResult,
     ResolveResult,
     ServiceListResult,
     ServiceShowResult,
@@ -132,6 +134,9 @@ operator_surface = App("infralink", shared_input_model=OperatorInputs)
 # Observation discovery is source-independent. It stays a separate typed app
 # until #270 mounts it with its legacy envelope compatibility projection.
 observation_surface = App("infralink-observation")
+# Release inspection consumes immutable handoff documents and must not inherit
+# Registry checkout selection inputs.
+release_surface = App("infralink-release")
 # The public MCP entrypoint starts with only the low-risk application reads.
 # This registry is the sole authority for their CLI and MCP projections.
 app_surface = App("infralink", shared_input_model=OperatorInputs)
@@ -540,6 +545,19 @@ class ObservationProjectItemRequest(ObservationProjectRequest):
     """Select one named view or readiness suite from a projected plan."""
 
     item_id: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
+
+
+class ReleaseInspectRequest(_OperationModel):
+    """Select immutable local release validation and admission documents."""
+
+    release_validation: Path
+    admission: Path
+
+
+class ReleaseCandidateRequest(_OperationModel):
+    """Select one immutable release candidate document."""
+
+    candidate: Path
 
 
 class HostCreateAddress(_OperationModel):
@@ -1032,6 +1050,34 @@ def project_readiness_operation(request: ObservationProjectItemRequest) -> Proje
             selected.model_dump(mode="python")
         ),
     )
+
+
+@release_surface.operation(  # type: ignore[type-var]
+    "inspect", summary="Inspect an immutable local release handoff", read_only=True
+)
+def release_inspect_operation(request: ReleaseInspectRequest) -> ReleaseInspectResult:
+    """Reuse the retained release parser without adding a publisher path."""
+    from infralink.cli import release
+
+    try:
+        return release._release_inspect_result(request.release_validation, request.admission)
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@release_surface.operation(  # type: ignore[type-var]
+    "validate-candidate", summary="Validate an immutable release candidate", read_only=True
+)
+def release_validate_candidate_operation(
+    request: ReleaseCandidateRequest,
+) -> ReleaseCandidateResult:
+    """Validate candidate content without a provider, publisher, or Registry checkout."""
+    from infralink.cli import release
+
+    try:
+        return release._release_candidate_result(request.candidate)
+    except Exception as error:
+        _raise_operation_failure(error)
 
 
 @operator_surface.operation(  # type: ignore[type-var]
