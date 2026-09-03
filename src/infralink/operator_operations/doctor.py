@@ -64,10 +64,8 @@ def resolve_doctor_inputs(
 ) -> tuple[Path | None, Path | None, str | None]:
     """Apply the established explicit-input then environment precedence once."""
     return (
-        observation_plan
-        or _configured_path(OBSERVATION_PLAN_ENVVAR),
-        adapter_bindings
-        or _configured_path(ADAPTER_BINDINGS_ENVVAR),
+        observation_plan or _configured_path(OBSERVATION_PLAN_ENVVAR),
+        adapter_bindings or _configured_path(ADAPTER_BINDINGS_ENVVAR),
         gatus_url if gatus_url is not None else os.environ.get(GATUS_URL_ENVVAR),
     )
 

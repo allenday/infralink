@@ -1256,7 +1256,10 @@ def evaluate_doctor(
             v2_observation_source=v2_observation_source,
             exit_code=(
                 0
-                if status == "healthy" or declaration_only and coverage is not None and coverage.valid
+                if status == "healthy"
+                or declaration_only
+                and coverage is not None
+                and coverage.valid
                 else 1
             ),
         )

@@ -740,7 +740,9 @@ def operation_status_operation(request: OperationStatusRequest) -> OperationStat
     )
 
 
-@operator_surface.operation("doctor", summary="Inspect declared and live observation evidence", read_only=True)  # type: ignore[type-var]
+@operator_surface.operation(
+    "doctor", summary="Inspect declared and live observation evidence", read_only=True
+)  # type: ignore[type-var]
 def doctor_operation(request: DoctorRequest) -> OperationOutcome[DoctorOperationResult]:
     """Run the one doctor evaluator used by retained Click and future composed transports."""
     from infralink.cli.doctor import evaluate_doctor
