@@ -25,9 +25,7 @@ def test_info_has_click_and_mcp_parity(tmp_path: Path) -> None:
     edges.parent.mkdir(parents=True)
     edges.write_text("edges: []\n", encoding="utf-8")
 
-    cli_result = CliRunner().invoke(
-        cli, ["info", "--registry", str(tmp_path), "--format", "json"]
-    )
+    cli_result = CliRunner().invoke(cli, ["info", "--registry", str(tmp_path), "--format", "json"])
     assert cli_result.exit_code == 0, cli_result.output
 
     async def exercise() -> dict[str, object]:

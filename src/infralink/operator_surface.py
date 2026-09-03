@@ -183,6 +183,7 @@ def operator_mcp_adapter() -> MCPAdapter:
         render_options=operator_render_options(),
     )
 
+
 class HostListRequest(SourceRequest):
     """List hosts from one explicit registry source."""
 
@@ -905,9 +906,7 @@ def help_operation(request: HelpRequest) -> HelpResult:
     return HelpResult(
         path=list(selected),
         description=(
-            definition.summary
-            if definition is not None
-            else "Infralink public operation registry"
+            definition.summary if definition is not None else "Infralink public operation registry"
         ),
         arguments=[] if definition is None else _operation_arguments(definition.input_model),
         options=[] if definition is None else _operation_options(definition.input_model),
@@ -933,7 +932,9 @@ def _help_child_summary(definitions: dict[str, Any], selected: tuple[str, ...], 
     exact = definitions.get(prefix)
     if exact is not None:
         return str(exact.summary)
-    first = next(item for name, item in sorted(definitions.items()) if name.startswith(f"{prefix}."))
+    first = next(
+        item for name, item in sorted(definitions.items()) if name.startswith(f"{prefix}.")
+    )
     return str(first.summary)
 
 
@@ -1121,7 +1122,9 @@ def release_validate_candidate_operation(
 
 
 @operator_surface.operation(  # type: ignore[type-var]
-    "release.inspect-attestation", summary="Inspect an immutable release attestation", read_only=True
+    "release.inspect-attestation",
+    summary="Inspect an immutable release attestation",
+    read_only=True,
 )
 def release_inspect_attestation_operation(
     request: ReleaseAttestationRequest,
@@ -1136,7 +1139,9 @@ def release_inspect_attestation_operation(
 
 
 @operator_surface.operation(  # type: ignore[type-var]
-    "release.render-publisher-request", summary="Inspect a release publisher request", read_only=True
+    "release.render-publisher-request",
+    summary="Inspect a release publisher request",
+    read_only=True,
 )
 def release_publisher_request_operation(
     request: ReleasePublisherRequest,

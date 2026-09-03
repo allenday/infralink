@@ -71,8 +71,12 @@ def test_host_apply_dry_run_has_the_same_typed_plan_through_click_and_mcp(
     tmp_path: Path, monkeypatch
 ) -> None:
     registry = _registry_checkout(tmp_path)
-    monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: _apply_request())
-    monkeypatch.setattr("infralink.cli.operations.validate_target_ssh_identity", lambda _request: None)
+    monkeypatch.setattr(
+        "infralink.cli.operations.resolve_apply_request", lambda *_args: _apply_request()
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.validate_target_ssh_identity", lambda _request: None
+    )
 
     click_result = CliRunner().invoke(
         cli,
@@ -107,9 +111,7 @@ def test_host_apply_wait_dispatches_once_and_honors_the_typed_timeout(
 ) -> None:
     registry = _registry_checkout(tmp_path)
     request = _apply_request()
-    record = OperationRecord(
-        id=f"ssh/{HOST_ID}/8d6c4ad60e4a4b589fe35ad9e1760d56", state="queued"
-    )
+    record = OperationRecord(id=f"ssh/{HOST_ID}/8d6c4ad60e4a4b589fe35ad9e1760d56", state="queued")
     calls: list[object] = []
 
     class Provider:
@@ -149,8 +151,12 @@ def test_host_logs_selects_bounded_public_or_diagnostic_evidence_on_both_transpo
     tmp_path: Path, monkeypatch
 ) -> None:
     registry = _registry_checkout(tmp_path)
-    monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: _apply_request())
-    monkeypatch.setattr("infralink.cli.operations.inspect_target_logs", lambda _request: ["public line"])
+    monkeypatch.setattr(
+        "infralink.cli.operations.resolve_apply_request", lambda *_args: _apply_request()
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_target_logs", lambda _request: ["public line"]
+    )
     monkeypatch.setattr(
         "infralink.cli.operations.inspect_target_diagnostic", lambda _request: ["diagnostic line"]
     )

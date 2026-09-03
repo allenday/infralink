@@ -292,12 +292,12 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     dry_apply = CliRunner().invoke(
         cli,
         [
-                "host",
-                "apply",
-                release.host_id,
-                "--registry",
-                str(release.registry_path.parent),
-                "--dry-run",
+            "host",
+            "apply",
+            release.host_id,
+            "--registry",
+            str(release.registry_path.parent),
+            "--dry-run",
         ],
     )
     _add_ready_deployment_contract(release)
@@ -307,21 +307,21 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     doctor = CliRunner().invoke(
         cli,
         [
-                "doctor",
-                "--registry",
-                str(release.registry_path.parent),
-                "--edges",
-                str(edges),
+            "doctor",
+            "--registry",
+            str(release.registry_path.parent),
+            "--edges",
+            str(edges),
             "--observation-plan",
             str(FIXTURES / "observation-plan.json"),
             "--adapter-bindings",
             str(FIXTURES / "adapter-bindings.yml"),
             "--gatus-url",
             "http://gatus.test",
-                "--target-type",
-                "host",
-                "--target-ref",
-                release.host_id,
+            "--target-type",
+            "host",
+            "--target-ref",
+            release.host_id,
         ],
     )
 
@@ -480,7 +480,9 @@ def test_host_verifier_marks_controller_manifests_unavailable_without_mixing_leg
     )
 
     assert legacy_result.exit_code == 0
-    expected_invalid_exit = 1 if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2) else 0
+    expected_invalid_exit = (
+        1 if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2) else 0
+    )
     assert current_result.exit_code == expected_invalid_exit
     assert calls[0][calls[0].index("--") + 1] == "verifier"
     assert len(calls) == 1
@@ -498,11 +500,11 @@ def test_release_path_rejects_legacy_contract_when_a_partial_v2_manifest_is_sele
     response = CliRunner().invoke(
         cli,
         [
-                "host",
-                "apply",
-                release.host_id,
-                "--registry",
-                str(release.registry_path.parent),
+            "host",
+            "apply",
+            release.host_id,
+            "--registry",
+            str(release.registry_path.parent),
             "--dry-run",
         ],
     )

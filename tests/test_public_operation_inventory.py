@@ -78,7 +78,9 @@ def test_typed_help_is_generated_from_the_public_operation_registry() -> None:
         "status",
         "verifier",
     }
-    assert all(item.action.command.startswith("infralink help --path host.") for item in result.children)
+    assert all(
+        item.action.command.startswith("infralink help --path host.") for item in result.children
+    )
 
 
 def test_typed_help_has_mcp_parity() -> None:
