@@ -407,6 +407,108 @@ def _release_candidate_result(candidate: Path) -> ReleaseCandidateResult:
     return ReleaseCandidateResult(candidate=_candidate_output(_parse_candidate(candidate)))
 
 
+def _release_attestation_result(attestation: Path) -> ReleaseAttestationResult:
+    """Build the immutable publisher completion contract without provider access."""
+    value = _parse_attestation(attestation)
+    if isinstance(value, (ReleaseAttestationV2, ReleaseAttestationV3)):
+        output: ReleaseAttestation | ReleaseAttestationV2 | ReleaseAttestationV3 = value
+    elif isinstance(value, _LegacyAttestationDocument):
+        output = ReleaseAttestation(
+            release_identity=value.release_identity,
+            registry_commit=value.registry_commit,
+            controller_commit=value.controller_commit,
+            publisher_receipt=ReleasePublisherReceipt(
+                provider=value.publisher_receipt.provider,
+                repository=None,
+                run=value.publisher_receipt.run,
+            ),
+            tag=value.tag,
+            consumers=value.consumers,
+        )
+    else:
+        output = ReleaseAttestation(
+            release_identity=value.release.identity,
+            registry_commit=value.registry_commit,
+            controller_commit=value.controller_commit,
+            ci_receipt=ReleaseCiReceipt(**value.ci_receipt.model_dump()),
+            artifacts=[ReleaseArtifactBinding(**item.model_dump()) for item in value.artifacts],
+            publisher_receipt=ReleasePublisherReceipt(**value.publisher_receipt.model_dump()),
+            tag=value.tag.name,
+            tag_object_sha1=value.tag.object_sha1,
+            consumers=value.consumers,
+        )
+    return ReleaseAttestationResult(attestation=output)
+
+
+def _release_publisher_request_result(
+    candidate: Path | None,
+    admission: Path | None,
+    publisher_request: Path | None,
+) -> PublisherRequestResult:
+    """Read a rendered request or build the legacy immutable handoff."""
+    if publisher_request is not None:
+        if candidate is not None or admission is not None:
+            raise _invalid(
+                "publisher-request",
+                "must be supplied without legacy candidate or admission inputs",
+                {"path": str(publisher_request)},
+            )
+        return PublisherRequestResult(publisher_request=_parse_publisher_request(publisher_request))
+    if candidate is None or admission is None:
+        raise _invalid(
+            "publisher-request",
+            "requires --publisher-request or both legacy --candidate and --admission inputs",
+            {},
+        )
+    candidate_document = _parse_candidate(candidate)
+    try:
+        admission_document = _AdmissionDocument.model_validate(_load(admission, kind="admission"))
+    except (ValidationError, TypeError) as error:
+        raise _invalid(
+            "admission", "does not define a bounded selection", {"path": str(admission)}
+        ) from error
+    validation = _ValidationRecord(
+        schema_version="infralink.release-validation.v1",
+        release_identity=_candidate_identity(candidate_document),
+        registry_commit=candidate_document.registry_commit,
+        controller_commit=candidate_document.controller_commit,
+        annotated=True,
+        status="active",
+    )
+    _admission_for(validation, admission_document)
+    if admission_document.publisher.state != "eligible":
+        raise CliFailure(
+            code=ErrorCode.RELEASE_PUBLISHER_UNAVAILABLE,
+            message="Trusted release publisher is unavailable",
+            exit_code=ExitCode.NEGATIVE_RESULT,
+            fix="Provision and activate the protected publisher tracked by infra-registry issue #251",
+            next_actions=[
+                action(
+                    "publisher-prerequisites",
+                    ["infralink", "help", "release", "render-publisher-request"],
+                    "Review the immutable publisher request inputs after protected publisher activation",
+                )
+            ],
+        )
+    match = _IDENTITY.fullmatch(_candidate_identity(candidate_document))
+    assert match is not None
+    return PublisherRequestResult(
+        publisher_request=PublisherRequest(
+            schema_version="infralink.publisher-request.v1",
+            release_identity=_candidate_identity(candidate_document),
+            channel=match.group(1),
+            sequence=int(match.group(2)),
+            registry_commit=candidate_document.registry_commit,
+            controller_commit=candidate_document.controller_commit,
+            ci_receipt=ReleaseCiReceipt(**candidate_document.ci_receipt.model_dump()),
+            artifacts=[
+                ReleaseArtifactBinding(**item.model_dump()) for item in candidate_document.artifacts
+            ],
+            consumers=candidate_document.consumers,
+        )
+    )
+
+
 @click.group(name="release")
 def release() -> None:
     """Inspect validated immutable registry releases."""
@@ -489,97 +591,11 @@ def render_publisher_request(
     candidate: Path | None, admission: Path | None, publisher_request: Path | None
 ) -> None:
     """Inspect a registry-rendered versioned request, or render legacy v1 evidence only."""
-    if publisher_request is not None:
-        if candidate is not None or admission is not None:
-            raise _invalid(
-                "publisher-request",
-                "must be supplied without legacy candidate or admission inputs",
-                {"path": str(publisher_request)},
-            )
-        _emit(
-            ok_envelope(
-                _context_for(path=["release", "render-publisher-request"]),
-                PublisherRequestResult(
-                    publisher_request=_parse_publisher_request(publisher_request)
-                ),
-                [
-                    action(
-                        "inspect-attestation",
-                        [
-                            "infralink",
-                            "release",
-                            "inspect-attestation",
-                            "--attestation",
-                            "{attestation}",
-                        ],
-                        "Inspect the immutable publisher attestation after the trusted publisher completes",
-                        bindings={
-                            "attestation": Binding(
-                                type="string",
-                                required=True,
-                                source="trusted publisher completion record path",
-                            )
-                        },
-                    )
-                ],
-            )
-        )
-        return
-    if candidate is None or admission is None:
-        raise _invalid(
-            "publisher-request",
-            "requires --publisher-request or both legacy --candidate and --admission inputs",
-            {},
-        )
-    candidate_document = _parse_candidate(candidate)
-    try:
-        admission_document = _AdmissionDocument.model_validate(_load(admission, kind="admission"))
-    except (ValidationError, TypeError) as error:
-        raise _invalid(
-            "admission", "does not define a bounded selection", {"path": str(admission)}
-        ) from error
-    validation = _ValidationRecord(
-        schema_version="infralink.release-validation.v1",
-        release_identity=_candidate_identity(candidate_document),
-        registry_commit=candidate_document.registry_commit,
-        controller_commit=candidate_document.controller_commit,
-        annotated=True,
-        status="active",
-    )
-    _admission_for(validation, admission_document)
-    if admission_document.publisher.state != "eligible":
-        raise CliFailure(
-            code=ErrorCode.RELEASE_PUBLISHER_UNAVAILABLE,
-            message="Trusted release publisher is unavailable",
-            exit_code=ExitCode.NEGATIVE_RESULT,
-            fix="Provision and activate the protected publisher tracked by infra-registry issue #251",
-            next_actions=[
-                action(
-                    "publisher-prerequisites",
-                    ["infralink", "help", "release", "render-publisher-request"],
-                    "Review the immutable publisher request inputs after protected publisher activation",
-                )
-            ],
-        )
-    match = _IDENTITY.fullmatch(_candidate_identity(candidate_document))
-    assert match is not None
-    request = PublisherRequest(
-        schema_version="infralink.publisher-request.v1",
-        release_identity=_candidate_identity(candidate_document),
-        channel=match.group(1),
-        sequence=int(match.group(2)),
-        registry_commit=candidate_document.registry_commit,
-        controller_commit=candidate_document.controller_commit,
-        ci_receipt=ReleaseCiReceipt(**candidate_document.ci_receipt.model_dump()),
-        artifacts=[
-            ReleaseArtifactBinding(**item.model_dump()) for item in candidate_document.artifacts
-        ],
-        consumers=candidate_document.consumers,
-    )
+    result = _release_publisher_request_result(candidate, admission, publisher_request)
     _emit(
         ok_envelope(
             _context_for(path=["release", "render-publisher-request"]),
-            PublisherRequestResult(publisher_request=request),
+            result,
             [
                 action(
                     "inspect-attestation",
@@ -610,38 +626,11 @@ def render_publisher_request(
 )
 def inspect_attestation(attestation: Path) -> None:
     """Inspect a publisher completion record without contacting a provider."""
-    value = _parse_attestation(attestation)
-    if isinstance(value, (ReleaseAttestationV2, ReleaseAttestationV3)):
-        output: ReleaseAttestation | ReleaseAttestationV2 | ReleaseAttestationV3 = value
-    elif isinstance(value, _LegacyAttestationDocument):
-        output = ReleaseAttestation(
-            release_identity=value.release_identity,
-            registry_commit=value.registry_commit,
-            controller_commit=value.controller_commit,
-            publisher_receipt=ReleasePublisherReceipt(
-                provider=value.publisher_receipt.provider,
-                repository=None,
-                run=value.publisher_receipt.run,
-            ),
-            tag=value.tag,
-            consumers=value.consumers,
-        )
-    else:
-        output = ReleaseAttestation(
-            release_identity=value.release.identity,
-            registry_commit=value.registry_commit,
-            controller_commit=value.controller_commit,
-            ci_receipt=ReleaseCiReceipt(**value.ci_receipt.model_dump()),
-            artifacts=[ReleaseArtifactBinding(**item.model_dump()) for item in value.artifacts],
-            publisher_receipt=ReleasePublisherReceipt(**value.publisher_receipt.model_dump()),
-            tag=value.tag.name,
-            tag_object_sha1=value.tag.object_sha1,
-            consumers=value.consumers,
-        )
+    result = _release_attestation_result(attestation)
     _emit(
         ok_envelope(
             _context_for(path=["release", "inspect-attestation"]),
-            ReleaseAttestationResult(attestation=output),
+            result,
             [],
         )
     )

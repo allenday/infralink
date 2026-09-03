@@ -122,6 +122,80 @@ def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_pat
     assert result.candidate.consumers == ["citadel"]
 
 
+def test_release_attestation_inspection_uses_the_retained_immutable_contract(
+    tmp_path: Path,
+) -> None:
+    """Attestation inspection is a local read with no publisher invocation."""
+    attestation = tmp_path / "attestation.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-attestation.v1",
+                "release": {
+                    "identity": "releases/core-v2/42",
+                    "channel": "core-v2",
+                    "sequence": 42,
+                },
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "ci_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "576",
+                },
+                "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+                "publisher_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "600",
+                },
+                "tag": {"name": "releases/core-v2/42", "object_sha1": "d" * 40},
+                "consumers": ["citadel"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        release_surface.invoke("inspect-attestation", {"attestation": attestation})
+    )
+
+    assert result.attestation.release_identity == "releases/core-v2/42"
+    assert result.attestation.tag == "releases/core-v2/42"
+
+
+def test_release_publisher_request_inspection_uses_the_declared_immutable_document() -> None:
+    """Publisher-request inspection never invokes the trusted publisher."""
+    request = Path(__file__).resolve().parents[1] / "examples/release/publisher-request.v3.json"
+
+    result = asyncio.run(
+        release_surface.invoke("render-publisher-request", {"publisher_request": request})
+    )
+
+    assert result.publisher_request.schema_version == "infralink.publisher-request.v3"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {
+            "candidate": Path("candidate.json"),
+            "publisher_request": Path("publisher-request.json"),
+        },
+    ],
+)
+def test_release_publisher_request_preserves_retained_domain_input_errors(
+    payload: dict[str, Path],
+) -> None:
+    """Input-form failures retain release-specific code, details, and repair text."""
+    with pytest.raises(OperationError) as captured:
+        asyncio.run(release_surface.invoke("render-publisher-request", payload))
+
+    assert captured.value.code == "release_publisher_request_invalid"
+    assert captured.value.fix == "Provide a valid immutable release publisher-request document"
+
+
 @pytest.mark.parametrize(
     ("operation_code", "expected_code", "expected_exit"),
     [
