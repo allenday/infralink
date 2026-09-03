@@ -954,7 +954,7 @@ def project_observation_operation(request: ObservationProjectRequest) -> Project
         raise OperationError(
             first.code,
             first.message,
-            details=({"diagnostics": asdict(error.report.diagnostics)},),
+            details=(asdict(error.report.diagnostics),),
             fix="Validate the observation source and correct the reported diagnostic.",
         ) from None
     return ProjectObservationResult(
@@ -975,7 +975,7 @@ def _project_observation_plan(request: ObservationProjectRequest) -> Any:
         raise OperationError(
             first.code,
             first.message,
-            details=({"diagnostics": asdict(error.report.diagnostics)},),
+            details=(asdict(error.report.diagnostics),),
             fix="Validate the observation source and correct the reported diagnostic.",
         ) from None
 

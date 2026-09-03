@@ -21,8 +21,8 @@ from infralink.operator_surface import (
     ExplainRequest,
     HostBootstrapRequest,
     HostCreateRequest,
-    ObservationProjectRequest,
     ObservationProjectItemRequest,
+    ObservationProjectRequest,
     OperationStatusRequest,
     RegistryHostGetRequest,
     RegistryHostPatchRequest,
@@ -681,3 +681,13 @@ def test_observation_project_operation_uses_the_existing_planner_contract(tmp_pa
             )
         )
     assert missing_readiness.value.code == "readiness-not-found"
+
+    invalid = tmp_path / "invalid.yml"
+    invalid.write_text("schema_version: unsupported\n", encoding="utf-8")
+    with pytest.raises(OperationError) as invalid_projection:
+        project_observation_operation(
+            ObservationProjectRequest(
+                source=invalid, as_of=datetime(2026, 8, 4, tzinfo=timezone.utc)
+            )
+        )
+    assert "diagnostics" in invalid_projection.value.details[0]
