@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -20,6 +21,8 @@ from infralink.operator_surface import (
     ExplainRequest,
     HostBootstrapRequest,
     HostCreateRequest,
+    ObservationProjectRequest,
+    ObservationProjectItemRequest,
     OperationStatusRequest,
     RegistryHostGetRequest,
     RegistryHostPatchRequest,
@@ -31,6 +34,10 @@ from infralink.operator_surface import (
     operator_click_adapter,
     operator_mcp_adapter,
     operator_surface,
+    project_observation_operation,
+    project_readiness_operation,
+    project_secrets_operation,
+    project_view_operation,
     registry_host_get_operation,
     registry_host_patch_operation,
 )
@@ -624,3 +631,53 @@ def test_observation_discovery_operations_preserve_the_typed_diagnostic_contract
     with pytest.raises(OperationError) as captured:
         explain_operation(ExplainRequest(error_code="not-a-real-code"))
     assert captured.value.code == "diagnostic-code-not-found"
+
+
+def test_observation_project_operation_uses_the_existing_planner_contract(tmp_path: Path) -> None:
+    source = tmp_path / "observation.yml"
+    source.write_text(
+        "schema_version: infralink.observation/v1\n"
+        "service_profiles:\n"
+        "  - id: web\n"
+        "    endpoints:\n"
+        "      - {id: http, protocol: http, port: 8080}\n"
+        "    health:\n"
+        "      - {id: ready, endpoint_id: http, evaluator: http-status}\n"
+        "    signals:\n"
+        "      - {id: up, capability_id: ready, evaluator: capability-state}\n"
+        "hosts:\n"
+        "  - {id: 11111111-1111-4111-8111-111111111111}\n"
+        "service_instances:\n"
+        "  - id: frontend\n"
+        "    host_id: 11111111-1111-4111-8111-111111111111\n"
+        "    profile_id: web\n",
+        encoding="utf-8",
+    )
+    result = project_observation_operation(
+        ObservationProjectRequest(
+            source=source,
+            as_of=datetime(2026, 8, 4, tzinfo=timezone.utc),
+        )
+    )
+
+    assert result.plan.schema_version == "infralink.plan.v1"
+    assert result.sources[0].path == source.name
+
+    secrets = project_secrets_operation(
+        ObservationProjectRequest(source=source, as_of=datetime(2026, 8, 4, tzinfo=timezone.utc))
+    )
+    assert secrets.plan_digest
+    with pytest.raises(OperationError) as missing_view:
+        project_view_operation(
+            ObservationProjectItemRequest(
+                source=source, as_of=datetime(2026, 8, 4, tzinfo=timezone.utc), item_id="missing"
+            )
+        )
+    assert missing_view.value.code == "view-not-found"
+    with pytest.raises(OperationError) as missing_readiness:
+        project_readiness_operation(
+            ObservationProjectItemRequest(
+                source=source, as_of=datetime(2026, 8, 4, tzinfo=timezone.utc), item_id="missing"
+            )
+        )
+    assert missing_readiness.value.code == "readiness-not-found"
