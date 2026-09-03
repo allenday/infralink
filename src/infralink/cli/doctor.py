@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Literal
@@ -42,14 +43,33 @@ from infralink.host_registry_state import HostManifestGitState, inspect_host_man
 from infralink.host_transport import SshReadinessTransport
 from infralink.observation.loader import load_observation_documents
 from infralink.observation.v2 import ObservationV2Document
+from infralink.operator_operations.doctor import (
+    DoctorBootstrapPlanRequest,
+    doctor_host_bootstrap_plan,
+    resolve_doctor_inputs,
+)
 from infralink.operator_sources import resolve_registry_companion
-from infralink.operator_surface import DoctorBootstrapPlanRequest, doctor_host_bootstrap_plan
 
 DoctorKind = Literal["host", "service", "edge", "profile"]
 OBSERVATION_PLAN_ENVVAR = "INFRALINK_OBSERVATION_PLAN"
 ADAPTER_BINDINGS_ENVVAR = "INFRALINK_ADAPTER_BINDINGS"
 GATUS_URL_ENVVAR = "INFRALINK_GATUS_URL"
 GATUS_TOKEN_ENVVAR = "INFRALINK_GATUS_TOKEN"
+
+
+@dataclass(frozen=True)
+class DoctorInspection:
+    """Transport-neutral doctor evaluation plus its established CLI context."""
+
+    result: DoctorResult
+    path: list[str]
+    actions: list[Any]
+    observation_plan: Path | None
+    adapter_bindings: Path | None
+    gatus_url: str | None
+    gatus_token_env: str
+    v2_observation_source: Path | None
+    exit_code: int
 
 
 def _fetch_gatus_statuses(url: str, token: str | None) -> list[dict[str, Any]]:
@@ -1151,30 +1171,7 @@ def _verifier_action(ctx: Context, host_id: str) -> Any:
     )
 
 
-@click.command(name="doctor")
-@click.option(
-    "--observation-plan",
-    type=click.Path(path_type=Path),
-    default=None,
-    envvar=OBSERVATION_PLAN_ENVVAR,
-)
-@click.option(
-    "--adapter-bindings",
-    type=click.Path(path_type=Path),
-    default=None,
-    envvar=ADAPTER_BINDINGS_ENVVAR,
-)
-@click.option(
-    "--validate", "declaration_only", is_flag=True, help="Validate declarations without I/O"
-)
-@click.option("--gatus-url", default=None, envvar=GATUS_URL_ENVVAR)
-@click.option("--gatus-token-env", default=GATUS_TOKEN_ENVVAR)
-@click.argument(
-    "target_type", required=False, type=click.Choice(["host", "service", "edge", "profile"])
-)
-@click.argument("target_ref", required=False)
-@pass_context
-def doctor(
+def evaluate_doctor(
     ctx: Context,
     observation_plan: Path | None,
     adapter_bindings: Path | None,
@@ -1183,8 +1180,11 @@ def doctor(
     gatus_token_env: str,
     target_type: DoctorKind | None,
     target_ref: str | None,
-) -> int:
+) -> DoctorInspection:
     """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
+    observation_plan, adapter_bindings, gatus_url = resolve_doctor_inputs(
+        observation_plan, adapter_bindings, gatus_url
+    )
     observation_plan = observation_plan or _discover_registry_companion(
         ctx, filename="core-plan.json", source="observation_plan"
     )
@@ -1238,11 +1238,10 @@ def doctor(
             status=status if plan is not None else "unknown",
             reason=reason if plan is not None else "no_observation_evidence",
         )
-        _emit_result(
-            ctx,
-            result,
-            ["doctor"],
-            [
+        return DoctorInspection(
+            result=result,
+            path=["doctor"],
+            actions=[
                 action(
                     "help",
                     [*_root_source_argv(ctx), "help", "doctor"],
@@ -1250,16 +1249,19 @@ def doctor(
                 ),
                 action("list", [*_root_source_argv(ctx), "host", "list"], "List hosts"),
             ],
-            observation_plan,
-            adapter_bindings,
-            gatus_url,
-            gatus_token_env,
-            v2_observation_source,
-        )
-        return (
-            0
-            if status == "healthy" or declaration_only and coverage is not None and coverage.valid
-            else 1
+            observation_plan=observation_plan,
+            adapter_bindings=adapter_bindings,
+            gatus_url=gatus_url,
+            gatus_token_env=gatus_token_env,
+            v2_observation_source=v2_observation_source,
+            exit_code=(
+                0
+                if status == "healthy"
+                or declaration_only
+                and coverage is not None
+                and coverage.valid
+                else 1
+            ),
         )
 
     if target_ref is None:
@@ -1380,22 +1382,83 @@ def doctor(
                 "Inspect the uncommitted registry change",
             )
         )
+    return DoctorInspection(
+        result=result,
+        path=["doctor", target_type],
+        actions=actions,
+        observation_plan=observation_plan,
+        adapter_bindings=adapter_bindings,
+        gatus_url=gatus_url,
+        gatus_token_env=gatus_token_env,
+        v2_observation_source=v2_observation_source,
+        exit_code=(
+            0
+            if result.status == "healthy"
+            or declaration_only
+            and coverage.valid
+            and result.status != "unhealthy"
+            else 1
+        ),
+    )
+
+
+def _emit_inspection(ctx: Context, inspection: DoctorInspection) -> None:
     _emit_result(
         ctx,
-        result,
-        ["doctor", target_type],
-        actions,
+        inspection.result,
+        inspection.path,
+        inspection.actions,
+        inspection.observation_plan,
+        inspection.adapter_bindings,
+        inspection.gatus_url,
+        inspection.gatus_token_env,
+        inspection.v2_observation_source,
+    )
+
+
+@click.command(name="doctor")
+@click.option(
+    "--observation-plan",
+    type=click.Path(path_type=Path),
+    default=None,
+    envvar=OBSERVATION_PLAN_ENVVAR,
+)
+@click.option(
+    "--adapter-bindings",
+    type=click.Path(path_type=Path),
+    default=None,
+    envvar=ADAPTER_BINDINGS_ENVVAR,
+)
+@click.option(
+    "--validate", "declaration_only", is_flag=True, help="Validate declarations without I/O"
+)
+@click.option("--gatus-url", default=None, envvar=GATUS_URL_ENVVAR)
+@click.option("--gatus-token-env", default=GATUS_TOKEN_ENVVAR)
+@click.argument(
+    "target_type", required=False, type=click.Choice(["host", "service", "edge", "profile"])
+)
+@click.argument("target_ref", required=False)
+@pass_context
+def doctor(
+    ctx: Context,
+    observation_plan: Path | None,
+    adapter_bindings: Path | None,
+    declaration_only: bool,
+    gatus_url: str | None,
+    gatus_token_env: str,
+    target_type: DoctorKind | None,
+    target_ref: str | None,
+) -> int:
+    """Inspect observer evidence; inputs accept INFRALINK_OBSERVATION_PLAN and INFRALINK_ADAPTER_BINDINGS."""
+    inspection = evaluate_doctor(
+        ctx,
         observation_plan,
         adapter_bindings,
+        declaration_only,
         gatus_url,
         gatus_token_env,
-        v2_observation_source,
+        target_type,
+        target_ref,
     )
-    return (
-        0
-        if result.status == "healthy"
-        or declaration_only
-        and coverage.valid
-        and result.status != "unhealthy"
-        else 1
-    )
+    _emit_inspection(ctx, inspection)
+    return inspection.exit_code

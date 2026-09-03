@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
@@ -16,8 +15,19 @@ import click
 from agent_surface import App, OperationError, OperationOutcome
 from agent_surface.adapters.click import ClickAdapter
 from agent_surface.adapters.mcp import MCPAdapter
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
+from infralink.cli.contracts import (
+    Action as DoctorAction,
+)
 from infralink.cli.contracts import (
     AnalyzeResult,
     AppListResult,
@@ -25,6 +35,7 @@ from infralink.cli.contracts import (
     ArtifactResult,
     CheckCommandResult,
     DiagramProjectResult,
+    DoctorResult,
     DoctorTarget,
     EdgeListResult,
     EdgeShowResult,
@@ -63,6 +74,9 @@ from infralink.observation.topology_diagrams import (
 )
 from infralink.operator_operations.analyze import AnalyzeRequest, analyze_declared_registry
 from infralink.operator_operations.docs import DocsRequest, generate_declared_docs
+from infralink.operator_operations.doctor import (
+    doctor_host_bootstrap_plan as _doctor_host_bootstrap_plan,
+)
 from infralink.operator_operations.edge_health import (
     EdgeCheckRequest,
     EdgeResolveRequest,
@@ -94,17 +108,6 @@ from infralink.operator_sources import (
 
 class _OperationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class DoctorBootstrapPlanRequest(SourceRequest):
-    host_ref: str = Field(min_length=1)
-    ssh_host: str = Field(min_length=1)
-    declared_ssh_host: str = Field(min_length=1)
-
-
-class DoctorBootstrapPlanResult(_OperationModel):
-    argv: tuple[str, ...]
-    ssh_host: str
 
 
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
@@ -342,6 +345,33 @@ class EdgeListRequest(SourceRequest):
 
 class InfoRequest(SourceRequest):
     """Summarize one explicit registry source."""
+
+
+class DoctorRequest(SourceRequest):
+    """Inspect declared and live observation evidence for an optional target."""
+
+    observation_plan: Path | None = None
+    adapter_bindings: Path | None = None
+    declaration_only: bool = Field(
+        default=False, json_schema_extra={"cli": {"options": ["--validate"]}}
+    )
+    gatus_url: str | None = Field(default=None, min_length=1)
+    # This is an environment variable name, never the token value itself.
+    gatus_token_env: str = Field(default="INFRALINK_GATUS_TOKEN", min_length=1)
+    target_type: Literal["host", "service", "edge", "profile"] | None = None
+    target_ref: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def require_complete_target(self) -> DoctorRequest:
+        if (self.target_type is None) == (self.target_ref is None):
+            return self
+        raise ValueError("target_type and target_ref must be supplied together")
+
+
+class DoctorOperationResult(DoctorResult):
+    """Doctor result plus private typed action state for adapter projection."""
+
+    _actions: tuple[DoctorAction, ...] = PrivateAttr(default=())
 
 
 class FleetValidateRequest(SourceRequest):
@@ -710,6 +740,38 @@ def operation_status_operation(request: OperationStatusRequest) -> OperationStat
     )
 
 
+@operator_surface.operation(  # type: ignore[type-var]
+    "doctor", summary="Inspect declared and live observation evidence", read_only=True
+)
+def doctor_operation(request: DoctorRequest) -> OperationOutcome[DoctorOperationResult]:
+    """Run the one doctor evaluator used by retained Click and future composed transports."""
+    from infralink.cli.doctor import evaluate_doctor
+    from infralink.cli.main import Context
+
+    try:
+        sources = load_sources(request)
+        context = Context()
+        context.registry_path = sources.registry_path
+        context.edges_path = sources.edges_path
+        context._registry = sources.registry
+        context._edges = sources.edges
+        inspection = evaluate_doctor(
+            context,
+            request.observation_plan,
+            request.adapter_bindings,
+            request.declaration_only,
+            request.gatus_url,
+            request.gatus_token_env,
+            request.target_type,
+            request.target_ref,
+        )
+    except Exception as error:
+        _raise_operation_failure(error)
+    result = DoctorOperationResult.model_validate(inspection.result.model_dump())
+    result._actions = tuple(inspection.actions)
+    return OperationOutcome(result, exit_code=inspection.exit_code)
+
+
 @operator_surface.operation("host.list", summary="List declared hosts", read_only=True)  # type: ignore[type-var]
 def host_list(request: HostListRequest) -> HostListResult:
     """Return the registry host list without a Click context."""
@@ -913,47 +975,10 @@ def _is_canonical_id(value: str | None) -> bool:
     return True
 
 
-@operator_surface.operation(  # type: ignore[type-var]
-    "doctor.host.bootstrap_plan",
-    summary="Plan declared host bootstrap prerequisites",
-    read_only=True,
-)
-def doctor_host_bootstrap_plan(request: DoctorBootstrapPlanRequest) -> DoctorBootstrapPlanResult:
-    """Validate and build the only executable bootstrap-plan transition."""
-    if not _is_tailnet_ipv4(request.declared_ssh_host):
-        raise OperationError(
-            "tailnet_address_required",
-            "Host bootstrap requires a declared Tailnet IPv4 address",
-            details=({"host": request.host_ref},),
-            fix="Declare a 100.64.0.0/10 host address before planning bootstrap.",
-        )
-    if request.ssh_host != request.declared_ssh_host:
-        raise OperationError(
-            "bootstrap_transport_mismatch",
-            "Bootstrap SSH host must exactly match the declared Tailnet IPv4",
-            details=(
-                {"host": request.host_ref, "declared_tailscale_ip": request.declared_ssh_host},
-            ),
-            fix="Pass the registry tailscale_ip with --ssh-host.",
-        )
-    return DoctorBootstrapPlanResult(
-        argv=(
-            "host",
-            "bootstrap",
-            request.host_ref,
-            "--ssh-host",
-            request.ssh_host,
-            "--plan",
-        ),
-        ssh_host=request.ssh_host,
-    )
-
-
-def _is_tailnet_ipv4(address: str) -> bool:
-    try:
-        return ip_address(address) in ip_network("100.64.0.0/10")
-    except ValueError:
-        return False
+# The bootstrap-plan builder is intentionally private: it is consumed by the
+# host bootstrap and doctor action builders, not exposed as an independent
+# public operation that would collide with the doctor command leaf.
+doctor_host_bootstrap_plan = _doctor_host_bootstrap_plan
 
 
 def _target_reconcile_status(values: dict[str, str]) -> TargetReconcileStatus:
