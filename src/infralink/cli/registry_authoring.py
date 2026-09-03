@@ -67,7 +67,15 @@ def _registry_root(ctx: Context, *, for_write: bool = False) -> Path:
 
 
 def _manifest_entries(root: Path) -> Iterable[tuple[Path, str, MutableMapping[str, Any]]]:
+    resolved_root = root.resolve()
     for path in sorted(root.glob("**/manifest.yml")):
+        resolved_path = path.resolve()
+        if resolved_root not in resolved_path.parents:
+            raise _failure(
+                "Registry manifest escapes the selected checkout",
+                "Repair the manifest symlink before authoring the registry",
+                {"manifest_path": str(path)},
+            )
         try:
             source = path.read_text(encoding="utf-8")
             document = yaml.safe_load(source) or {}

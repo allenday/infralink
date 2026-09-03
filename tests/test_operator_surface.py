@@ -20,12 +20,16 @@ from infralink.operator_surface import (
     HostBootstrapRequest,
     HostCreateRequest,
     OperationStatusRequest,
+    RegistryHostGetRequest,
+    RegistryHostPatchRequest,
     doctor_host_bootstrap_plan,
     host_create_operation,
     operation_status_operation,
     operator_click_adapter,
     operator_mcp_adapter,
     operator_surface,
+    registry_host_get_operation,
+    registry_host_patch_operation,
 )
 
 
@@ -348,6 +352,146 @@ def test_host_create_is_discoverable_through_the_typed_mcp_adapter() -> None:
     tools, payload = asyncio.run(invoke())
     assert "host.create" in tools
     assert payload["result"]["mode"] == "dry_run"
+
+
+def test_registry_host_authoring_operations_preserve_preview_then_explicit_write(
+    tmp_path: Path,
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {host_id}:\n"
+        "    canonical_name: host-1\n"
+        "    status: provisioning\n"
+        "    tailscale_ip: 100.64.1.9\n"
+        "    controller_bootstrap:\n"
+        "      controller_image: ghcr.io/example/controller:main\n",
+        encoding="utf-8",
+    )
+
+    shown = registry_host_get_operation(
+        RegistryHostGetRequest(registry=registry, host_ref="host-1")
+    )
+    assert shown.host.id == host_id
+    assert shown.manifest_path == str(manifest)
+
+    preview = registry_host_patch_operation(
+        RegistryHostPatchRequest(
+            registry=registry,
+            host_ref="host-1",
+            assignments=(
+                "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.6.25",
+            ),
+        )
+    )
+    assert preview.mode == "preview"
+    assert "v0.6.25" not in manifest.read_text(encoding="utf-8")
+
+    written = registry_host_patch_operation(
+        RegistryHostPatchRequest(
+            registry=registry,
+            host_ref="host-1",
+            assignments=(
+                "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.6.25",
+            ),
+            write=True,
+        )
+    )
+    assert written.mode == "written"
+    assert "v0.6.25" in manifest.read_text(encoding="utf-8")
+
+    action_result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        ["--registry", str(registry), "registry", "host", "get", "host-1", "--format", "json"],
+    )
+    assert action_result.exit_code == 0, action_result.output
+    action_payload = json.loads(action_result.output)
+    assert action_payload["next_actions"][0]["rel"] == "patch"
+    assert f"--registry {registry}" in action_payload["next_actions"][0]["command"]
+    assert action_payload["next_actions"][0]["command"].endswith("--set '{assignment}'")
+
+    preview_action = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "--registry",
+            str(registry),
+            "registry",
+            "host",
+            "patch",
+            "host-1",
+            "--set",
+            "status=active",
+            "--format",
+            "json",
+        ],
+    )
+    assert preview_action.exit_code == 0, preview_action.output
+    preview_payload = json.loads(preview_action.output)
+    assert preview_payload["next_actions"][0]["rel"] == "write"
+    assert f"--registry {registry}" in preview_payload["next_actions"][0]["command"]
+    assert preview_payload["next_actions"][0]["command"].endswith("status=active --write")
+
+
+def test_registry_host_patch_refuses_the_managed_runtime_checkout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {host_id}:\n"
+        "    canonical_name: host-1\n"
+        "    status: provisioning\n"
+        "    tailscale_ip: 100.64.1.9\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "infralink.cli.registry_authoring.operator_sources.managed_runtime_registry_root",
+        lambda: registry,
+    )
+
+    with pytest.raises(OperationError, match="managed runtime checkout"):
+        registry_host_patch_operation(
+            RegistryHostPatchRequest(
+                registry=registry,
+                host_ref="host-1",
+                assignments=("status=active",),
+                write=True,
+            )
+        )
+
+
+def test_registry_host_authoring_rejects_hosts_and_manifest_symlink_escapes(tmp_path: Path) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    outside = tmp_path / "outside"
+    outside_manifest = outside / host_id / "manifest.yml"
+    outside_manifest.parent.mkdir(parents=True)
+    outside_manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: provisioning\n",
+        encoding="utf-8",
+    )
+
+    escaped_hosts = tmp_path / "escaped-hosts"
+    escaped_hosts.mkdir()
+    (escaped_hosts / "hosts").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OperationError, match="contained hosts directory"):
+        registry_host_get_operation(
+            RegistryHostGetRequest(registry=escaped_hosts, host_ref="host-1")
+        )
+
+    registry = tmp_path / "registry"
+    hosts = registry / "hosts"
+    hosts.mkdir(parents=True)
+    host_directory = hosts / host_id
+    host_directory.mkdir()
+    (host_directory / "manifest.yml").symlink_to(outside_manifest)
+    with pytest.raises(OperationError, match="escapes the selected checkout"):
+        registry_host_get_operation(RegistryHostGetRequest(registry=registry, host_ref="host-1"))
 
 
 def test_host_create_refuses_a_hosts_symlink_into_the_managed_runtime_cache(
