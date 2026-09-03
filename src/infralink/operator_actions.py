@@ -17,8 +17,6 @@ from infralink.cli.contracts import (
     CheckCommandResult,
     HostListResult,
     InfoResult,
-    RegistryHostGetResult,
-    RegistryHostPatchResult,
     ResolveResult,
 )
 from infralink.cli.operation_contracts import (
@@ -42,7 +40,9 @@ from infralink.operator_surface import (
     HostLogsRequest,
     HostTargetRequest,
     InfoRequest,
+    RegistryHostGetOperationResult,
     RegistryHostGetRequest,
+    RegistryHostPatchOperationResult,
     RegistryHostPatchRequest,
 )
 
@@ -164,7 +164,7 @@ class OperatorActionProvider(ActionProvider):
         if (
             operation == "registry.host.get"
             and isinstance(request, RegistryHostGetRequest)
-            and isinstance(result, RegistryHostGetResult)
+            and isinstance(result, RegistryHostGetOperationResult)
         ):
             return ActionCollection(
                 items=(
@@ -172,6 +172,8 @@ class OperatorActionProvider(ActionProvider):
                         rel="patch",
                         description="Preview a typed host declaration mutation",
                         command_template=(
+                            "--registry",
+                            str(result._checkout),
                             "registry",
                             "host",
                             "patch",
@@ -196,7 +198,7 @@ class OperatorActionProvider(ActionProvider):
         if (
             operation == "registry.host.patch"
             and isinstance(request, RegistryHostPatchRequest)
-            and isinstance(result, RegistryHostPatchResult)
+            and isinstance(result, RegistryHostPatchOperationResult)
             and not request.write
         ):
             return ActionCollection(
@@ -205,6 +207,8 @@ class OperatorActionProvider(ActionProvider):
                         rel="write",
                         description="Write this reviewed host declaration mutation",
                         command=(
+                            "--registry",
+                            str(result._checkout),
                             "registry",
                             "host",
                             "patch",

@@ -76,6 +76,7 @@ from infralink.observation.topology_diagrams import (
     render_v2_dot,
     render_v2_mermaid,
 )
+from infralink.operator_config import OperatorConfigError, configured_registry
 from infralink.operator_operations.analyze import AnalyzeRequest, analyze_declared_registry
 from infralink.operator_operations.docs import DocsRequest, generate_declared_docs
 from infralink.operator_operations.doctor import (
@@ -519,6 +520,18 @@ class HostCreateResult(_OperationModel):
     git_worktree: Path | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
+class RegistryHostGetOperationResult(RegistryHostGetResult):
+    """Public host declaration plus the private selected checkout for actions."""
+
+    _checkout: Path = PrivateAttr()
+
+
+class RegistryHostPatchOperationResult(RegistryHostPatchResult):
+    """Public mutation preview plus the private selected checkout for actions."""
+
+    _checkout: Path = PrivateAttr()
+
+
 class HostBootstrapOperationResult(_OperationModel):
     result: HostBootstrapPlanResult
     succeeded: bool
@@ -722,35 +735,62 @@ def host_create_operation(request: HostCreateRequest) -> HostCreateResult:
         _raise_operation_failure(error)
 
 
-def _registry_authoring_context(request: SourceRequest) -> Any:
+def _registry_authoring_context(request: SourceRequest) -> tuple[Any, Path]:
     """Create the retained authoring evaluator context from one checkout-root input."""
     from infralink.cli.main import Context
 
-    sources = load_registry(request)
+    try:
+        selected = request.registry or configured_registry()
+    except OperatorConfigError as error:
+        raise OperationError(
+            "input_load_failed",
+            "Operator configuration could not be loaded",
+            details=({"source": "operator_config", "path": str(error)},),
+            fix="Correct INFRALINK_CONFIG or pass an explicit registry checkout root.",
+        ) from None
+    if selected is None:
+        raise OperationError(
+            "configuration_required",
+            "Registry source is required",
+            details=({"source": "registry"},),
+            fix="Pass a registry checkout root or configure INFRALINK_CONFIG.",
+        )
+    checkout = selected.expanduser().resolve()
+    hosts = checkout / "hosts"
+    resolved_hosts = hosts.resolve()
+    if not checkout.is_dir() or not hosts.is_dir() or checkout not in resolved_hosts.parents:
+        raise OperationError(
+            "source_invalid",
+            "Registry authoring requires a checkout root with a contained hosts directory",
+            details=({"source": "registry", "path": str(checkout)},),
+            fix="Pass an ordinary Registry checkout root, not a symlinked hosts directory.",
+        )
     context = Context()
-    context.registry_path = sources.registry_path
-    context.hosts_path = sources.registry_path / "hosts"
-    return context
+    context.registry_path = checkout
+    context.hosts_path = resolved_hosts
+    return context, checkout
 
 
 @operator_surface.operation(  # type: ignore[type-var]
     "registry.host.get", summary="Show an authoritative host declaration", read_only=True
 )
-def registry_host_get_operation(request: RegistryHostGetRequest) -> RegistryHostGetResult:
+def registry_host_get_operation(request: RegistryHostGetRequest) -> RegistryHostGetOperationResult:
     """Use the retained authoring evaluator through one typed source contract."""
     from infralink.cli import registry_authoring
 
     try:
-        context = _registry_authoring_context(request)
+        context, checkout = _registry_authoring_context(request)
         root = registry_authoring._registry_root(context)
         host_id, manifest_path, _source, _document, declaration = registry_authoring._find_host(
             root, request.host_ref
         )
-        return RegistryHostGetResult(
+        result = RegistryHostGetOperationResult(
             host=RegistryHostIdentity(id=host_id, canonical_name=declaration.get("canonical_name")),
             manifest_path=str(manifest_path),
             declaration=registry_authoring._public_value(declaration),
         )
+        result._checkout = checkout
+        return result
     except Exception as error:
         _raise_operation_failure(error)
 
@@ -760,14 +800,16 @@ def registry_host_get_operation(request: RegistryHostGetRequest) -> RegistryHost
     summary="Preview or write a typed host declaration mutation",
     idempotent=True,
 )
-def registry_host_patch_operation(request: RegistryHostPatchRequest) -> RegistryHostPatchResult:
+def registry_host_patch_operation(
+    request: RegistryHostPatchRequest,
+) -> RegistryHostPatchOperationResult:
     """Apply the retained mutation evaluator behind explicit typed write intent."""
     from copy import deepcopy
 
     from infralink.cli import registry_authoring
 
     try:
-        context = _registry_authoring_context(request)
+        context, checkout = _registry_authoring_context(request)
         root = registry_authoring._registry_root(context, for_write=request.write)
         host_id, manifest_path, source, document, _declaration = registry_authoring._find_host(
             root, request.host_ref
@@ -788,7 +830,7 @@ def registry_host_patch_operation(request: RegistryHostPatchRequest) -> Registry
                 manifest_path,
                 registry_authoring._replace_scalar_assignments(source, host_id, assignments),
             )
-        return RegistryHostPatchResult(
+        result = RegistryHostPatchOperationResult(
             mode="written" if request.write else "preview",
             host=RegistryHostIdentity(
                 id=host_id, canonical_name=candidate_declaration.get("canonical_name")
@@ -796,6 +838,8 @@ def registry_host_patch_operation(request: RegistryHostPatchRequest) -> Registry
             manifest_path=str(manifest_path),
             changes=[RegistryMutation(**change) for change in changes],
         )
+        result._checkout = checkout
+        return result
     except Exception as error:
         _raise_operation_failure(error)
 

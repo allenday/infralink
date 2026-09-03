@@ -410,6 +410,7 @@ def test_registry_host_authoring_operations_preserve_preview_then_explicit_write
     assert action_result.exit_code == 0, action_result.output
     action_payload = json.loads(action_result.output)
     assert action_payload["next_actions"][0]["rel"] == "patch"
+    assert f"--registry {registry}" in action_payload["next_actions"][0]["command"]
     assert action_payload["next_actions"][0]["command"].endswith("--set '{assignment}'")
 
 
@@ -442,6 +443,34 @@ def test_registry_host_patch_refuses_the_managed_runtime_checkout(
                 write=True,
             )
         )
+
+
+def test_registry_host_authoring_rejects_hosts_and_manifest_symlink_escapes(tmp_path: Path) -> None:
+    host_id = "11111111-1111-4111-8111-111111111111"
+    outside = tmp_path / "outside"
+    outside_manifest = outside / host_id / "manifest.yml"
+    outside_manifest.parent.mkdir(parents=True)
+    outside_manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: provisioning\n",
+        encoding="utf-8",
+    )
+
+    escaped_hosts = tmp_path / "escaped-hosts"
+    escaped_hosts.mkdir()
+    (escaped_hosts / "hosts").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OperationError, match="contained hosts directory"):
+        registry_host_get_operation(
+            RegistryHostGetRequest(registry=escaped_hosts, host_ref="host-1")
+        )
+
+    registry = tmp_path / "registry"
+    hosts = registry / "hosts"
+    hosts.mkdir(parents=True)
+    host_directory = hosts / host_id
+    host_directory.mkdir()
+    (host_directory / "manifest.yml").symlink_to(outside_manifest)
+    with pytest.raises(OperationError, match="escapes the selected checkout"):
+        registry_host_get_operation(RegistryHostGetRequest(registry=registry, host_ref="host-1"))
 
 
 def test_host_create_refuses_a_hosts_symlink_into_the_managed_runtime_cache(
