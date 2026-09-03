@@ -1012,12 +1012,11 @@ def capabilities_operation(_request: CapabilitiesRequest) -> CapabilitiesResult:
 )
 def explain_operation(request: ExplainRequest) -> ExplainResult:
     """Resolve an existing diagnostic without introducing a second taxonomy."""
-    from dataclasses import asdict
-
-    from infralink.observation import DiagnosticCodeNotFoundError, explain
+    from infralink.cli.observation import _explain_result
+    from infralink.observation import DiagnosticCodeNotFoundError
 
     try:
-        return ExplainResult(**asdict(explain(request.error_code)))
+        return _explain_result(request.error_code)
     except DiagnosticCodeNotFoundError as error:
         raise OperationError(
             "diagnostic-code-not-found",

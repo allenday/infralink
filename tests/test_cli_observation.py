@@ -11,7 +11,12 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from infralink.cli.main import cli
-from infralink.operator_surface import CapabilitiesRequest, capabilities_operation
+from infralink.operator_surface import (
+    CapabilitiesRequest,
+    ExplainRequest,
+    capabilities_operation,
+    explain_operation,
+)
 
 SOURCE = """\
 schema_version: infralink.observation/v1
@@ -118,6 +123,18 @@ def test_capabilities_cli_delegates_to_the_typed_operation() -> None:
     expected = capabilities_operation(CapabilitiesRequest()).model_dump(mode="json")
 
     result = CliRunner().invoke(cli, ["--output", "json", "capabilities"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["result"] == expected
+
+
+def test_explain_cli_shares_the_typed_diagnostic_result() -> None:
+    """The retained explain leaf must not maintain a second diagnostic lookup."""
+    expected = explain_operation(ExplainRequest(error_code="schema-version-missing")).model_dump(
+        mode="json"
+    )
+
+    result = CliRunner().invoke(cli, ["--output", "json", "explain", "schema-version-missing"])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["result"] == expected
