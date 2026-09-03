@@ -407,6 +407,39 @@ def _release_candidate_result(candidate: Path) -> ReleaseCandidateResult:
     return ReleaseCandidateResult(candidate=_candidate_output(_parse_candidate(candidate)))
 
 
+def _release_attestation_result(attestation: Path) -> ReleaseAttestationResult:
+    """Build the immutable publisher completion contract without provider access."""
+    value = _parse_attestation(attestation)
+    if isinstance(value, (ReleaseAttestationV2, ReleaseAttestationV3)):
+        output: ReleaseAttestation | ReleaseAttestationV2 | ReleaseAttestationV3 = value
+    elif isinstance(value, _LegacyAttestationDocument):
+        output = ReleaseAttestation(
+            release_identity=value.release_identity,
+            registry_commit=value.registry_commit,
+            controller_commit=value.controller_commit,
+            publisher_receipt=ReleasePublisherReceipt(
+                provider=value.publisher_receipt.provider,
+                repository=None,
+                run=value.publisher_receipt.run,
+            ),
+            tag=value.tag,
+            consumers=value.consumers,
+        )
+    else:
+        output = ReleaseAttestation(
+            release_identity=value.release.identity,
+            registry_commit=value.registry_commit,
+            controller_commit=value.controller_commit,
+            ci_receipt=ReleaseCiReceipt(**value.ci_receipt.model_dump()),
+            artifacts=[ReleaseArtifactBinding(**item.model_dump()) for item in value.artifacts],
+            publisher_receipt=ReleasePublisherReceipt(**value.publisher_receipt.model_dump()),
+            tag=value.tag.name,
+            tag_object_sha1=value.tag.object_sha1,
+            consumers=value.consumers,
+        )
+    return ReleaseAttestationResult(attestation=output)
+
+
 @click.group(name="release")
 def release() -> None:
     """Inspect validated immutable registry releases."""
@@ -610,38 +643,11 @@ def render_publisher_request(
 )
 def inspect_attestation(attestation: Path) -> None:
     """Inspect a publisher completion record without contacting a provider."""
-    value = _parse_attestation(attestation)
-    if isinstance(value, (ReleaseAttestationV2, ReleaseAttestationV3)):
-        output: ReleaseAttestation | ReleaseAttestationV2 | ReleaseAttestationV3 = value
-    elif isinstance(value, _LegacyAttestationDocument):
-        output = ReleaseAttestation(
-            release_identity=value.release_identity,
-            registry_commit=value.registry_commit,
-            controller_commit=value.controller_commit,
-            publisher_receipt=ReleasePublisherReceipt(
-                provider=value.publisher_receipt.provider,
-                repository=None,
-                run=value.publisher_receipt.run,
-            ),
-            tag=value.tag,
-            consumers=value.consumers,
-        )
-    else:
-        output = ReleaseAttestation(
-            release_identity=value.release.identity,
-            registry_commit=value.registry_commit,
-            controller_commit=value.controller_commit,
-            ci_receipt=ReleaseCiReceipt(**value.ci_receipt.model_dump()),
-            artifacts=[ReleaseArtifactBinding(**item.model_dump()) for item in value.artifacts],
-            publisher_receipt=ReleasePublisherReceipt(**value.publisher_receipt.model_dump()),
-            tag=value.tag.name,
-            tag_object_sha1=value.tag.object_sha1,
-            consumers=value.consumers,
-        )
+    result = _release_attestation_result(attestation)
     _emit(
         ok_envelope(
             _context_for(path=["release", "inspect-attestation"]),
-            ReleaseAttestationResult(attestation=output),
+            result,
             [],
         )
     )

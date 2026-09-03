@@ -51,6 +51,7 @@ from infralink.cli.contracts import (
     RegistryHostIdentity,
     RegistryHostPatchResult,
     RegistryMutation,
+    ReleaseAttestationResult,
     ReleaseCandidateResult,
     ReleaseInspectResult,
     ResolveResult,
@@ -558,6 +559,12 @@ class ReleaseCandidateRequest(_OperationModel):
     """Select one immutable release candidate document."""
 
     candidate: Path
+
+
+class ReleaseAttestationRequest(_OperationModel):
+    """Select one immutable publisher attestation document."""
+
+    attestation: Path
 
 
 class HostCreateAddress(_OperationModel):
@@ -1076,6 +1083,21 @@ def release_validate_candidate_operation(
 
     try:
         return release._release_candidate_result(request.candidate)
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@release_surface.operation(  # type: ignore[type-var]
+    "inspect-attestation", summary="Inspect an immutable release attestation", read_only=True
+)
+def release_inspect_attestation_operation(
+    request: ReleaseAttestationRequest,
+) -> ReleaseAttestationResult:
+    """Inspect completion evidence without contacting a publisher."""
+    from infralink.cli import release
+
+    try:
+        return release._release_attestation_result(request.attestation)
     except Exception as error:
         _raise_operation_failure(error)
 

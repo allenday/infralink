@@ -122,6 +122,48 @@ def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_pat
     assert result.candidate.consumers == ["citadel"]
 
 
+def test_release_attestation_inspection_uses_the_retained_immutable_contract(
+    tmp_path: Path,
+) -> None:
+    """Attestation inspection is a local read with no publisher invocation."""
+    attestation = tmp_path / "attestation.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-attestation.v1",
+                "release": {
+                    "identity": "releases/core-v2/42",
+                    "channel": "core-v2",
+                    "sequence": 42,
+                },
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "ci_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "576",
+                },
+                "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+                "publisher_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "600",
+                },
+                "tag": {"name": "releases/core-v2/42", "object_sha1": "d" * 40},
+                "consumers": ["citadel"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        release_surface.invoke("inspect-attestation", {"attestation": attestation})
+    )
+
+    assert result.attestation.release_identity == "releases/core-v2/42"
+    assert result.attestation.tag == "releases/core-v2/42"
+
+
 @pytest.mark.parametrize(
     ("operation_code", "expected_code", "expected_exit"),
     [
