@@ -357,6 +357,32 @@ def _publisher(value: _Publisher) -> ReleasePublisher:
     return ReleasePublisher(state=value.state, provider=value.provider)
 
 
+def _release_inspect_result(release_validation: Path, admission: Path) -> ReleaseInspectResult:
+    """Build the read-only inspection contract shared by every transport."""
+    validation, admission_document = _parse_inputs(release_validation, admission)
+    admitted = _admission_for(validation, admission_document)
+    publisher = _publisher(admission_document.publisher)
+    return ReleaseInspectResult(
+        release=ReleaseFacts(
+            identity=validation.release_identity,
+            registry_commit=validation.registry_commit,
+            controller_commit=validation.controller_commit,
+            annotated=validation.annotated,
+            status=validation.status,
+        ),
+        admission=admitted,
+        publisher=publisher,
+        provenance=ReleaseProvenance(
+            validation_schema_version=validation.schema_version,
+            source="release-validation",
+        ),
+        compatibility=ReleaseCompatibility(
+            selection_mode=admitted.selection.mode,
+            controller_commit=validation.controller_commit,
+        ),
+    )
+
+
 def _candidate_identity(candidate: _CandidateDocument | _LegacyCandidateDocument) -> str:
     return (
         candidate.release.identity
@@ -376,6 +402,11 @@ def _candidate_output(candidate: _CandidateDocument | _LegacyCandidateDocument) 
     )
 
 
+def _release_candidate_result(candidate: Path) -> ReleaseCandidateResult:
+    """Build the immutable candidate validation contract without publishing."""
+    return ReleaseCandidateResult(candidate=_candidate_output(_parse_candidate(candidate)))
+
+
 @click.group(name="release")
 def release() -> None:
     """Inspect validated immutable registry releases."""
@@ -392,28 +423,7 @@ def release() -> None:
 )
 def inspect_release(release_validation: Path, admission: Path) -> None:
     """Inspect a versioned validation handoff against local bounded admission."""
-    validation, admission_document = _parse_inputs(release_validation, admission)
-    admitted = _admission_for(validation, admission_document)
-    publisher = _publisher(admission_document.publisher)
-    result = ReleaseInspectResult(
-        release=ReleaseFacts(
-            identity=validation.release_identity,
-            registry_commit=validation.registry_commit,
-            controller_commit=validation.controller_commit,
-            annotated=validation.annotated,
-            status=validation.status,
-        ),
-        admission=admitted,
-        publisher=publisher,
-        provenance=ReleaseProvenance(
-            validation_schema_version=validation.schema_version,
-            source="release-validation",
-        ),
-        compatibility=ReleaseCompatibility(
-            selection_mode=admitted.selection.mode,
-            controller_commit=validation.controller_commit,
-        ),
-    )
+    result = _release_inspect_result(release_validation, admission)
     actions = [
         action(
             "inspect",
@@ -438,7 +448,7 @@ def inspect_release(release_validation: Path, admission: Path) -> None:
 )
 def validate_candidate(candidate: Path) -> None:
     """Validate a local immutable release candidate without publishing it."""
-    output = _candidate_output(_parse_candidate(candidate))
+    result = _release_candidate_result(candidate)
     actions = [
         action(
             "render-publisher-request",
@@ -465,7 +475,7 @@ def validate_candidate(candidate: Path) -> None:
     _emit(
         ok_envelope(
             _context_for(path=["release", "validate-candidate"]),
-            ReleaseCandidateResult(candidate=output),
+            result,
             actions,
         )
     )

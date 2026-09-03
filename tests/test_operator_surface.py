@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+import yaml
 from agent_surface import OperationError
 from click.testing import CliRunner
 from mcp import Client
@@ -40,7 +41,85 @@ from infralink.operator_surface import (
     project_view_operation,
     registry_host_get_operation,
     registry_host_patch_operation,
+    release_surface,
 )
+
+
+def test_release_inspect_uses_a_source_independent_typed_surface(tmp_path: Path) -> None:
+    """Release inspection reads only its two immutable local documents."""
+    validation = tmp_path / "release-validation.json"
+    validation.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-validation.v1",
+                "release_identity": "releases/core-v2/42",
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "annotated": True,
+                "status": "active",
+            }
+        ),
+        encoding="utf-8",
+    )
+    admission = tmp_path / "release-admission.yml"
+    admission.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "infralink.release-admission.v1",
+                "selection": {
+                    "mode": "release-channel",
+                    "channel": "core-v2",
+                    "recent_window": 20,
+                    "maximum_candidates": 5,
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        release_surface.invoke(
+            "inspect",
+            {"release_validation": validation, "admission": admission},
+        )
+    )
+
+    assert result.release.identity == "releases/core-v2/42"
+    assert result.admission.state == "admitted"
+    assert result.publisher.state == "unavailable"
+
+
+def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_path: Path) -> None:
+    """Candidate validation does not need a Registry checkout or provider."""
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.release-candidate.v1",
+                "release": {
+                    "identity": "releases/core-v2/42",
+                    "channel": "core-v2",
+                    "sequence": 42,
+                },
+                "registry_commit": "a" * 40,
+                "controller_commit": "b" * 40,
+                "ci_receipt": {
+                    "provider": "woodpecker",
+                    "repository": "relaxgg/infra-registry",
+                    "run": "576",
+                },
+                "artifacts": [{"path": "release/runtime.tar.gz", "sha256": "c" * 64}],
+                "consumers": ["citadel"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(release_surface.invoke("validate-candidate", {"candidate": candidate}))
+
+    assert result.candidate.identity == "releases/core-v2/42"
+    assert result.candidate.consumers == ["citadel"]
 
 
 @pytest.mark.parametrize(
