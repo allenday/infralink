@@ -27,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from infralink import __version__
 from infralink.cli.contracts import (
     Action as DoctorAction,
 )
@@ -59,6 +60,7 @@ from infralink.cli.contracts import (
     SecretsInspectResult,
     ServiceListResult,
     ServiceShowResult,
+    VersionResult,
 )
 from infralink.cli.observation_contracts import (
     CapabilitiesResult,
@@ -133,6 +135,10 @@ class _OperationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class VersionRequest(_OperationModel):
+    """Version inspection has no source or provider inputs."""
+
+
 operator_surface = App("infralink", shared_input_model=OperatorInputs)
 # Observation discovery is source-independent. It stays a separate typed app
 # until #270 mounts it with its legacy envelope compatibility projection.
@@ -140,6 +146,10 @@ observation_surface = App("infralink-observation")
 # Release inspection consumes immutable handoff documents and must not inherit
 # Registry checkout selection inputs.
 release_surface = App("infralink-release")
+# Version inspection is package-local and has no source or provider inputs.
+# #270 mounts this child at the public root when composed projection can retain
+# the mounted command identity across Click and MCP.
+version_surface = App("infralink-version")
 # The public MCP entrypoint starts with only the low-risk application reads.
 # This registry is the sole authority for their CLI and MCP projections.
 app_surface = App("infralink", shared_input_model=OperatorInputs)
@@ -955,6 +965,12 @@ def secrets_inspect_operation(request: SecretsInspectRequest) -> SecretsInspectR
         return result
     except Exception as error:
         _raise_operation_failure(error)
+
+
+@version_surface.operation("version", summary="Show CLI and schema versions", read_only=True)  # type: ignore[type-var]
+def version_operation(request: VersionRequest) -> VersionResult:
+    """Return static package metadata through the canonical operation registry."""
+    return VersionResult(version=__version__, cli_schema_version="infralink.cli/v1")
 
 
 @observation_surface.operation(  # type: ignore[type-var]

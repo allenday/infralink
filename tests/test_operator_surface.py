@@ -42,6 +42,7 @@ from infralink.operator_surface import (
     registry_host_get_operation,
     registry_host_patch_operation,
     release_surface,
+    version_surface,
 )
 
 
@@ -88,6 +89,16 @@ def test_release_inspect_uses_a_source_independent_typed_surface(tmp_path: Path)
     assert result.release.identity == "releases/core-v2/42"
     assert result.admission.state == "admitted"
     assert result.publisher.state == "unavailable"
+
+
+def test_version_uses_one_typed_source_independent_operation() -> None:
+    """Version needs neither a Registry checkout nor a transport-local handler."""
+    direct = asyncio.run(version_surface.invoke("version", {}))
+    assert direct.cli_schema_version == "infralink.cli/v1"
+
+    public_result = CliRunner().invoke(cli, ["--output", "json", "version"])
+    assert public_result.exit_code == 0, public_result.output
+    assert json.loads(public_result.output)["result"] == direct.model_dump(mode="json")
 
 
 def test_secrets_inspect_uses_the_typed_registry_source_boundary(tmp_path: Path) -> None:
