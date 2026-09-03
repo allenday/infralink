@@ -11,10 +11,9 @@ from pydantic import ValidationError
 
 from infralink.agent_surface import operation_error_exit_code
 from infralink.cli.errors import ExitCode
-from infralink.cli.main import cli
 from infralink.operator_operations.topology import HostShowRequest, show_declared_host
-from infralink.operator_sources import SourceRequest, load_registry, load_sources
-from infralink.operator_surface import app_surface, operator_click_adapter, operator_surface
+from infralink.operator_sources import SourceRequest, load_info_sources, load_registry, load_sources
+from infralink.operator_surface import operator_click_adapter, operator_surface
 
 
 def test_load_sources_discovers_one_declared_edge_file(tmp_path: Path) -> None:
@@ -79,6 +78,34 @@ def test_generated_click_preserves_configuration_error_exit_taxonomy(
 
     assert result.exit_code == 3
     assert json.loads(result.output)["error"]["code"] == "configuration_required"
+
+
+def test_generated_click_preserves_app_missing_source_usage_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INFRALINK_CONFIG", str(tmp_path / "absent.yml"))
+
+    result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        ["app", "list", "--format", "json"],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["error"]["code"] == "configuration_required"
+
+    async def exercise_mcp() -> None:
+        async with Client(operator_mcp_adapter().server) as client:
+            response = await client.call_tool("app.list", {})
+        assert response.is_error is True
+        assert response.structured_content["error"]["code"] == "configuration_required"
+
+    import asyncio
+
+    from mcp import Client
+
+    from infralink.operator_surface import operator_mcp_adapter
+
+    asyncio.run(exercise_mcp())
 
 
 @pytest.mark.parametrize(
@@ -198,6 +225,64 @@ def test_load_registry_requires_the_checkout_root(tmp_path: Path, relative: str)
         load_registry(SourceRequest(registry=target))
 
 
+def test_info_uses_the_same_checkout_root_contract_and_companion_actions(tmp_path: Path) -> None:
+    hosts = tmp_path / "hosts" / "11111111-1111-4111-8111-111111111111"
+    hosts.mkdir(parents=True)
+    (hosts / "manifest.yml").write_text(
+        "hosts:\n  11111111-1111-4111-8111-111111111111:\n"
+        "    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    edges = tmp_path / "topology" / "production" / "edges.yml"
+    edges.parent.mkdir(parents=True)
+    edges.write_text("edges: []\n", encoding="utf-8")
+
+    loaded = load_info_sources(SourceRequest(registry=tmp_path))
+    result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        ["info", "--registry", str(tmp_path), "--format", "json"],
+    )
+
+    assert loaded.registry_path == tmp_path.resolve()
+    assert loaded.edges_path == edges.resolve()
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["result"]["sources"] == {
+        "registry": str(tmp_path.resolve()),
+        "edges": str(edges.resolve()),
+    }
+    assert all(str(tmp_path.resolve()) in action["command"] for action in payload["next_actions"])
+
+
+def test_info_rejects_the_removed_standalone_yaml_source(tmp_path: Path) -> None:
+    standalone = tmp_path / "registry.yml"
+    standalone.write_text("hosts: {}\n", encoding="utf-8")
+
+    with pytest.raises(OperationError, match="checkout root"):
+        load_info_sources(SourceRequest(registry=standalone))
+
+    result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        ["info", "--registry", str(standalone), "--format", "json"],
+    )
+    assert result.exit_code == 3
+    assert json.loads(result.output)["error"]["code"] == "input_load_failed"
+
+    async def exercise_mcp() -> None:
+        from mcp import Client
+
+        from infralink.operator_surface import operator_mcp_adapter
+
+        async with Client(operator_mcp_adapter().server) as client:
+            response = await client.call_tool("info", {"registry": str(standalone)})
+        assert response.is_error is True
+        assert response.structured_content["error"]["code"] == "input_load_failed"
+
+    import asyncio
+
+    asyncio.run(exercise_mcp())
+
+
 def test_read_only_operations_share_one_typed_source_boundary(tmp_path: Path) -> None:
     hosts = tmp_path / "hosts" / "11111111-1111-4111-8111-111111111111"
     hosts.mkdir(parents=True)
@@ -232,7 +317,7 @@ def test_generated_click_projects_host_list_from_the_shared_operation(tmp_path: 
 
     result = CliRunner().invoke(
         operator_click_adapter().command(),
-        ["--registry", str(tmp_path), "host", "list", "--format", "json"],
+        ["host", "list", "--registry", str(tmp_path), "--format", "json"],
     )
 
     assert result.exit_code == 0, result.output
@@ -264,9 +349,7 @@ def test_topology_reads_are_registered_once_and_preserve_bounded_host_continuati
         "service.show",
         "edge.show",
     } <= registered
-    assert "app.list" not in registered
-    assert "app.show" not in registered
-    assert {"app.list", "app.show"} == {item.name for item in app_surface.operations.list()}
+    assert {"app.list", "app.show"} <= registered
 
     first = show_declared_host(HostShowRequest(registry=tmp_path, host_id=host_id, limit=1))
     assert first.services.items == ["alpha"]
@@ -296,8 +379,8 @@ def test_topology_host_cursor_remains_compatible_with_the_legacy_cli(
         encoding="utf-8",
     )
     legacy = CliRunner().invoke(
-        cli,
-        ["--registry", str(tmp_path), "host", "show", host_id, "--limit", "1"],
+        operator_click_adapter().command(),
+        ["host", "show", host_id, "--registry", str(tmp_path), "--limit", "1"],
     )
     assert legacy.exit_code == 0, legacy.output
     cursor = yaml.safe_load(legacy.output)["result"]["services"]["page"]["next_cursor"]
@@ -330,8 +413,8 @@ def test_topology_host_cursor_preserves_relative_registry_spelling(
     )
     monkeypatch.chdir(tmp_path)
     legacy = CliRunner().invoke(
-        cli,
-        ["--registry", "registry", "host", "show", host_id, "--limit", "1"],
+        operator_click_adapter().command(),
+        ["host", "show", host_id, "--registry", "registry", "--limit", "1"],
     )
     assert legacy.exit_code == 0, legacy.output
     cursor = yaml.safe_load(legacy.output)["result"]["services"]["page"]["next_cursor"]
@@ -365,15 +448,15 @@ def test_topology_host_cursor_preserves_relative_explicit_edges_spelling(
     (tmp_path / "edges.yml").write_text("edges: []\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     legacy = CliRunner().invoke(
-        cli,
+        operator_click_adapter().command(),
         [
+            "host",
+            "show",
+            host_id,
             "--registry",
             "registry",
             "--edges",
             "edges.yml",
-            "host",
-            "show",
-            host_id,
             "--limit",
             "1",
         ],

@@ -6,7 +6,6 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-import yaml
 from agent_surface import OperationError
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -155,92 +154,14 @@ def load_sources(request: SourceRequest) -> LoadedSources:
 
 
 def load_info_sources(request: SourceRequest) -> LoadedSources:
-    """Load info's established checkout-root or explicit legacy YAML inputs.
+    """Load the declared summary from the same checkout-root contract as peers.
 
-    ``info`` predates the checkout-only operator read surface and remains a
-    declared-summary command. Keeping its documented YAML input form here
-    avoids a transport migration changing selection semantics for operators.
-    Other typed reads continue to require a checkout root through
-    :func:`load_sources`.
+    A standalone YAML document cannot express the full Registry profile and
+    template graph.  Retaining it for ``info`` would make a second, lossy
+    source form look authoritative, so summaries use the normal checkout and
+    companion-edge resolver.
     """
-    try:
-        selected = request.registry or configured_registry()
-    except OperatorConfigError as error:
-        raise OperationError(
-            "input_load_failed",
-            "Operator configuration could not be loaded",
-            details=({"source": "operator_config", "path": str(error)},),
-            fix="Correct INFRALINK_CONFIG or pass an explicit registry source.",
-        ) from None
-    if selected is None:
-        raise OperationError(
-            "configuration_required",
-            "Registry source is required",
-            details=({"source": "registry"},),
-            fix="Pass a registry checkout root or YAML source, or configure INFRALINK_CONFIG.",
-        )
-    registry_source_path = selected.expanduser()
-    registry_path = registry_source_path.resolve()
-    if registry_path.is_dir():
-        return load_sources(request)
-    if not registry_path.is_file():
-        raise OperationError(
-            "input_load_failed",
-            "Registry source could not be loaded",
-            details=({"source": "registry", "path": str(registry_source_path)},),
-            fix="Pass a readable registry checkout root or YAML source.",
-        )
-    try:
-        registry = Registry.load(registry_path)
-    except Exception as error:
-        raise OperationError(
-            "input_load_failed",
-            "Registry source could not be loaded",
-            details=({"source": "registry", "path": str(registry_source_path)},),
-            fix="Correct the registry declaration and validate it before retrying.",
-        ) from error
-
-    if request.edges is not None:
-        edges_source_path = request.edges.expanduser()
-        edges_path = edges_source_path.resolve()
-        if not edges_path.is_file():
-            raise OperationError(
-                "input_load_failed",
-                "Edge declaration source could not be loaded",
-                details=({"source": "edges", "path": str(edges_source_path)},),
-                fix="Pass a readable edge declaration source.",
-            )
-        try:
-            edges = EdgeSet.load(edges_path)
-        except Exception as error:
-            raise OperationError(
-                "input_load_failed",
-                "Edge declaration source could not be loaded",
-                details=({"source": "edges", "path": str(edges_source_path)},),
-                fix="Correct the edge declaration and validate it before retrying.",
-            ) from error
-    else:
-        try:
-            edges = EdgeSet.from_registry(yaml.safe_load(registry_path.read_text(encoding="utf-8")))
-        except Exception as error:
-            raise OperationError(
-                "input_load_failed",
-                "Registry source could not be loaded",
-                details=({"source": "registry", "path": str(registry_source_path)},),
-                fix="Correct the registry declaration and validate it before retrying.",
-            ) from error
-        # The legacy document contains the implicit edge declaration too.
-        edges_source_path = registry_source_path
-        edges_path = registry_path
-
-    return LoadedSources(
-        registry_path=registry_path,
-        registry_source_path=registry_source_path,
-        edges_path=edges_path,
-        edges_source_path=edges_source_path,
-        registry=registry,
-        edges=edges,
-    )
+    return load_sources(request)
 
 
 def resolve_registry_companion(

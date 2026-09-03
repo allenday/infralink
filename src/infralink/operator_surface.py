@@ -11,9 +11,8 @@ import subprocess
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast, get_args, get_origin
 
-import click
 from agent_surface import App, OperationError, OperationOutcome
 from agent_surface.adapters.click import ClickAdapter
 from agent_surface.adapters.mcp import MCPAdapter
@@ -24,8 +23,10 @@ from pydantic import (
     PrivateAttr,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from infralink import __version__
 from infralink.cli.contracts import (
@@ -35,6 +36,7 @@ from infralink.cli.contracts import (
     AnalyzeResult,
     AppListResult,
     AppShowResult,
+    ArgumentDescriptor,
     ArtifactResult,
     CheckCommandResult,
     DiagramProjectResult,
@@ -42,12 +44,16 @@ from infralink.cli.contracts import (
     DoctorTarget,
     EdgeListResult,
     EdgeShowResult,
+    HelpNavigationAction,
+    HelpResult,
+    HelpSubcommand,
     HostBootstrapPlanResult,
     HostListResult,
     HostShowResult,
     InfoResult,
     InfoSources,
     InfoSummary,
+    OptionDescriptor,
     PublisherRequestResult,
     RegistryHostGetResult,
     RegistryHostIdentity,
@@ -123,7 +129,6 @@ from infralink.operator_operations.topology import (
     show_declared_service,
 )
 from infralink.operator_sources import (
-    OperatorInputs,
     SourceRequest,
     load_info_sources,
     load_registry,
@@ -139,23 +144,11 @@ class VersionRequest(_OperationModel):
     """Version inspection has no source or provider inputs."""
 
 
-operator_surface = App("infralink", shared_input_model=OperatorInputs)
-# Observation discovery is source-independent. It stays a separate typed app
-# until #270 mounts it with its legacy envelope compatibility projection.
-observation_surface = App("infralink-observation")
-# Release inspection consumes immutable handoff documents and must not inherit
-# Registry checkout selection inputs.
-release_surface = App("infralink-release")
-# Version inspection is package-local and has no source or provider inputs.
-# #270 mounts this child at the public root when composed projection can retain
-# the mounted command identity across Click and MCP.
-version_surface = App("infralink-version")
-# The public MCP entrypoint starts with only the low-risk application reads.
-# This registry is the sole authority for their CLI and MCP projections.
-app_surface = App("infralink", shared_input_model=OperatorInputs)
-# Diagram projection owns explicit observation sources and therefore cannot
-# inherit the Registry/edge selector shared by topology operations.
-diagram_surface = App("infralink-diagram")
+# This is the sole public operation registry.  Every source-consuming request
+# owns its own selector fields; source-independent operations simply have no
+# selector.  That keeps the generated Click and MCP projections bijective
+# without making an ambient root selector a second source authority.
+operator_surface = App("infralink")
 _canonical_id_adapter = TypeAdapter(CanonicalId)
 _host_id_adapter = TypeAdapter(HostId)
 
@@ -163,16 +156,16 @@ _host_id_adapter = TypeAdapter(HostId)
 def operator_click_adapter() -> ClickAdapter:
     """Build the one Click projection for typed operator operations."""
     from infralink.agent_surface import (
-        OperatorEnvelopeRenderer,
+        PublicEnvelopeRenderer,
         operation_error_exit_code,
         operator_render_options,
     )
-    from infralink.operator_actions import OperatorActionProvider
+    from infralink.operator_actions import InfralinkActionProvider
 
     return ClickAdapter(
         operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
+        action_provider=InfralinkActionProvider(),
+        envelope_renderer=PublicEnvelopeRenderer(),
         render_options=operator_render_options(),
         operation_error_exit_code=operation_error_exit_code,
     )
@@ -180,195 +173,15 @@ def operator_click_adapter() -> ClickAdapter:
 
 def operator_mcp_adapter() -> MCPAdapter:
     """Build the one MCP projection for typed operator operations."""
-    from infralink.agent_surface import OperatorEnvelopeRenderer, operator_render_options
-    from infralink.operator_actions import OperatorActionProvider
+    from infralink.agent_surface import PublicEnvelopeRenderer, operator_render_options
+    from infralink.operator_actions import InfralinkActionProvider
 
     return MCPAdapter(
         operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
+        action_provider=InfralinkActionProvider(),
+        envelope_renderer=PublicEnvelopeRenderer(),
         render_options=operator_render_options(),
     )
-
-
-def fleet_click_command() -> click.Group:
-    """Return the generated fleet subtree mounted under the public root."""
-    from infralink.agent_surface import mounted_click_command, operator_render_options
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-        render_options=operator_render_options(),
-    )
-    command = root.get_command(click.Context(root), "fleet")
-    assert isinstance(command, click.Group)
-    return command
-
-
-def info_click_command() -> click.Command:
-    """Return the generated info leaf mounted under the public root."""
-    from infralink.agent_surface import mounted_click_command
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-    )
-    command = root.get_command(click.Context(root), "info")
-    assert isinstance(command, click.Command)
-    return command
-
-
-def analyze_click_command() -> click.Command:
-    """Return the generated analyze leaf mounted under the public root."""
-    from infralink.agent_surface import (
-        OperatorEnvelopeRenderer,
-        mounted_click_command,
-        operator_render_options,
-    )
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
-        render_options=operator_render_options(),
-    )
-    command = root.get_command(click.Context(root), "analyze")
-    assert isinstance(command, click.Command)
-    return command
-
-
-def docs_click_command() -> click.Command:
-    """Return the generated docs leaf mounted under the public root."""
-    from infralink.agent_surface import (
-        OperatorEnvelopeRenderer,
-        mounted_click_command,
-        operator_render_options,
-    )
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
-        render_options=operator_render_options(),
-    )
-    command = root.get_command(click.Context(root), "docs")
-    assert isinstance(command, click.Command)
-    return command
-
-
-def check_click_command() -> click.Command:
-    """Return the generated check leaf mounted under the public root."""
-    from infralink.agent_surface import (
-        OperatorEnvelopeRenderer,
-        mounted_click_command,
-        operator_render_options,
-    )
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
-        render_options=operator_render_options(),
-    )
-    command = root.get_command(click.Context(root), "check")
-    assert isinstance(command, click.Command)
-    return command
-
-
-def resolve_click_command() -> click.Command:
-    """Return the generated resolve leaf mounted under the public root."""
-    from infralink.agent_surface import (
-        OperatorEnvelopeRenderer,
-        mounted_click_command,
-        operator_render_options,
-    )
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
-        render_options=operator_render_options(),
-    )
-    command = root.get_command(click.Context(root), "resolve")
-    assert isinstance(command, click.Command)
-    return command
-
-
-def host_click_command() -> click.Group:
-    """Return the generated host subtree mounted under the public root."""
-    from infralink.agent_surface import (
-        OperatorEnvelopeRenderer,
-        mounted_click_command,
-        operator_render_options,
-    )
-    from infralink.operator_actions import OperatorActionProvider
-
-    root = mounted_click_command(
-        operator_surface,
-        action_provider=OperatorActionProvider(),
-        envelope_renderer=OperatorEnvelopeRenderer(),
-        render_options=operator_render_options(),
-    )
-    command = root.get_command(click.Context(root), "host")
-    assert isinstance(command, click.Group)
-    return command
-
-
-def app_click_command() -> click.Group:
-    """Return the generated application subtree mounted under the root CLI."""
-    from infralink.agent_surface import (
-        AppEnvelopeRenderer,
-        app_render_options,
-        mounted_click_command,
-    )
-    from infralink.app_actions import AppActionProvider
-
-    root = mounted_click_command(
-        app_surface,
-        action_provider=AppActionProvider(),
-        envelope_renderer=AppEnvelopeRenderer(),
-        render_options=app_render_options(),
-        operation_error_exit_code_override=_app_operation_error_exit_code,
-    )
-    command = root.get_command(click.Context(root), "app")
-    assert isinstance(command, click.Group)
-    return command
-
-
-def _app_operation_error_exit_code(code: str) -> int:
-    """Keep the migrated app family's missing-source usage exit stable."""
-    if code == "configuration_required":
-        return 2
-    from infralink.agent_surface import operation_error_exit_code
-
-    return operation_error_exit_code(code)
-
-
-def app_mcp_adapter() -> MCPAdapter:
-    """Project the one public application registry through native MCP."""
-    from infralink.agent_surface import AppEnvelopeRenderer, app_render_options
-    from infralink.app_actions import AppActionProvider
-
-    return MCPAdapter(
-        app_surface,
-        action_provider=AppActionProvider(),
-        envelope_renderer=AppEnvelopeRenderer(),
-        render_options=app_render_options(),
-    )
-
-
-def diagram_mcp_adapter() -> MCPAdapter:
-    """Build the diagram-local MCP adapter used by its adapter contract tests."""
-    from infralink.agent_surface import InfralinkEnvelopeRenderer
-
-    return MCPAdapter(diagram_surface, envelope_renderer=InfralinkEnvelopeRenderer())
-
 
 class HostListRequest(SourceRequest):
     """List hosts from one explicit registry source."""
@@ -546,12 +359,52 @@ class ExplainRequest(_OperationModel):
     error_code: str = Field(min_length=1, json_schema_extra={"cli": {"kind": "argument"}})
 
 
+class HelpRequest(_OperationModel):
+    """Select one dotted public operation path for generated help."""
+
+    path: str | None = Field(
+        default=None,
+        description="Dotted operation path; omit to list the public root.",
+    )
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().replace(" ", ".")
+        if not normalized or any(not segment for segment in normalized.split(".")):
+            raise ValueError("path must be a dotted public operation path")
+        return normalized
+
+
 class ObservationProjectRequest(_OperationModel):
     """Shared immutable inputs for one offline observation projection."""
 
     source: Path
-    as_of: datetime
+    # Agent Surface projects scalar strings consistently through Click and MCP.
+    # Convert at the domain boundary instead of creating a transport-only
+    # datetime parser.
+    as_of: str = Field(min_length=1)
     registry_revision: str | None = None
+
+    @field_validator("as_of", mode="before")
+    @classmethod
+    def normalize_as_of(cls, value: str | datetime) -> str:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise PydanticCustomError(
+                    "rfc3339_timestamp", "as_of must be an RFC 3339 timestamp"
+                ) from error
+        else:
+            raise PydanticCustomError("rfc3339_timestamp", "as_of must be an RFC 3339 timestamp")
+        if parsed.tzinfo is None:
+            raise PydanticCustomError("rfc3339_offset", "as_of must include a UTC offset")
+        return parsed.isoformat()
 
 
 class ObservationProjectItemRequest(ObservationProjectRequest):
@@ -967,13 +820,13 @@ def secrets_inspect_operation(request: SecretsInspectRequest) -> SecretsInspectR
         _raise_operation_failure(error)
 
 
-@version_surface.operation("version", summary="Show CLI and schema versions", read_only=True)  # type: ignore[type-var]
+@operator_surface.operation("version", summary="Show CLI and schema versions", read_only=True)  # type: ignore[type-var]
 def version_operation(request: VersionRequest) -> VersionResult:
     """Return static package metadata through the canonical operation registry."""
     return VersionResult(version=__version__, cli_schema_version="infralink.cli/v1")
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "capabilities", summary="Describe the offline observation contract surface", read_only=True
 )
 def capabilities_operation(_request: CapabilitiesRequest) -> CapabilitiesResult:
@@ -1007,7 +860,7 @@ def capabilities_operation(_request: CapabilitiesRequest) -> CapabilitiesResult:
     )
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "explain", summary="Explain one offline observation diagnostic", read_only=True
 )
 def explain_operation(request: ExplainRequest) -> ExplainResult:
@@ -1026,7 +879,115 @@ def explain_operation(request: ExplainRequest) -> ExplainResult:
         ) from None
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
+    "help", summary="Discover public Infralink operations", read_only=True
+)
+def help_operation(request: HelpRequest) -> HelpResult:
+    """Render public help directly from the one registered operation tree."""
+    selected = tuple(request.path.split(".")) if request.path is not None else ()
+    definitions = {item.name: item for item in operator_surface.operations.list()}
+    available_paths = {tuple(name.split(".")) for name in definitions}
+    if selected and not any(path[: len(selected)] == selected for path in available_paths):
+        raise OperationError(
+            "entity_not_found",
+            "Public operation path was not found",
+            details=({"entity_type": "operation", "requested_id": request.path},),
+            fix="Run infralink help to discover registered operations.",
+        )
+    definition = definitions.get(".".join(selected))
+    children = sorted(
+        {
+            path[len(selected)]
+            for path in available_paths
+            if len(path) > len(selected) and path[: len(selected)] == selected
+        }
+    )
+    return HelpResult(
+        path=list(selected),
+        description=(
+            definition.summary
+            if definition is not None
+            else "Infralink public operation registry"
+        ),
+        arguments=[] if definition is None else _operation_arguments(definition.input_model),
+        options=[] if definition is None else _operation_options(definition.input_model),
+        examples=["infralink help", "infralink help --path host.show"],
+        children=[
+            HelpSubcommand(
+                name=child,
+                summary=_help_child_summary(definitions, selected, child),
+                action=HelpNavigationAction(
+                    command=f"infralink help --path {'.'.join((*selected, child))}",
+                    argv=["infralink", "help", "--path", ".".join((*selected, child))],
+                ),
+            )
+            for child in children
+        ],
+    )
+
+
+def _help_child_summary(definitions: dict[str, Any], selected: tuple[str, ...], child: str) -> str:
+    """Read a child summary without loading a second transport tree."""
+    path = (*selected, child)
+    prefix = ".".join(path)
+    exact = definitions.get(prefix)
+    if exact is not None:
+        return str(exact.summary)
+    first = next(item for name, item in sorted(definitions.items()) if name.startswith(f"{prefix}."))
+    return str(first.summary)
+
+
+def _operation_arguments(model: type[BaseModel]) -> list[ArgumentDescriptor]:
+    return [
+        ArgumentDescriptor(
+            name=name,
+            type=_operation_field_type(field.annotation),
+            required=field.is_required(),
+        )
+        for name, field in model.model_fields.items()
+        if _operation_field_kind(field) == "argument"
+    ]
+
+
+def _operation_options(model: type[BaseModel]) -> list[OptionDescriptor]:
+    return [
+        OptionDescriptor(
+            name=name,
+            type=_operation_field_type(field.annotation),
+            required=field.is_required(),
+        )
+        for name, field in model.model_fields.items()
+        if _operation_field_kind(field) != "argument"
+    ]
+
+
+def _operation_field_kind(field: Any) -> str:
+    raw_extra = field.json_schema_extra
+    extra: dict[str, Any] = raw_extra if isinstance(raw_extra, dict) else {}
+    raw_cli = extra.get("cli")
+    cli: dict[str, Any] = raw_cli if isinstance(raw_cli, dict) else {}
+    return str(cli.get("kind", "option"))
+
+
+def _operation_field_type(annotation: Any) -> str:
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return "choice"
+    if origin in {list, tuple, set}:
+        return "array"
+    arguments = get_args(annotation)
+    if type(None) in arguments:
+        return _operation_field_type(next(item for item in arguments if item is not type(None)))
+    if annotation is Path:
+        return "path"
+    if annotation is bool:
+        return "boolean"
+    if annotation is int:
+        return "integer"
+    return "string"
+
+
+@operator_surface.operation(  # type: ignore[type-var]
     "project.observation", summary="Project one offline observation plan", read_only=True
 )
 def project_observation_operation(request: ObservationProjectRequest) -> ProjectObservationResult:
@@ -1035,7 +996,9 @@ def project_observation_operation(request: ObservationProjectRequest) -> Project
 
     try:
         projected = project(
-            [request.source], as_of=request.as_of, registry_revision=request.registry_revision
+            [request.source],
+            as_of=_observation_as_of(request),
+            registry_revision=request.registry_revision,
         )
     except ProjectValidationError as error:
         first = error.report.diagnostics.diagnostics[0]
@@ -1056,7 +1019,9 @@ def _project_observation_plan(request: ObservationProjectRequest) -> Any:
 
     try:
         return project(
-            [request.source], as_of=request.as_of, registry_revision=request.registry_revision
+            [request.source],
+            as_of=_observation_as_of(request),
+            registry_revision=request.registry_revision,
         ).plan
     except ProjectValidationError as error:
         first = error.report.diagnostics.diagnostics[0]
@@ -1068,7 +1033,12 @@ def _project_observation_plan(request: ObservationProjectRequest) -> Any:
         ) from None
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+def _observation_as_of(request: ObservationProjectRequest) -> datetime:
+    """Parse the one public RFC 3339 timestamp at the projection boundary."""
+    return datetime.fromisoformat(request.as_of.replace("Z", "+00:00"))
+
+
+@operator_surface.operation(  # type: ignore[type-var]
     "project.secrets", summary="Project offline secret requirements", read_only=True
 )
 def project_secrets_operation(request: ObservationProjectRequest) -> ProjectSecretsResult:
@@ -1083,7 +1053,7 @@ def project_secrets_operation(request: ObservationProjectRequest) -> ProjectSecr
     )
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "project.view", summary="Project one offline operations view", read_only=True
 )
 def project_view_operation(request: ObservationProjectItemRequest) -> ProjectViewResult:
@@ -1100,7 +1070,7 @@ def project_view_operation(request: ObservationProjectItemRequest) -> ProjectVie
     return ProjectViewResult(plan_digest=plan.plan_digest or "", view=selected)
 
 
-@observation_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "project.readiness", summary="Project one offline readiness suite", read_only=True
 )
 def project_readiness_operation(request: ObservationProjectItemRequest) -> ProjectReadinessResult:
@@ -1122,8 +1092,8 @@ def project_readiness_operation(request: ObservationProjectItemRequest) -> Proje
     )
 
 
-@release_surface.operation(  # type: ignore[type-var]
-    "inspect", summary="Inspect an immutable local release handoff", read_only=True
+@operator_surface.operation(  # type: ignore[type-var]
+    "release.inspect", summary="Inspect an immutable local release handoff", read_only=True
 )
 def release_inspect_operation(request: ReleaseInspectRequest) -> ReleaseInspectResult:
     """Reuse the retained release parser without adding a publisher path."""
@@ -1135,8 +1105,8 @@ def release_inspect_operation(request: ReleaseInspectRequest) -> ReleaseInspectR
         _raise_operation_failure(error)
 
 
-@release_surface.operation(  # type: ignore[type-var]
-    "validate-candidate", summary="Validate an immutable release candidate", read_only=True
+@operator_surface.operation(  # type: ignore[type-var]
+    "release.validate-candidate", summary="Validate an immutable release candidate", read_only=True
 )
 def release_validate_candidate_operation(
     request: ReleaseCandidateRequest,
@@ -1150,8 +1120,8 @@ def release_validate_candidate_operation(
         _raise_operation_failure(error)
 
 
-@release_surface.operation(  # type: ignore[type-var]
-    "inspect-attestation", summary="Inspect an immutable release attestation", read_only=True
+@operator_surface.operation(  # type: ignore[type-var]
+    "release.inspect-attestation", summary="Inspect an immutable release attestation", read_only=True
 )
 def release_inspect_attestation_operation(
     request: ReleaseAttestationRequest,
@@ -1165,8 +1135,8 @@ def release_inspect_attestation_operation(
         _raise_operation_failure(error)
 
 
-@release_surface.operation(  # type: ignore[type-var]
-    "render-publisher-request", summary="Inspect a release publisher request", read_only=True
+@operator_surface.operation(  # type: ignore[type-var]
+    "release.render-publisher-request", summary="Inspect a release publisher request", read_only=True
 )
 def release_publisher_request_operation(
     request: ReleasePublisherRequest,
@@ -1343,16 +1313,22 @@ def resolve(request: EdgeResolveRequest) -> ResolveResult:
     return resolve_declared_edge(request)
 
 
-@app_surface.operation("app.list", summary="List declared applications", read_only=True)  # type: ignore[type-var]
+@operator_surface.operation("app.list", summary="List declared applications", read_only=True)  # type: ignore[type-var]
 def app_list(request: SourceRequest) -> AppListResult:
     """Return application IDs without a Click context."""
-    return list_declared_apps(request)
+    try:
+        return list_declared_apps(request)
+    except OperationError as error:
+        _raise_app_operation_error(error)
 
 
-@app_surface.operation("app.show", summary="Show one declared application", read_only=True)  # type: ignore[type-var]
+@operator_surface.operation("app.show", summary="Show one declared application", read_only=True)  # type: ignore[type-var]
 def app_show(request: AppShowRequest) -> AppShowResult:
     """Return one bounded application view without a Click context."""
-    return show_declared_app(request)
+    try:
+        return show_declared_app(request)
+    except OperationError as error:
+        _raise_app_operation_error(error)
 
 
 @operator_surface.operation("info", summary="Summarize declared topology", read_only=True)  # type: ignore[type-var]
@@ -1380,7 +1356,7 @@ def fleet_validate(request: FleetValidateRequest) -> OperationOutcome[FleetValid
     return OperationOutcome(result, exit_code=0 if result.valid else 1)
 
 
-@diagram_surface.operation(  # type: ignore[type-var]
+@operator_surface.operation(  # type: ignore[type-var]
     "diagram.project", summary="Project a declared V2 topology diagram", read_only=True
 )
 def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
@@ -1517,6 +1493,24 @@ def _raise_operation_failure(error: Exception) -> NoReturn:
             error.code.value,
             error.message,
             details=(error.details,),
+            fix=error.fix,
+        ) from None
+    raise error
+
+
+def _raise_app_operation_error(error: OperationError) -> NoReturn:
+    """Preserve the app family's historical missing-source process exit.
+
+    Agent Surface maps errors to process exits by typed error code.  The
+    public envelope keeps the shared ``configuration_required`` code, while
+    this private operation code avoids restoring a second Click adapter just
+    to retain the legacy app usage exit.
+    """
+    if error.code == "configuration_required":
+        raise OperationError(
+            "app_configuration_required",
+            error.message,
+            details=error.details,
             fix=error.fix,
         ) from None
     raise error

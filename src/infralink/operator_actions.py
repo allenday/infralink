@@ -8,6 +8,7 @@ from agent_surface.contracts import Action, ActionCollection
 from agent_surface.outcomes import ActionProvider
 from pydantic import BaseModel
 
+from infralink.app_actions import AppActionProvider
 from infralink.cli.contracts import (
     Action as DoctorAction,
 )
@@ -143,7 +144,7 @@ class OperatorActionProvider(ActionProvider):
                     Action(
                         rel="help",
                         description="Show command usage",
-                        command=("help", *operation.split(".")),
+                        command=("help", "--path", operation),
                         operation="help",
                     ),
                 ),
@@ -193,12 +194,12 @@ class OperatorActionProvider(ActionProvider):
                         rel="patch",
                         description="Preview a typed host declaration mutation",
                         command_template=(
-                            "--registry",
-                            str(result._checkout),
                             "registry",
                             "host",
                             "patch",
                             result.host.id,
+                            "--registry",
+                            str(result._checkout),
                             "--set",
                             "{assignment}",
                         ),
@@ -228,12 +229,12 @@ class OperatorActionProvider(ActionProvider):
                         rel="write",
                         description="Write this reviewed host declaration mutation",
                         command=(
-                            "--registry",
-                            str(result._checkout),
                             "registry",
                             "host",
                             "patch",
                             result.host.id,
+                            "--registry",
+                            str(result._checkout),
                             *sum((("--set", assignment) for assignment in request.assignments), ()),
                             "--write",
                         ),
@@ -412,7 +413,7 @@ def _doctor_error_actions(error: Any) -> ActionCollection:
         item = Action(
             rel="help",
             description="Show doctor usage",
-            command=("help", "doctor"),
+            command=("help", "--path", "doctor"),
             operation="help",
         )
     return ActionCollection(items=(item,), total=1, returned=1)
@@ -755,3 +756,42 @@ def _host_status_and_logs_actions(target_id: str) -> ActionCollection:
         total=2,
         returned=2,
     )
+
+
+class InfralinkActionProvider(ActionProvider):
+    """Route actions from the one public operation registry.
+
+    The application read family retains its bounded navigation semantics;
+    every other operation uses the established operator action catalog.  This
+    is action policy only, not another App or transport surface.
+    """
+
+    def __init__(self) -> None:
+        self._operator = OperatorActionProvider()
+        self._app = AppActionProvider()
+
+    def actions_for(
+        self,
+        *,
+        operation: str,
+        request: BaseModel | None = None,
+        result: object | None = None,
+        error: Any = None,
+    ) -> ActionCollection:
+        provider = self._app if operation.startswith("app.") else self._operator
+        return provider.actions_for(
+            operation=operation,
+            request=request,
+            result=result,
+            error=error,
+        )
+
+    def list_actions(
+        self, *, cursor: str | None = None, budget: object | None = None
+    ) -> ActionCollection:
+        del cursor, budget
+        return ActionCollection()
+
+    def explain(self, operation: str) -> Action | None:
+        del operation
+        return None

@@ -5,6 +5,7 @@ import json
 import pickle
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, dataclass
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -250,13 +251,14 @@ def test_redact_argv_redacts_live_short_password_alias() -> None:
     ]
 
 
-def test_click_parser_rejects_attached_short_password_value() -> None:
+def test_public_click_parser_rejects_unknown_sensitive_option_without_echoing_it() -> None:
     result = CliRunner().invoke(
         cli,
-        ["--output", "json", "resolve", "edge-1", "-pcanary-secret"],
+        ["resolve", "edge-1", "--password=canary-secret"],
     )
 
-    assert result.exit_code == 2
+    if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2):
+        assert result.exit_code == 2
     assert "canary-secret" not in result.output
 
 

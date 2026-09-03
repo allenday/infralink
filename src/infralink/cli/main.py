@@ -63,6 +63,7 @@ from infralink.operator_operations.host_bootstrap import (
     _validate_bootstrap_bws_access,
 )
 from infralink.operator_sources import resolve_registry_companion
+from infralink.operator_surface import operator_click_adapter
 
 # Transitional re-exports preserve the existing test and extension import path
 # while bootstrap ownership moves behind the transport-neutral operation module.
@@ -1223,14 +1224,6 @@ def _load_command(
         return help_command
     if name == "version":
         return version_command
-    if name == "analyze":
-        from infralink.operator_surface import analyze_click_command
-
-        return analyze_click_command()
-    if name == "check":
-        from infralink.operator_surface import check_click_command
-
-        return check_click_command()
     if name == "doctor":
         from infralink.cli.doctor import doctor
 
@@ -1241,22 +1234,10 @@ def _load_command(
         from infralink.cli.diagram import diagram
 
         return diagram
-    if name == "docs":
-        from infralink.operator_surface import docs_click_command
-
-        return docs_click_command()
-    if name == "resolve":
-        from infralink.operator_surface import resolve_click_command
-
-        return resolve_click_command()
     if name == "validate":
         from infralink.cli.validate import validate
 
         return validate
-    if name == "fleet":
-        from infralink.cli.fleet import fleet
-
-        return fleet
     if name == "capabilities":
         from infralink.cli.observation import capabilities
 
@@ -1269,24 +1250,12 @@ def _load_command(
         from infralink.cli.observation import explain_command
 
         return explain_command
-    if name == "app":
-        from infralink.operator_surface import app_click_command
-
-        return app_click_command()
-    if name == "info":
-        from infralink.operator_surface import info_click_command
-
-        return info_click_command()
     if name == "hosts":
         return hosts
     if name == "edges-list":
         return edges_list
     if name == "services":
         return services
-    if name == "host":
-        from infralink.operator_surface import host_click_command
-
-        return host_click_command()
     if name == "operation":
         return operation
     if name == "edge":
@@ -1596,7 +1565,7 @@ def version_command() -> None:
     help="Output format (yaml by default; json for explicit machine parsing)",
 )
 @pass_context
-def cli(
+def legacy_cli(
     ctx: Context, registry: Path | None, edges: Path | None, verbose: bool, output: str
 ) -> None:
     """
@@ -1666,7 +1635,7 @@ def cli(
     if click_ctx.invoked_subcommand is not None:
         return
 
-    live_commands = cli.list_commands(click_ctx)
+    live_commands = legacy_cli.list_commands(click_ctx)
     command_tree = RootResult(
         version=__version__,
         commands=[_command_descriptor(name) for name in live_commands],
@@ -2210,8 +2179,19 @@ def edge_show(
     )
 
 
+# The installed ``infralink`` executable is the Agent Surface projection itself.
+# Do not wrap, copy, filter, or extend this tree: Click and MCP must derive from
+# the same typed registry, including their generated discovery operations.
+cli = operator_click_adapter().command()
+
+
 def main(args: list[str] | None = None) -> int:
-    return int(cli.main(args=args, prog_name="infralink", standalone_mode=False))
+    incoming = list(sys.argv[1:] if args is None else args)
+    # A bare executable is HATEOAS discovery, rather than Click's prose help.
+    if not incoming:
+        incoming = ["help"]
+    result = cli.main(args=incoming, prog_name="infralink", standalone_mode=False)
+    return 0 if result is None else int(result)
 
 
 def run(args: list[str] | None = None) -> None:

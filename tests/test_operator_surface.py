@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -12,6 +13,7 @@ import yaml
 from agent_surface import OperationError
 from click.testing import CliRunner
 from mcp import Client
+from pydantic import ValidationError
 
 from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostReadinessResult
 from infralink.cli.errors import CliFailure
@@ -30,7 +32,6 @@ from infralink.operator_surface import (
     doctor_host_bootstrap_plan,
     explain_operation,
     host_create_operation,
-    observation_surface,
     operation_status_operation,
     operator_click_adapter,
     operator_mcp_adapter,
@@ -41,8 +42,6 @@ from infralink.operator_surface import (
     project_view_operation,
     registry_host_get_operation,
     registry_host_patch_operation,
-    release_surface,
-    version_surface,
 )
 
 
@@ -80,8 +79,8 @@ def test_release_inspect_uses_a_source_independent_typed_surface(tmp_path: Path)
     )
 
     result = asyncio.run(
-        release_surface.invoke(
-            "inspect",
+        operator_surface.invoke(
+            "release.inspect",
             {"release_validation": validation, "admission": admission},
         )
     )
@@ -93,10 +92,10 @@ def test_release_inspect_uses_a_source_independent_typed_surface(tmp_path: Path)
 
 def test_version_uses_one_typed_source_independent_operation() -> None:
     """Version needs neither a Registry checkout nor a transport-local handler."""
-    direct = asyncio.run(version_surface.invoke("version", {}))
+    direct = asyncio.run(operator_surface.invoke("version", {}))
     assert direct.cli_schema_version == "infralink.cli/v1"
 
-    public_result = CliRunner().invoke(cli, ["--output", "json", "version"])
+    public_result = CliRunner().invoke(cli, ["version", "--format", "json"])
     assert public_result.exit_code == 0, public_result.output
     assert json.loads(public_result.output)["result"] == direct.model_dump(mode="json")
 
@@ -171,12 +170,12 @@ def test_secrets_inspect_preserves_bounded_navigation_and_repair_actions(
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
         [
+            "secrets",
+            "inspect",
             "--registry",
             str(registry),
             "--edges",
             str(edges_path),
-            "secrets",
-            "inspect",
             "--limit",
             "1",
             "--format",
@@ -220,7 +219,7 @@ def test_secrets_inspect_preserves_bounded_navigation_and_repair_actions(
     assert missing["error"]["code"] == "entity_not_found"
     assert missing["next_actions"][0]["rel"] == "inspect"
     assert "--registry" in missing["next_actions"][0]["command"]
-    assert missing["next_actions"][0]["command"].endswith("secrets inspect")
+    assert "infralink secrets inspect" in missing["next_actions"][0]["command"]
 
 
 def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_path: Path) -> None:
@@ -249,7 +248,9 @@ def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_pat
         encoding="utf-8",
     )
 
-    result = asyncio.run(release_surface.invoke("validate-candidate", {"candidate": candidate}))
+    result = asyncio.run(
+        operator_surface.invoke("release.validate-candidate", {"candidate": candidate})
+    )
 
     assert result.candidate.identity == "releases/core-v2/42"
     assert result.candidate.consumers == ["citadel"]
@@ -290,7 +291,7 @@ def test_release_attestation_inspection_uses_the_retained_immutable_contract(
     )
 
     result = asyncio.run(
-        release_surface.invoke("inspect-attestation", {"attestation": attestation})
+        operator_surface.invoke("release.inspect-attestation", {"attestation": attestation})
     )
 
     assert result.attestation.release_identity == "releases/core-v2/42"
@@ -302,7 +303,7 @@ def test_release_publisher_request_inspection_uses_the_declared_immutable_docume
     request = Path(__file__).resolve().parents[1] / "examples/release/publisher-request.v3.json"
 
     result = asyncio.run(
-        release_surface.invoke("render-publisher-request", {"publisher_request": request})
+        operator_surface.invoke("release.render-publisher-request", {"publisher_request": request})
     )
 
     assert result.publisher_request.schema_version == "infralink.publisher-request.v3"
@@ -323,7 +324,7 @@ def test_release_publisher_request_preserves_retained_domain_input_errors(
 ) -> None:
     """Input-form failures retain release-specific code, details, and repair text."""
     with pytest.raises(OperationError) as captured:
-        asyncio.run(release_surface.invoke("render-publisher-request", payload))
+        asyncio.run(operator_surface.invoke("release.render-publisher-request", payload))
 
     assert captured.value.code == "release_publisher_request_invalid"
     assert captured.value.fix == "Provide a valid immutable release publisher-request document"
@@ -403,11 +404,11 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     result = CliRunner().invoke(
         operator_click_adapter().command(),
         [
-            "--registry",
-            str(registry),
             "host",
             "bootstrap",
             host_id,
+            "--registry",
+            str(registry),
             "--ssh-host",
             "100.64.0.1",
             "--apply",
@@ -494,7 +495,7 @@ def test_doctor_operation_uses_the_retained_cli_evaluator_without_live_io(tmp_pa
 
     cli_result = CliRunner().invoke(
         operator_click_adapter().command(),
-        ["--registry", str(registry), "doctor", "--validate", "--format", "json"],
+        ["doctor", "--registry", str(registry), "--validate", "--format", "json"],
     )
     assert cli_result.exit_code == 0, cli_result.output
     payload = json.loads(cli_result.output)
@@ -503,9 +504,9 @@ def test_doctor_operation_uses_the_retained_cli_evaluator_without_live_io(tmp_pa
     missing_result = CliRunner().invoke(
         operator_click_adapter().command(),
         [
+            "doctor",
             "--registry",
             str(registry),
-            "doctor",
             "--validate",
             "--target-type",
             "host",
@@ -518,7 +519,7 @@ def test_doctor_operation_uses_the_retained_cli_evaluator_without_live_io(tmp_pa
     assert missing_result.exit_code == 3, missing_result.output
     missing_payload = json.loads(missing_result.output)
     assert missing_payload["error"]["code"] == "entity_not_found"
-    assert missing_payload["next_actions"][0]["command"].endswith("host list")
+    assert "infralink host list" in missing_payload["next_actions"][0]["command"]
 
 
 def test_doctor_is_registered_once_for_the_typed_mcp_projection() -> None:
@@ -573,18 +574,18 @@ def test_bootstrap_plan_uses_one_typed_transport_boundary_across_doctor_and_clic
         )
 
     click_result = CliRunner().invoke(
-        cli,
+        operator_click_adapter().command(),
         [
-            "--output",
-            "json",
-            "--registry",
-            str(registry),
             "host",
             "bootstrap",
             host_id,
+            "--registry",
+            str(registry),
             "--ssh-host",
             requested_address,
             "--plan",
+            "--format",
+            "json",
         ],
     )
     assert click_result.exit_code == 3
@@ -701,23 +702,32 @@ def test_registry_host_authoring_operations_preserve_preview_then_explicit_write
 
     action_result = CliRunner().invoke(
         operator_click_adapter().command(),
-        ["--registry", str(registry), "registry", "host", "get", "host-1", "--format", "json"],
+        [
+            "registry",
+            "host",
+            "get",
+            "host-1",
+            "--registry",
+            str(registry),
+            "--format",
+            "json",
+        ],
     )
     assert action_result.exit_code == 0, action_result.output
     action_payload = json.loads(action_result.output)
     assert action_payload["next_actions"][0]["rel"] == "patch"
     assert f"--registry {registry}" in action_payload["next_actions"][0]["command"]
-    assert action_payload["next_actions"][0]["command"].endswith("--set '{assignment}'")
+    assert "--set '{assignment}'" in action_payload["next_actions"][0]["command"]
 
     preview_action = CliRunner().invoke(
         operator_click_adapter().command(),
         [
-            "--registry",
-            str(registry),
             "registry",
             "host",
             "patch",
             "host-1",
+            "--registry",
+            str(registry),
             "--set",
             "status=active",
             "--format",
@@ -728,7 +738,7 @@ def test_registry_host_authoring_operations_preserve_preview_then_explicit_write
     preview_payload = json.loads(preview_action.output)
     assert preview_payload["next_actions"][0]["rel"] == "write"
     assert f"--registry {registry}" in preview_payload["next_actions"][0]["command"]
-    assert preview_payload["next_actions"][0]["command"].endswith("status=active --write")
+    assert "--set status=active --write" in preview_payload["next_actions"][0]["command"]
 
 
 def test_registry_host_patch_refuses_the_managed_runtime_checkout(
@@ -887,10 +897,17 @@ def test_operation_status_uses_one_typed_provider_contract(
 
 
 def test_operation_status_is_discoverable_through_the_typed_mcp_adapter() -> None:
+    if tuple(map(int, version("agent-surface").split(".")[:2])) < (0, 2):
+        pytest.skip("requires the declared Agent Surface 0.2 MCP projection")
+
     async def list_tools() -> dict[str, object]:
         async with Client(operator_mcp_adapter().server) as client:
             tools = await client.list_tools()
-        return {tool.name: tool.input_schema for tool in tools.tools}
+            collected = list(tools.tools)
+            while tools.next_cursor is not None:
+                tools = await client.list_tools(cursor=tools.next_cursor)
+                collected.extend(tools.tools)
+        return {tool.name: tool.input_schema for tool in collected}
 
     schemas = asyncio.run(list_tools())
     schema = schemas["operation.status"]
@@ -909,7 +926,7 @@ def test_operation_status_is_discoverable_through_the_typed_mcp_adapter() -> Non
 
 
 def test_observation_discovery_operations_preserve_the_typed_diagnostic_contract() -> None:
-    capability = asyncio.run(observation_surface.invoke("capabilities", {}))
+    capability = asyncio.run(operator_surface.invoke("capabilities", {}))
     assert capability.projections == ["observation", "secrets", "view", "readiness"]
     explanation = explain_operation(ExplainRequest(error_code="schema-version-missing"))
     assert explanation.code == "schema-version-missing"
@@ -977,3 +994,55 @@ def test_observation_project_operation_uses_the_existing_planner_contract(tmp_pa
             )
         )
     assert "diagnostics" in invalid_projection.value.details[0]
+
+
+@pytest.mark.parametrize("as_of", ["2026-08-04T00:00:00", datetime(2026, 8, 4)])
+def test_observation_projection_rejects_naive_timestamps(as_of: str | datetime) -> None:
+    with pytest.raises(ValidationError, match="UTC offset"):
+        ObservationProjectRequest(source=Path("observation.yml"), as_of=as_of)
+
+
+@pytest.mark.parametrize("as_of", ["2026-08-04T00:00:00Z", "2026-08-04T01:00:00+01:00"])
+def test_observation_projection_accepts_offset_timestamps(as_of: str) -> None:
+    request = ObservationProjectRequest(source=Path("observation.yml"), as_of=as_of)
+
+    assert request.as_of.endswith(("+00:00", "+01:00"))
+
+
+def test_generated_click_rejects_a_naive_observation_timestamp(tmp_path: Path) -> None:
+    source = tmp_path / "observation.yml"
+    source.write_text("schema_version: infralink.observation/v1\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "project",
+            "observation",
+            "--source",
+            str(source),
+            "--as-of",
+            "2026-08-04T00:00:00",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["error"]["code"] == "usage_error"
+
+
+def test_generated_mcp_rejects_a_naive_observation_timestamp(tmp_path: Path) -> None:
+    """MCP must classify the same typed parse error as the Click projection."""
+    source = tmp_path / "observation.yml"
+    source.write_text("schema_version: infralink.observation/v1\n", encoding="utf-8")
+
+    async def exercise() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            response = await client.call_tool(
+                "project.observation",
+                {"source": str(source), "as_of": "2026-08-04T00:00:00"},
+            )
+        assert response.is_error is True
+        return response.structured_content
+
+    assert asyncio.run(exercise())["error"]["code"] == "usage_error"

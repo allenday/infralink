@@ -14,7 +14,7 @@ def test_cli_export_loads_main_only_when_accessed() -> None:
                 "sys.path.insert(0, 'src')\n"
                 "import infralink.cli as package\n"
                 "assert 'infralink.cli.main' not in sys.modules\n"
-                "assert package.cli.name == 'cli'\n"
+                "assert package.cli.name == 'infralink'\n"
                 "assert 'infralink.cli.main' in sys.modules\n"
             ),
         ],

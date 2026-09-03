@@ -24,10 +24,12 @@ from infralink.operator_surface import (
 
 
 def test_public_host_help_exposes_the_complete_generated_operation_family() -> None:
-    result = CliRunner().invoke(cli, ["help", "host"])
+    result = CliRunner().invoke(cli, ["help", "--path", "host"])
 
     assert result.exit_code == 0, result.output
-    document = json.loads(CliRunner().invoke(cli, ["--output", "json", "help", "host"]).output)
+    document = json.loads(
+        CliRunner().invoke(cli, ["help", "--path", "host", "--format", "json"]).output
+    )
     assert {child["name"] for child in document["result"]["children"]} == {
         "apply",
         "bootstrap",
@@ -52,7 +54,7 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     )
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
-        ["--registry", str(tmp_path), "host", "list", "--format", "json"],
+        ["host", "list", "--registry", str(tmp_path), "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -64,10 +66,7 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
     assert click_result.exit_code == 0, click_result.output
     click_document = json.loads(click_result.output)
     mcp_document = asyncio.run(call_mcp())
-    for document, action_output in (
-        (click_document, " --output json"),
-        (mcp_document, ""),
-    ):
+    for document, output_arg in ((click_document, " --format json"), (mcp_document, "")):
         assert document["schema_version"] == "infralink.cli/v1"
         assert document["ok"] is True
         assert document["command"]["parsed"]["path"] == ["host", "list"]
@@ -76,7 +75,7 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
         assert document["next_actions"] == [
             {
                 "rel": "show",
-                "command": f"infralink{action_output} --registry {tmp_path} host show '{{host_id}}'",
+                "command": f"infralink host show '{{host_id}}' --registry {tmp_path}{output_arg}",
                 "description": "Show one host declaration",
                 "safe": True,
                 "templated": True,
@@ -91,12 +90,12 @@ def test_host_list_projects_the_same_infralink_envelope_through_click_and_mcp(
         ]
 
     assert click_document["command"]["raw"] == (
-        f"infralink --registry {tmp_path} host list --format json"
+        f"infralink host list --registry {tmp_path} --format json"
     )
     assert click_document["command"]["parsed"]["flags"] == ["--registry", "--format"]
     assert click_document["command"]["resolved"]["output"] == "json"
 
-    assert mcp_document["command"]["raw"] == f"infralink --registry {tmp_path} host list"
+    assert mcp_document["command"]["raw"] == f"infralink host list --registry {tmp_path}"
     assert mcp_document["command"]["parsed"]["flags"] == ["--registry"]
     assert mcp_document["command"]["resolved"]["output"] == "json"
 
@@ -117,7 +116,7 @@ def test_host_list_actions_pin_the_configured_checkout_for_cli_and_mcp(
     monkeypatch.delenv("INFRALINK_REGISTRY", raising=False)
     monkeypatch.delenv("INFRALINK_EDGES", raising=False)
 
-    click_result = CliRunner().invoke(cli, ["--output", "json", "host", "list"])
+    click_result = CliRunner().invoke(cli, ["host", "list", "--format", "json"])
 
     async def call_mcp() -> dict[str, object]:
         async with Client(operator_mcp_adapter().server) as client:
@@ -126,14 +125,11 @@ def test_host_list_actions_pin_the_configured_checkout_for_cli_and_mcp(
         return result.structured_content
 
     assert click_result.exit_code == 0, click_result.output
-    documents = (
-        (json.loads(click_result.output), " --output json"),
-        (asyncio.run(call_mcp()), ""),
-    )
-    for document, action_output in documents:
+    documents = ((json.loads(click_result.output), " --format json"), (asyncio.run(call_mcp()), ""))
+    for document, output_arg in documents:
         show = next(action for action in document["next_actions"] if action["rel"] == "show")
         assert show["command"] == (
-            f"infralink{action_output} --registry {tmp_path / 'registry'} host show '{{host_id}}'"
+            f"infralink host show '{{host_id}}' --registry {tmp_path / 'registry'}{output_arg}"
         )
 
 
@@ -180,15 +176,14 @@ def test_mixed_cli_registry_and_environment_edges_stay_replayable(
 
     result = CliRunner().invoke(
         cli,
-        ["--output", "json", "--registry", str(registry), "host", "list"],
+        ["host", "list", "--registry", str(registry), "--format", "json"],
     )
 
     assert result.exit_code == 0, result.output
     document = json.loads(result.output)
     show = next(action for action in document["next_actions"] if action["rel"] == "show")
     assert show["command"] == (
-        f"infralink --output json --registry {registry} --edges {selected_edges} "
-        "host show '{host_id}'"
+        f"infralink host show '{{host_id}}' --registry {registry} --edges {selected_edges} --format json"
     )
 
 
@@ -335,7 +330,7 @@ def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() ->
     assert [action.model_dump(mode="json") for action in document.next_actions] == [
         {
             "rel": "next",
-            "command": "infralink --registry /registry host list",
+            "command": "infralink host list --registry /registry",
             "description": "Inspect the next page",
             "safe": True,
         }
@@ -545,7 +540,7 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
     )
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
-        ["--registry", str(tmp_path), "--edges", str(edges), *path, "--format", "json"],
+        [*path, "--registry", str(tmp_path), "--edges", str(edges), "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -573,7 +568,7 @@ def test_remaining_typed_reads_project_one_envelope_through_click_and_mcp(
 
     assert click_document["result"] == mcp_document["result"]
     assert mcp_document["command"]["raw"] == (
-        f"infralink --registry {tmp_path} --edges {edges} {' '.join(path)}"
+        f"infralink {' '.join(path)} --registry {tmp_path} --edges {edges}"
     )
 
 
@@ -583,7 +578,7 @@ def test_typed_source_failure_projects_one_error_envelope_through_click_and_mcp(
     missing_registry = tmp_path / "missing"
     click_result = CliRunner().invoke(
         operator_click_adapter().command(),
-        ["--registry", str(missing_registry), "host", "list", "--format", "json"],
+        ["host", "list", "--registry", str(missing_registry), "--format", "json"],
     )
 
     async def call_mcp() -> dict[str, object]:
@@ -599,7 +594,7 @@ def test_typed_source_failure_projects_one_error_envelope_through_click_and_mcp(
         assert document["schema_version"] == "infralink.cli/v1"
         assert document["ok"] is False
         assert document["command"]["parsed"]["path"] == ["host", "list"]
-        assert document["error"]["code"] == "source_not_found"
+        assert document["error"]["code"] == "input_load_failed"
         assert document["error"]["details"] == {
             "source": "registry",
             "path": str(missing_registry),

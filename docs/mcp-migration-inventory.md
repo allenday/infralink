@@ -2,17 +2,17 @@
 
 ## Current Public Surface
 
-`infralink mcp serve` remains the established complete public MCP surface while
-the canonical registry is introduced incrementally. This avoids removing valid
-tools before their operation families have migrated.
+`infralink-mcp` is the complete native MCP surface. It is a transport launcher,
+not a second command registry: every exposed tool is projected from the same
+typed operation registry as `infralink`.
 
 ## Typed Foundation
 
-The read-only `app.list` and `app.show` family is registered once and has
-generated Click and MCP projections used by its contract tests. The public
-server is intentionally not switched to that partial projection yet.
+Every public operation is registered once and projected as sibling generated
+Click and MCP transports. Schema, invocation, and high-risk host-control tests
+cover the shared contract.
 
 ## Deferred Cutover
 
-[#270] completes the remaining command-family migrations, proves complete
-CLI/registry/MCP parity, and then replaces the legacy public MCP projection.
+[#270] removed the legacy generic MCP projection. New operations must be added
+to the shared typed registry rather than directly to either transport.

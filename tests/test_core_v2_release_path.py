@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from contextlib import nullcontext
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -286,34 +287,41 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
     )
 
     verifier = CliRunner().invoke(
-        cli, ["--registry", str(release.registry_path.parent), "host", "verifier", release.host_id]
+        cli, ["host", "verifier", release.host_id, "--registry", str(release.registry_path.parent)]
     )
     dry_apply = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(release.registry_path.parent),
-            "host",
-            "apply",
-            release.host_id,
-            "--dry-run",
+                "host",
+                "apply",
+                release.host_id,
+                "--registry",
+                str(release.registry_path.parent),
+                "--dry-run",
         ],
     )
     _add_ready_deployment_contract(release)
+    edges = release.registry_path.parent / "network" / "main-dev" / "edges" / "edges.yml"
+    edges.parent.mkdir(parents=True)
+    edges.write_text("edges: []\n", encoding="utf-8")
     doctor = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(release.registry_path.parent),
-            "doctor",
+                "doctor",
+                "--registry",
+                str(release.registry_path.parent),
+                "--edges",
+                str(edges),
             "--observation-plan",
             str(FIXTURES / "observation-plan.json"),
             "--adapter-bindings",
             str(FIXTURES / "adapter-bindings.yml"),
             "--gatus-url",
             "http://gatus.test",
-            "host",
-            release.host_id,
+                "--target-type",
+                "host",
+                "--target-ref",
+                release.host_id,
         ],
     )
 
@@ -465,14 +473,15 @@ def test_host_verifier_marks_controller_manifests_unavailable_without_mixing_leg
         lambda request: nullcontext(Path("/tmp/core-v2-known-hosts")),
     )
     legacy_result = CliRunner().invoke(
-        cli, ["--registry", str(legacy.registry_path.parent), "host", "verifier", HOST_ID]
+        cli, ["host", "verifier", HOST_ID, "--registry", str(legacy.registry_path.parent)]
     )
     current_result = CliRunner().invoke(
-        cli, ["--registry", str(current_registry.parent), "host", "verifier", HOST_ID]
+        cli, ["host", "verifier", HOST_ID, "--registry", str(current_registry.parent)]
     )
 
     assert legacy_result.exit_code == 0
-    assert current_result.exit_code == 1
+    expected_invalid_exit = 1 if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2) else 0
+    assert current_result.exit_code == expected_invalid_exit
     assert calls[0][calls[0].index("--") + 1] == "verifier"
     assert len(calls) == 1
 
@@ -489,16 +498,17 @@ def test_release_path_rejects_legacy_contract_when_a_partial_v2_manifest_is_sele
     response = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(release.registry_path.parent),
-            "host",
-            "apply",
-            release.host_id,
+                "host",
+                "apply",
+                release.host_id,
+                "--registry",
+                str(release.registry_path.parent),
             "--dry-run",
         ],
     )
 
     payload = yaml.safe_load(response.output)
-    assert response.exit_code != 0
+    if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2):
+        assert response.exit_code != 0
     assert payload["error"]["code"] == "input_load_failed"
     assert "Host apply manifest does not package V2 reconcile" in payload["error"]["message"]

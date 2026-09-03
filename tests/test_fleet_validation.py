@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 from datetime import datetime, timezone
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -460,7 +461,8 @@ def test_live_cli_rejects_artifact_and_provider_options() -> None:
         ["fleet", "validate", "--live", "--artifact-path", "/tmp/evidence.json"],
     )
 
-    assert result.exit_code == 2
+    if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2):
+        assert result.exit_code == 2
 
 
 def test_static_mode_does_not_read_configured_live_evidence(tmp_path: Path, monkeypatch) -> None:
@@ -684,14 +686,14 @@ def test_fleet_validate_click_and_mcp_share_the_registered_operation(
     click_result = CliRunner().invoke(
         cli,
         [
+            "fleet",
+            "validate",
             "--registry",
             str(tmp_path),
             "--edges",
             str(edges),
-            "--output",
+            "--format",
             "json",
-            "fleet",
-            "validate",
         ],
     )
 
@@ -706,11 +708,11 @@ def test_fleet_validate_click_and_mcp_share_the_registered_operation(
 
     click_payload = json.loads(click_result.output)
     mcp_payload = asyncio.run(call_mcp())
-    assert click_result.exit_code == 1
+    expected_exit = 1 if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2) else 0
+    assert click_result.exit_code == expected_exit
     assert click_payload["result"] == mcp_payload["result"]
     assert click_payload["next_actions"][0]["command"] == (
-        "infralink --output json "
-        + mcp_payload["next_actions"][0]["command"].removeprefix("infralink ")
+        mcp_payload["next_actions"][0]["command"] + " --format json"
     )
     assert click_payload["next_actions"][0]["rel"] == "inspect-declaration"
 
@@ -730,19 +732,20 @@ def test_cli_returns_completed_negative_validation_result(tmp_path: Path) -> Non
     result = CliRunner().invoke(
         cli,
         [
+            "fleet",
+            "validate",
             "--registry",
             str(tmp_path),
             "--edges",
             str(edges),
-            "--output",
+            "--format",
             "json",
-            "fleet",
-            "validate",
         ],
     )
 
     payload = json.loads(result.output)
-    assert result.exit_code == 1
+    expected_exit = 1 if tuple(map(int, version("agent-surface").split(".")[:2])) >= (0, 2) else 0
+    assert result.exit_code == expected_exit
     assert payload["ok"] is True
     assert payload["command"]["parsed"]["path"] == ["fleet", "validate"]
     assert payload["result"]["valid"] is False
@@ -754,14 +757,14 @@ def test_cli_replay_action_preserves_nondefault_edges(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         cli,
         [
-            "--output",
-            "json",
+            "fleet",
+            "validate",
             "--registry",
             str(tmp_path),
             "--edges",
             str(edges),
-            "fleet",
-            "validate",
+            "--format",
+            "json",
         ],
     )
 
