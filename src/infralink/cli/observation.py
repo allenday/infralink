@@ -306,15 +306,22 @@ def capabilities(ctx: Any) -> int:
     return 0
 
 
+def _explain_result(error_code: str) -> ExplainResult:
+    """Resolve one diagnostic through the shared typed domain result builder."""
+    from infralink.observation import explain
+
+    return ExplainResult(**asdict(explain(error_code)))
+
+
 @click.command(name="explain")
 @click.argument("error_code")
 @click.pass_obj
 def explain_command(ctx: Any, error_code: str) -> int:
-    from infralink.observation import DiagnosticCodeNotFoundError, explain
+    from infralink.observation import DiagnosticCodeNotFoundError
 
     command = _command(["explain"], {"error_code": error_code})
     try:
-        value = explain(error_code)
+        result = _explain_result(error_code)
     except DiagnosticCodeNotFoundError as error:
         _emit(
             ctx,
@@ -328,7 +335,7 @@ def explain_command(ctx: Any, error_code: str) -> int:
             ),
         )
         return 1
-    _emit(ctx, _envelope(command, result=ExplainResult(**asdict(value))))
+    _emit(ctx, _envelope(command, result=result))
     return 0
 
 
