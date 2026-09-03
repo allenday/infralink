@@ -13,8 +13,8 @@ source-tree audit.
 | Source | Owner/caller; mutation/authority | Disposition; issue; removal gate | Acceptance |
 | --- | --- | --- | --- |
 | `infralink-local-doctor` | Infralink local diagnostics; read-only | **migrate** to `infralink doctor`; #270 | CLI/MCP parity |
-| `/usr/local/sbin/infralink-host` | Host timer launcher; invokes private reconcile | **migrate** to canonical `infralink` plus private timer; Ops #278 / #297 | Registry -> timer -> evidence |
-| `infralink-controller-*` | Controller-only package helpers | **private** modules; Ops #232, PR #277 | No console scripts/callers |
+| `/usr/local/sbin/infralink-host` | Historical host launcher; no longer a deployed public command | **retire**; private systemd runtime installed by Ops #278 and proven through Ops #290/#293 | MTA Registry revision -> timer -> reconcile evidence -> live SMTP endpoint |
+| `infralink-controller-*` | Controller-only package helpers | **private** modules; Ops #232 closed after the MTA normal-reconcile proof | No console scripts/callers |
 
 ## Compatibility And Controller Sources
 
