@@ -9,6 +9,9 @@ from agent_surface.outcomes import ActionProvider
 from pydantic import BaseModel
 
 from infralink.cli.contracts import (
+    Action as DoctorAction,
+)
+from infralink.cli.contracts import (
     AnalyzeResult,
     ArtifactResult,
     CheckCommandResult,
@@ -27,6 +30,7 @@ from infralink.operator_operations.analyze import AnalyzeRequest
 from infralink.operator_operations.docs import DocsRequest
 from infralink.operator_operations.edge_health import EdgeCheckRequest, EdgeResolveRequest
 from infralink.operator_surface import (
+    DoctorOperationResult,
     FleetValidateRequest,
     HostApplyRequest,
     HostBootstrapOperationResult,
@@ -50,6 +54,10 @@ class OperatorActionProvider(ActionProvider):
         result: object | None = None,
         error: Any = None,
     ) -> ActionCollection:
+        if operation == "doctor" and isinstance(result, DoctorOperationResult):
+            return _doctor_actions(result._actions)
+        if operation == "doctor" and error is not None:
+            return _doctor_error_actions(error)
         if (
             error is not None
             and operation == "docs"
@@ -279,6 +287,43 @@ class OperatorActionProvider(ActionProvider):
 
     def explain(self, operation: str) -> Action | None:
         return None
+
+
+def _doctor_actions(actions: tuple[DoctorAction, ...]) -> ActionCollection:
+    """Project evaluator-owned, bounded doctor repairs without re-inferring state."""
+    items: list[Action] = []
+    for action in actions:
+        if not action.argv or action.argv[0] != "infralink":
+            continue
+        items.append(
+            Action(
+                rel=action.rel,
+                description=action.description,
+                command=tuple(action.argv[1:]),
+            )
+        )
+    return ActionCollection(items=tuple(items), total=len(items), returned=len(items))
+
+
+def _doctor_error_actions(error: Any) -> ActionCollection:
+    """Offer only the registered repair frontier retained after adapter redaction."""
+    details = error.details[0] if getattr(error, "details", ()) else {}
+    entity_type = details.get("entity_type") if isinstance(details, dict) else None
+    if entity_type in {"host", "service", "edge"}:
+        item = Action(
+            rel="list",
+            description=f"List {entity_type} records",
+            command=(str(entity_type), "list"),
+            operation=f"{entity_type}.list",
+        )
+    else:
+        item = Action(
+            rel="help",
+            description="Show doctor usage",
+            command=("help", "doctor"),
+            operation="help",
+        )
+    return ActionCollection(items=(item,), total=1, returned=1)
 
 
 def _analyze_actions(request: AnalyzeRequest, result: AnalyzeResult) -> ActionCollection:

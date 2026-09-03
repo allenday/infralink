@@ -252,7 +252,7 @@ def _bootstrap_tailnet_address(target: Any, ssh_host: str) -> str:
     """Accept only the exact registry-owned Tailnet SSH target."""
     from agent_surface import OperationError
 
-    from infralink.operator_surface import (
+    from infralink.operator_operations.doctor import (
         DoctorBootstrapPlanRequest,
         doctor_host_bootstrap_plan,
     )

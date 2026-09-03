@@ -15,8 +15,8 @@ from infralink.cli.contracts import DoctorTarget, HostBootstrapPlanResult, HostR
 from infralink.cli.errors import CliFailure
 from infralink.cli.main import _bootstrap_tailnet_address, _raise_cli_operation_error, cli
 from infralink.cli.operations import OperationRecord
+from infralink.operator_operations.doctor import DoctorBootstrapPlanRequest
 from infralink.operator_surface import (
-    DoctorBootstrapPlanRequest,
     HostBootstrapRequest,
     HostCreateRequest,
     OperationStatusRequest,
@@ -138,15 +138,12 @@ def test_generated_click_uses_canonical_bootstrap_flags_and_redacts_stdin_token(
     assert request.bws_token == token
 
 
-def test_bootstrap_plan_operation_has_one_typed_tailnet_contract() -> None:
-    result = asyncio.run(
-        operator_surface.invoke(
-            "doctor.host.bootstrap_plan",
-            {
-                "host_ref": "host-1",
-                "ssh_host": "100.64.0.1",
-                "declared_ssh_host": "100.64.0.1",
-            },
+def test_bootstrap_plan_has_one_typed_tailnet_contract() -> None:
+    result = doctor_host_bootstrap_plan(
+        DoctorBootstrapPlanRequest(
+            host_ref="host-1",
+            ssh_host="100.64.0.1",
+            declared_ssh_host="100.64.0.1",
         )
     )
 
@@ -155,16 +152,83 @@ def test_bootstrap_plan_operation_has_one_typed_tailnet_contract() -> None:
 
 def test_bootstrap_plan_operation_rejects_non_tailnet_addresses() -> None:
     with pytest.raises(OperationError, match="Tailnet IPv4"):
-        asyncio.run(
-            operator_surface.invoke(
-                "doctor.host.bootstrap_plan",
-                {
-                    "host_ref": "host-1",
-                    "ssh_host": "192.0.2.1",
-                    "declared_ssh_host": "192.0.2.1",
-                },
+        doctor_host_bootstrap_plan(
+            DoctorBootstrapPlanRequest(
+                host_ref="host-1",
+                ssh_host="192.0.2.1",
+                declared_ssh_host="192.0.2.1",
             )
         )
+
+
+def test_doctor_operation_uses_the_retained_cli_evaluator_without_live_io(tmp_path: Path) -> None:
+    """Typed doctor shares declaration-only evidence behavior with the Click leaf."""
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    tailscale_ip: 100.64.0.1\n",
+        encoding="utf-8",
+    )
+    (registry / "edges.yml").write_text("edges: []\n", encoding="utf-8")
+    observation = registry / "operations" / "observation"
+    observation.mkdir(parents=True)
+    (observation / "core-plan.json").write_text(
+        '{"schema_version":"infralink.observation-plan/v1","dependencies":[]}',
+        encoding="utf-8",
+    )
+    (observation / "adapter-bindings.yml").write_text(
+        "schema_version: infra-observe.adapter-bindings.v2\nbindings: []\n",
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        operator_surface.invoke("doctor", {"registry": str(registry), "declaration_only": True})
+    )
+
+    assert result.target.type == "global"
+    assert result.declared == {"host_count": 1, "service_count": 0, "edge_count": 0}
+    assert result.status == "unknown"
+    assert result.reason == "no_live_observation_evidence"
+
+    cli_result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        ["--registry", str(registry), "doctor", "--validate", "--format", "json"],
+    )
+    assert cli_result.exit_code == 0, cli_result.output
+    payload = json.loads(cli_result.output)
+    assert [item["rel"] for item in payload["next_actions"]] == ["help", "list"]
+
+    missing_result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "--registry",
+            str(registry),
+            "doctor",
+            "--validate",
+            "--target-type",
+            "host",
+            "--target-ref",
+            "missing",
+            "--format",
+            "json",
+        ],
+    )
+    assert missing_result.exit_code == 3, missing_result.output
+    missing_payload = json.loads(missing_result.output)
+    assert missing_payload["error"]["code"] == "entity_not_found"
+    assert missing_payload["next_actions"][0]["command"].endswith("host list")
+
+
+def test_doctor_is_registered_once_for_the_typed_mcp_projection() -> None:
+    async def list_tools() -> set[str]:
+        async with Client(operator_mcp_adapter().server) as client:
+            tools = await client.list_tools()
+        return {tool.name for tool in tools.tools}
+
+    assert "doctor" in asyncio.run(list_tools())
+    assert "doctor.host.bootstrap_plan" not in asyncio.run(list_tools())
 
 
 def test_click_bootstrap_and_typed_operation_share_transport_acceptance() -> None:
@@ -200,14 +264,11 @@ def test_bootstrap_plan_uses_one_typed_transport_boundary_across_doctor_and_clic
     )
 
     with pytest.raises(OperationError, match="exactly match"):
-        asyncio.run(
-            operator_surface.invoke(
-                "doctor.host.bootstrap_plan",
-                {
-                    "host_ref": host_id,
-                    "ssh_host": requested_address,
-                    "declared_ssh_host": declared_address,
-                },
+        doctor_host_bootstrap_plan(
+            DoctorBootstrapPlanRequest(
+                host_ref=host_id,
+                ssh_host=requested_address,
+                declared_ssh_host=declared_address,
             )
         )
 
