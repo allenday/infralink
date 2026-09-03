@@ -1167,7 +1167,7 @@ def test_bootstrap_bws_validation_checks_declared_ghcr_secret_references(
 
 
 def test_bootstrap_bws_validation_rejects_ghcr_secret_from_undeclared_project(
-    tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     registry = tmp_path / "hosts"
     catalog = registry.parent / "ansible/inventory/bws_projects.yml"
