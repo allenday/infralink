@@ -535,6 +535,7 @@ class OptionDescriptor(ContractModel):
     name: str
     type: str
     required: bool
+    description: str | None = None
 
 
 class InfoSources(ContractModel):

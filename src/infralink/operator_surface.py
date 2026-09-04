@@ -339,6 +339,7 @@ class RegistryHostPatchRequest(RegistryHostGetRequest):
 
     assignments: tuple[str, ...] = Field(
         min_length=1,
+        description="Repeat --set with PATH=YAML_VALUE, PATH=@text:FILE, or PATH=@yaml:FILE.",
         json_schema_extra={"cli": {"options": ["--set"], "multiple": True}},
     )
     write: bool = False
@@ -956,6 +957,7 @@ def _operation_options(model: type[BaseModel]) -> list[OptionDescriptor]:
             name=name,
             type=_operation_field_type(field.annotation),
             required=field.is_required(),
+            description=field.description,
         )
         for name, field in model.model_fields.items()
         if _operation_field_kind(field) != "argument"
