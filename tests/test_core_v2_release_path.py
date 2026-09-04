@@ -318,9 +318,7 @@ def test_selected_core_v2_declaration_drives_verifier_dry_apply_and_doctor(
             str(FIXTURES / "adapter-bindings.yml"),
             "--gatus-url",
             "http://gatus.test",
-            "--target-type",
             "host",
-            "--target-ref",
             release.host_id,
         ],
     )
