@@ -346,7 +346,7 @@ class Host(StrictModel):
     id: HostId
     display_name: Annotated[str, Field(min_length=1)] | None = None
     baseline_capabilities: list[HostBaselineCapability] = Field(default_factory=list)
-    self_deploy_v2_reconcile_enabled: bool = False
+    controller_managed: bool = False
     host_bridge_ingress: list[HostBridgeIngress] = Field(default_factory=list)
 
     @field_validator("baseline_capabilities")

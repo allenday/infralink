@@ -992,6 +992,11 @@
           "title": "Baseline Capabilities",
           "type": "array"
         },
+        "controller_managed": {
+          "default": false,
+          "title": "Controller Managed",
+          "type": "boolean"
+        },
         "display_name": {
           "anyOf": [
             {
@@ -1016,11 +1021,6 @@
         "id": {
           "title": "Id",
           "type": "string"
-        },
-        "self_deploy_v2_reconcile_enabled": {
-          "default": false,
-          "title": "Self Deploy V2 Reconcile Enabled",
-          "type": "boolean"
         },
         "source_refs": {
           "items": {
