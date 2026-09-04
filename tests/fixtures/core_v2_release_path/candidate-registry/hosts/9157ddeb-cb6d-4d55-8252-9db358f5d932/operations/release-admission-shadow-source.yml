@@ -1,5 +1,0 @@
-schema_version: infralink.release-admission-shadow-delivery.v1
-registry:
-  repository: /var/lib/release-admission/registry-objects/citadel
-paths:
-  runtime_root: /var/lib/release-admission/runtime/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

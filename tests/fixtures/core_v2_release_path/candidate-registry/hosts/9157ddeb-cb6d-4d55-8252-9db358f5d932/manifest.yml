@@ -1,5 +1,0 @@
-hosts:
-  9157ddeb-cb6d-4d55-8252-9db358f5d932:
-    canonical_name: cyberstorm-citadel
-    status: active
-    tailscale_ip: 100.73.228.90

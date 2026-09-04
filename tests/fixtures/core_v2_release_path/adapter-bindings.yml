@@ -1,8 +1,0 @@
-schema_version: infra-observe.adapter-bindings.v2
-bindings:
-  - id: gatus-citadel-self-deploy
-    renderer_kind: gatus
-    observation_backend_id: core-health
-    output_identity: citadel-self-deploy
-    result_identity: gatus-key-for-citadel-self-deploy
-    signal_ref: dependency/citadel-self-deploy/health/reachable
