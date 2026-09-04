@@ -256,7 +256,9 @@ def test_release_render_publisher_request_binds_only_immutable_candidate_inputs(
     assert [item["rel"] for item in payload["next_actions"]] == ["inspect-attestation"]
     action = payload["next_actions"][0]
     attestation = _attestation(tmp_path / "attestation.json")
-    assert action["command"] == "infralink release inspect-attestation --attestation '{attestation}'"
+    assert (
+        action["command"] == "infralink release inspect-attestation --attestation '{attestation}'"
+    )
     assert action["safe"] is True
     assert action["templated"] is True
     assert action["bindings"] == {
@@ -554,8 +556,7 @@ def test_release_inspect_reports_admitted_release_and_publisher_unavailable(tmp_
     assert [action["rel"] for action in payload["next_actions"]] == ["inspect"]
     action = payload["next_actions"][0]
     assert action["command"] == (
-        "infralink release inspect "
-        f"--release-validation {validation} --admission {admission}"
+        f"infralink release inspect --release-validation {validation} --admission {admission}"
     )
     assert action["safe"] is True
     assert "templated" not in action

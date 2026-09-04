@@ -156,7 +156,9 @@ def test_registry_host_patch_reads_literal_multiline_text_from_an_explicit_file_
     applied = CliRunner().invoke(cli, [*command, "--write"])
     assert applied.exit_code == 0, applied.output
     document = yaml.safe_load(
-        (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(encoding="utf-8")
+        (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
+            encoding="utf-8"
+        )
     )
     assert (
         document["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
@@ -202,7 +204,9 @@ def test_registry_host_patch_reads_a_typed_yaml_value_from_an_explicit_file_sour
     applied = CliRunner().invoke(cli, [*command, "--write"])
     assert applied.exit_code == 0, applied.output
     document = yaml.safe_load(
-        (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(encoding="utf-8")
+        (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
+            encoding="utf-8"
+        )
     )
     assert (
         document["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][

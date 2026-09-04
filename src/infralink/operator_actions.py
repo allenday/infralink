@@ -169,10 +169,7 @@ class OperatorActionProvider(ActionProvider):
             )
         if error is not None:
             return ActionCollection()
-        if (
-            operation == "release.inspect"
-            and isinstance(request, ReleaseInspectRequest)
-        ):
+        if operation == "release.inspect" and isinstance(request, ReleaseInspectRequest):
             return ActionCollection(
                 items=(
                     Action(
@@ -192,9 +189,8 @@ class OperatorActionProvider(ActionProvider):
                 total=1,
                 returned=1,
             )
-        if (
-            operation == "release.validate-candidate"
-            and isinstance(request, ReleaseCandidateRequest)
+        if operation == "release.validate-candidate" and isinstance(
+            request, ReleaseCandidateRequest
         ):
             return ActionCollection(
                 items=(
@@ -222,9 +218,8 @@ class OperatorActionProvider(ActionProvider):
                 total=1,
                 returned=1,
             )
-        if (
-            operation == "release.render-publisher-request"
-            and isinstance(request, ReleasePublisherRequest)
+        if operation == "release.render-publisher-request" and isinstance(
+            request, ReleasePublisherRequest
         ):
             return ActionCollection(
                 items=(
