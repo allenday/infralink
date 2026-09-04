@@ -1,4 +1,0 @@
-schema_version: infra-observe.gatus-fragment.v1
-checks:
-  - id: citadel-self-deploy
-    display_name: citadel-self-deploy

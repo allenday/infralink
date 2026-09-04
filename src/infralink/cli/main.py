@@ -44,7 +44,6 @@ from infralink.operator_config import (
 )
 from infralink.operator_operations.host_bootstrap import (
     _apply_bootstrap_request,
-    _apply_controller_refresh,
     _bootstrap_apply_request,
     _bootstrap_declared_bws_projects,
     _bootstrap_executor_actions,
@@ -56,7 +55,6 @@ from infralink.operator_operations.host_bootstrap import (
     _bootstrap_tailnet_address,
     _BootstrapProbeTransport,
     _controller_bootstrap_state,
-    _controller_refresh_source,
     _read_bootstrap_bws_token,
     _readiness_with_bws_token_required,
     _require_remote_tailnet_identity,
@@ -69,7 +67,6 @@ from infralink.operator_surface import operator_click_adapter
 # while bootstrap ownership moves behind the transport-neutral operation module.
 __all__ = [
     "_apply_bootstrap_request",
-    "_apply_controller_refresh",
     "_bootstrap_apply_request",
     "_bootstrap_declared_bws_projects",
     "_bootstrap_executor_actions",
@@ -81,7 +78,6 @@ __all__ = [
     "_bootstrap_tailnet_address",
     "_BootstrapProbeTransport",
     "_controller_bootstrap_state",
-    "_controller_refresh_source",
     "_read_bootstrap_bws_token",
     "_readiness_with_bws_token_required",
     "_require_remote_tailnet_identity",

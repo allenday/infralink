@@ -31,7 +31,6 @@ _OPERATION_ID = re.compile(
 )
 _LEGACY_OPERATION_ID = re.compile(r"^op_[A-Za-z0-9_-]{8,128}$")
 _FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
-_CHANNEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _UNIT = "infralink-host-reconcile.service"
 _JOURNAL_SEPARATOR = "__INFRALINK_JOURNAL__"
 _DIAGNOSTIC_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
@@ -40,16 +39,6 @@ _MAX_FAILURE_JOURNAL_LINES = 6
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SIGNER_PRINCIPAL = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-_MANIFEST_V2_APPLY_FIELDS = frozenset(
-    {
-        "self_deploy_v2_reconcile_enabled",
-        "self_deploy_v2_reconcile_packaged",
-        "self_deploy_v2_promotion_policy_enabled",
-        "self_deploy_v2_promotion_channel",
-        "self_deploy_v2_promotion_host_fingerprint",
-        "self_deploy_v2_target_ssh_host_fingerprint",
-    }
-)
 _VERIFIER_UNAVAILABLE_FACTS: tuple[VerifierUnavailableFact, ...] = (
     "registry_remote",
     "registry_ref",
@@ -591,54 +580,7 @@ def _manifest_request(
             _UNIT,
             host_key_algorithm=algorithm,
         )
-    if _MANIFEST_V2_APPLY_FIELDS.isdisjoint(data):
-        return None
-    if data.get("self_deploy_v2_reconcile_enabled") is not True:
-        raise _registry_failure("Host apply manifest does not enable V2 reconcile", path)
-    if data.get("self_deploy_v2_reconcile_packaged") is not True:
-        raise _registry_failure("Host apply manifest does not package V2 reconcile", path)
-    if data.get("self_deploy_v2_promotion_policy_enabled") is not True:
-        raise _registry_failure("Host apply manifest does not enable V2 promotion policy", path)
-    channel = data.get("self_deploy_v2_promotion_channel")
-    if not isinstance(channel, str) or _CHANNEL.fullmatch(channel) is None:
-        raise _registry_failure("Host apply manifest V2 promotion channel is invalid", path)
-    address = data.get("tailscale_ip")
-    if not isinstance(address, str):
-        raise _registry_failure("Host apply manifest Tailscale address is invalid", path)
-    try:
-        parsed_address = ipaddress.ip_address(address)
-    except ValueError:
-        raise _registry_failure("Host apply manifest Tailscale address is invalid", path) from None
-    if not isinstance(
-        parsed_address, ipaddress.IPv4Address
-    ) or parsed_address not in ipaddress.ip_network("100.64.0.0/10"):
-        raise _registry_failure(
-            "Host apply manifest Tailscale address is outside the tailnet range", path
-        )
-    host_key = _manifest_host_key(
-        data.get(
-            "self_deploy_v2_target_ssh_host_fingerprint",
-            data.get("self_deploy_v2_promotion_host_fingerprint"),
-        )
-    )
-    if host_key is None:
-        raise _registry_failure("Host apply manifest SSH fingerprint is invalid", path)
-    fingerprint, algorithm = host_key
-    reconcile = data.get("reconcile")
-    if reconcile is not None and (
-        not isinstance(reconcile, dict) or reconcile.get("unit") != _UNIT
-    ):
-        raise _registry_failure("Host apply manifest reconcile unit is invalid", path)
-    return ApplyRequest(
-        host_uuid,
-        canonical_name,
-        address,
-        22,
-        "root",
-        fingerprint,
-        _UNIT,
-        host_key_algorithm=algorithm,
-    )
+    return None
 
 
 def _contract_request(registry_path: Path, host: Any) -> ApplyRequest:

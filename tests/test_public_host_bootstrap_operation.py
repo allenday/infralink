@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from base64 import b64encode
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,7 +24,6 @@ from infralink.cli.host_readiness import evaluate_host_readiness as evaluate_rea
 from infralink.cli.main import (
     Context,
     _apply_bootstrap_request,
-    _apply_controller_refresh,
     _bootstrap_apply_request,
     _bootstrap_executor_actions,
     _bootstrap_executor_source,
@@ -34,7 +31,6 @@ from infralink.cli.main import (
     _bootstrap_plan_actions,
     _bootstrap_tailnet_address,
     _controller_bootstrap_state,
-    _controller_refresh_source,
     _readiness_with_bws_token_required,
     _require_remote_tailnet_identity,
     _validate_bootstrap_bws_access,
@@ -111,31 +107,6 @@ def test_bootstrap_failure_details_exposes_sanitized_nested_controller_failure()
     assert token not in repr(details)
 
 
-def test_control_root_can_be_supplied_by_the_controller_runtime(
-    tmp_path: Path,
-) -> None:
-    environment = {
-        **os.environ,
-        "INFRALINK_CONTROL_ROOT": str(tmp_path),
-        "PYTHONPATH": str(ROOT / "src"),
-    }
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from infralink.operator_operations.host_bootstrap import _CONTROL_ROOT; print(_CONTROL_ROOT)",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=environment,
-    )
-
-    assert completed.returncode == 0
-    assert completed.stdout.strip() == str(tmp_path)
-
-
 def test_bootstrap_requires_a_manifest_ssh_fingerprint_not_a_legacy_operations_contract(
     tmp_path: Path,
 ) -> None:
@@ -208,76 +179,204 @@ def test_bootstrap_executor_uses_image_local_source_without_git(
     assert commands == []
 
 
-def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(root), *args],
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
-
-
-def _controller_source_repository(tmp_path: Path) -> tuple[Path, str]:
-    repository = tmp_path / "infra-management"
-    playbook = repository / "ansible/playbooks/infralink_controller_refresh.yml"
-    playbook.parent.mkdir(parents=True)
-    playbook.write_text("---\n- hosts: all\n", encoding="utf-8")
-    _git(repository.parent, "init", "--quiet", str(repository))
-    _git(repository, "config", "user.email", "test@example.invalid")
-    _git(repository, "config", "user.name", "Test")
-    _git(repository, "add", ".")
-    _git(repository, "commit", "--quiet", "-m", "controller refresh")
-    _git(repository, "branch", "-M", "main")
-    return repository, _git(repository, "rev-parse", "HEAD")
-
-
-def _controller_clone_missing_selected_revision(tmp_path: Path) -> tuple[Path, str, str]:
-    source, revision = _controller_source_repository(tmp_path / "upstream")
-    remote = tmp_path / "infra-management.git"
-    _git(tmp_path, "clone", "--quiet", "--bare", str(source), str(remote))
-
-    control = tmp_path / "control"
-    _git(tmp_path, "init", "--quiet", str(control))
-    _git(control, "config", "user.email", "test@example.invalid")
-    _git(control, "config", "user.name", "Test")
-    (control / "README").write_text("control checkout\n", encoding="utf-8")
-    _git(control, "add", ".")
-    _git(control, "commit", "--quiet", "-m", "control checkout")
-    _git(control, "remote", "add", "origin", remote.as_uri())
-    return control, remote.as_uri(), revision
-
-
-def _controller_clone_with_selected_revision_missing_from_main(
-    tmp_path: Path,
-) -> tuple[Path, str, str]:
-    source, _main_revision = _controller_source_repository(tmp_path / "upstream")
-    remote = tmp_path / "infra-management.git"
-    _git(tmp_path, "clone", "--quiet", "--bare", str(source), str(remote))
-
-    (source / "selected-only").write_text("not advertised on remote main\n", encoding="utf-8")
-    _git(source, "add", ".")
-    _git(source, "commit", "--quiet", "-m", "selected only")
-    selected_revision = _git(source, "rev-parse", "HEAD")
-
-    control = tmp_path / "control"
-    _git(tmp_path, "init", "--quiet", str(control))
-    _git(control, "config", "user.email", "test@example.invalid")
-    _git(control, "config", "user.name", "Test")
-    (control / "README").write_text("control checkout\n", encoding="utf-8")
-    _git(control, "add", ".")
-    _git(control, "commit", "--quiet", "-m", "control checkout")
-    _git(control, "remote", "add", "origin", remote.as_uri())
-    _git(control, "fetch", "--quiet", str(source), selected_revision)
-    return control, remote.as_uri(), selected_revision
-
-
-def _configure_self_remote(monkeypatch: pytest.MonkeyPatch, repository: Path) -> str:
-    remote = repository.as_uri()
-    _git(repository, "remote", "add", "origin", remote)
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote
+def test_canonical_controller_manifest_drives_verifier_and_dry_apply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The public apply path resolves one controller-bootstrap declaration."""
+    manifest = tmp_path / "hosts" / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    status: active\n"
+        "    tailscale_ip: 100.64.68.83\n"
+        "    ssh:\n"
+        f"      host_key_fingerprint: ssh-ed25519 {HOST_FINGERPRINT}\n"
+        "    controller_bootstrap:\n"
+        "      controller_image: ghcr.io/example/controller:main\n"
+        "      registry_read_identity_secret:\n"
+        "        project: fleet\n"
+        "        id: 11111111-1111-4111-8111-111111111111\n"
+        "      ghcr_auth:\n"
+        "        username_secret:\n"
+        "          project: fleet\n"
+        "          id: 22222222-2222-4222-8222-222222222222\n"
+        "        token_secret:\n"
+        "          project: fleet\n"
+        "          id: 33333333-3333-4333-8333-433333333333\n"
+        "      registry_repo_url: ssh://git@example.invalid:2222/registry.git\n"
+        "      registry_ref: main\n"
+        "      registry_known_hosts: git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/\n",
+        encoding="utf-8",
     )
-    return remote
+    for args in (
+        ["git", "init", "--quiet", str(tmp_path)],
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.invalid"],
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
+        ["git", "-C", str(tmp_path), "add", "."],
+        ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "canonical registry"],
+    ):
+        subprocess.run(args, check=True, capture_output=True, text=True)
+    monkeypatch.setattr(
+        "infralink.cli.operations.validate_target_ssh_identity", lambda _request: None
+    )
+
+    verifier = CliRunner().invoke(
+        cli,
+        ["host", "verifier", HOST_ID, "--registry", str(tmp_path)],
+    )
+    dry_apply = CliRunner().invoke(
+        cli,
+        ["host", "apply", HOST_ID, "--registry", str(tmp_path), "--dry-run"],
+    )
+
+    assert verifier.exit_code == 1, verifier.output
+    assert dry_apply.exit_code == 0, dry_apply.output
+    verifier_payload = yaml.safe_load(verifier.output)
+    apply_payload = yaml.safe_load(dry_apply.output)
+    assert verifier_payload["result"]["target"]["id"] == HOST_ID
+    assert verifier_payload["result"]["verifier"]["unavailable"]
+    assert apply_payload["result"]["target"]["id"] == HOST_ID
+    assert apply_payload["result"]["ssh_host_identity"] == "passed"
+
+
+def test_doctor_reads_canonical_host_observation_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Doctor consumes one checkout and its declared observation bindings."""
+    manifest = tmp_path / "hosts" / HOST_ID / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        f"    canonical_name: {HOST_NAME}\n"
+        "    status: active\n"
+        "    tailscale_ip: 100.64.68.83\n",
+        encoding="utf-8",
+    )
+    deployment = manifest.parent / "operations" / "deployment.yml"
+    deployment.parent.mkdir()
+    deployment.write_text(
+        "schema_version: self-deploy.desired-state.v1\n"
+        "machine:\n"
+        f"  uuid: {HOST_ID}\n"
+        "controller:\n"
+        "  image:\n"
+        "    repository: ghcr.io/example/controller\n"
+        "    tag: main\n"
+        "compose:\n"
+        "  project_name: infralink\n"
+        "services:\n"
+        "  protected: [infralink-controller]\n",
+        encoding="utf-8",
+    )
+    for args in (
+        ["git", "init", "--quiet", str(tmp_path)],
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.invalid"],
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
+        ["git", "-C", str(tmp_path), "add", "."],
+        ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "canonical registry"],
+    ):
+        subprocess.run(args, check=True, capture_output=True, text=True)
+    edges = tmp_path / "network/main/edges.yml"
+    edges.parent.mkdir(parents=True)
+    edges.write_text("edges: []\n", encoding="utf-8")
+    observation_plan = tmp_path / "observation-plan.json"
+    observation_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.observation-plan/v1",
+                "dependencies": [
+                    {
+                        "id": "host-ready",
+                        "source_service_id": f"{HOST_ID}/host",
+                        "target_service_id": f"{HOST_ID}/host",
+                        "target_endpoint_id": f"{HOST_ID}/host/health",
+                        "required": True,
+                        "execution_adapter": "gatus",
+                        "health_signal_refs": ["dependency/host-ready/health/reachable"],
+                    }
+                ],
+                "service_profiles": [],
+                "services": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    bindings = tmp_path / "adapter-bindings.yml"
+    bindings.write_text(
+        "schema_version: infra-observe.adapter-bindings.v2\n"
+        "bindings:\n"
+        "  - id: host-ready\n"
+        "    renderer_kind: gatus\n"
+        "    observation_backend_id: core-health\n"
+        "    output_identity: host-ready\n"
+        "    result_identity: host-ready\n"
+        "    signal_ref: dependency/host-ready/health/reachable\n",
+        encoding="utf-8",
+    )
+    probe = HostReadinessProbe(
+        reachable=True,
+        hostname=HOST_NAME,
+        machine_id="fixture-machine-id",
+        commands={"git": True, "docker": True, "tailscale": True, "jq": True, "bws": True},
+        devops_account=True,
+        devops_authorized_access=True,
+        bws_config=True,
+        self_deploy_dependencies=True,
+        self_deploy_runtime=True,
+        self_deploy_timer_enabled=True,
+        self_deploy_timer_active=True,
+        self_deploy_mode="v2_reconcile",
+        registry_layout="v2_managed",
+        requires_v2_registry_layout=True,
+        self_deploy_reconcile_result="success",
+        self_deploy_reconcile_exit_status=0,
+        self_deploy_reconcile_active_state="inactive",
+        self_deploy_reconcile_sub_state="dead",
+        self_deploy_reconcile_exit_timestamp_monotonic=1,
+        controller_image="ghcr.io/example/controller:main",
+        controller_python_version="3.12.3",
+        error=None,
+    )
+    monkeypatch.setattr(
+        "infralink.cli.doctor.SshReadinessTransport.probe", lambda _self, _address: probe
+    )
+    monkeypatch.setattr(
+        "infralink.cli.doctor._fetch_gatus_statuses",
+        lambda _url, _token: [
+            {
+                "key": "host-ready",
+                "results": [{"success": True, "timestamp": "2026-09-04T00:00:00Z"}],
+            }
+        ],
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "doctor",
+            "--registry",
+            str(tmp_path),
+            "--edges",
+            str(edges),
+            "--observation-plan",
+            str(observation_plan),
+            "--adapter-bindings",
+            str(bindings),
+            "--gatus-url",
+            "http://gatus.test",
+            "host",
+            HOST_ID,
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = yaml.safe_load(result.output)
+    assert payload["result"]["target"]["id"] == HOST_ID
+    assert payload["result"]["evidence_summary"][0]["adapter"] == "gatus"
+    assert payload["result"]["reason"] == "desired_state_contract_incomplete"
 
 
 def test_host_bootstrap_rejects_missing_secure_connection_inputs_before_probe(
@@ -800,6 +899,164 @@ def test_controller_bootstrap_projects_ghcr_auth_references() -> None:
     assert request.ansible_extra_vars()["ghcr_token_secret_project"] == "fleet"
 
 
+def test_controller_bootstrap_state_reads_the_canonical_declaration(tmp_path: Path) -> None:
+    registry = tmp_path / "hosts"
+    manifest = registry / HOST_ID / "manifest.yml"
+    deployment = registry / HOST_ID / "operations" / "deployment.yml"
+    deployment.parent.mkdir(parents=True)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "hosts:\n"
+        f"  {HOST_ID}:\n"
+        "    controller_bootstrap:\n"
+        "      registry_read_identity_secret:\n"
+        "        project: fleet\n"
+        "        id: 11111111-1111-4111-8111-111111111111\n"
+        "      ghcr_auth:\n"
+        "        username_secret:\n"
+        "          project: fleet\n"
+        "          id: 22222222-2222-4222-8222-222222222222\n"
+        "        token_secret:\n"
+        "          project: fleet\n"
+        "          id: 33333333-3333-4333-8333-433333333333\n"
+        "      registry_repo_url: ssh://git@example.invalid:2222/registry.git\n"
+        "      registry_ref: main\n"
+        "      registry_known_hosts: git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/\n",
+        encoding="utf-8",
+    )
+    deployment.write_text(
+        "controller:\n  image:\n    repository: ghcr.io/example/controller\n    tag: main\n",
+        encoding="utf-8",
+    )
+
+    state = _controller_bootstrap_state(registry, type("Target", (), {"uuid": HOST_ID})())
+
+    assert state.controller_image == "ghcr.io/example/controller:main"
+    assert state.registry_ref == "main"
+
+
+def test_bootstrap_apply_runs_the_baked_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    executor_root = tmp_path / "app"
+    manifest = executor_root / "ansible/executors/infralink-host-baseline.json"
+    playbook = executor_root / "ansible/playbooks/infralink_host_baseline.yml"
+    manifest.parent.mkdir(parents=True)
+    playbook.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "infralink.host-bootstrap-executor/v1",
+                "id": "infra-management-host-baseline",
+                "playbook": "ansible/playbooks/infralink_host_baseline.yml",
+                "allowed_actions": ["bootstrap_infralink_controller"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook.write_text("---\n- hosts: all\n", encoding="utf-8")
+    commands: list[list[str]] = []
+    state = HostControllerBootstrapState.model_validate(
+        {
+            "controller_image": "ghcr.io/example/controller:main",
+            "registry_read_identity_secret": {
+                "project": "fleet",
+                "id": "11111111-1111-4111-8111-111111111111",
+            },
+            "ghcr_auth": {
+                "username_secret": {
+                    "project": "fleet",
+                    "id": "22222222-2222-4222-8222-222222222222",
+                },
+                "token_secret": {
+                    "project": "fleet",
+                    "id": "33333333-3333-4333-8333-433333333333",
+                },
+            },
+            "registry_repo_url": "ssh://git@example.invalid:2222/registry.git",
+            "registry_ref": "main",
+            "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
+        }
+    )
+    target = type(
+        "Target",
+        (),
+        {
+            "uuid": HOST_ID,
+            "canonical_name": HOST_NAME,
+            "tailscale_ip": "100.64.68.83",
+        },
+    )()
+    readiness = HostReadinessResult(transport="root_ssh", ready=True, checks=[], actions=[])
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "infralink.operator_operations.host_bootstrap._BOOTSTRAP_EXECUTOR_ROOT", executor_root
+    )
+    monkeypatch.setattr("infralink.operator_operations.host_bootstrap.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "infralink.operator_operations.host_bootstrap.evaluate_host_readiness",
+        lambda *_args, **_kwargs: readiness,
+    )
+
+    result = _apply_bootstrap_request(
+        Context(),
+        target,
+        "100.64.68.83",
+        ["bootstrap_infralink_controller"],
+        state,
+        None,
+        tmp_path / "known_hosts",
+    )
+
+    assert result.ready is True
+    assert commands[0][0:2] == ["ansible-playbook", "-vv"]
+    assert str(playbook) in commands[0]
+
+
+def test_bootstrap_request_projects_only_declared_controller_state() -> None:
+    """Baseline actions do not revive the retired V2 promotion contract."""
+    request = HostBootstrapRequest.model_validate(
+        {
+            "host_address": "100.64.68.83",
+            "host_uuid": HOST_ID,
+            "canonical_name": HOST_NAME,
+            "bootstrap_actions": [
+                "migrate_v2_registry_layout",
+                "install_self_deploy_runtime",
+                "bootstrap_infralink_controller",
+            ],
+            "controller_bootstrap": {
+                "controller_image": "ghcr.io/example/controller:main",
+                "registry_read_identity_secret": {
+                    "project": "fleet",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                },
+                "ghcr_auth": {
+                    "username_secret": {
+                        "project": "fleet",
+                        "id": "22222222-2222-4222-8222-222222222222",
+                    },
+                    "token_secret": {
+                        "project": "fleet",
+                        "id": "33333333-3333-4333-8333-333333333333",
+                    },
+                },
+                "registry_repo_url": "https://example.invalid/registry.git",
+                "registry_ref": "main",
+                "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
+            },
+        }
+    )
+
+    assert not any(
+        key.startswith("self_deploy_v2_promotion") for key in request.ansible_extra_vars()
+    )
+
+
 def test_controller_bootstrap_rejects_reusing_registry_identity_as_ghcr_credential() -> None:
     with pytest.raises(ValidationError, match="must not reuse"):
         HostControllerBootstrapState.model_validate(
@@ -977,12 +1234,10 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
     ]
 
 
-def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
+def test_bootstrap_uses_baked_executor_without_a_control_checkout(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Bootstrap ignores the controller checkout and uses the image executor."""
-    control, _revision = _controller_source_repository(tmp_path)
-    (control / "dirty").write_text("must not select bootstrap code", encoding="utf-8")
+    """Bootstrap uses only the image-local executor."""
 
     executor_root = tmp_path / "app"
     manifest = executor_root / "ansible/executors/infralink-host-baseline.json"
@@ -1034,7 +1289,6 @@ def test_bootstrap_uses_baked_executor_when_control_checkout_is_dirty(
             "registry_known_hosts": "git.example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8mjZa4jsBejgu0NWewMIfAw6C9tg1qpf0tFPipYz1/",
         }
     )
-    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROL_ROOT", control)
     monkeypatch.setattr(
         "infralink.operator_operations.host_bootstrap._BOOTSTRAP_EXECUTOR_ROOT", executor_root
     )
@@ -1196,310 +1450,6 @@ def test_bootstrap_bws_validation_rejects_ghcr_secret_from_undeclared_project(
     assert raised.value.details["projects"] == ["elsewhere"]
 
 
-def test_controller_refresh_materializes_an_exact_detached_source(
-    monkeypatch, tmp_path: Path
-) -> None:
-    repository, revision = _controller_source_repository(tmp_path)
-    _configure_self_remote(monkeypatch, repository)
-
-    with _controller_refresh_source(repository, revision) as source:
-        assert source != repository
-        assert _git(source, "rev-parse", "HEAD") == revision
-        assert (source / "ansible/playbooks/infralink_controller_refresh.yml").is_file()
-
-
-def test_controller_refresh_rejects_a_dirty_or_missing_controller_source(
-    monkeypatch, tmp_path: Path
-) -> None:
-    repository, revision = _controller_source_repository(tmp_path)
-    _configure_self_remote(monkeypatch, repository)
-    (repository / "dirty").write_text("not accepted", encoding="utf-8")
-
-    with pytest.raises(CliFailure) as dirty:
-        with _controller_refresh_source(repository, revision):
-            pass
-    assert dirty.value.code == ErrorCode.PROVIDER_UNAVAILABLE
-
-    (repository / "dirty").unlink()
-    with pytest.raises(CliFailure) as missing:
-        with _controller_refresh_source(repository, "a" * 40):
-            pass
-    assert missing.value.code == ErrorCode.PROVIDER_UNAVAILABLE
-
-
-def test_controller_refresh_fetches_main_to_materialize_the_absent_selected_revision(
-    monkeypatch, tmp_path: Path
-) -> None:
-    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
-    unsafe_marker = tmp_path / "unsafe-helper-ran"
-    _git(control, "config", "--local", "credential.helper", f"!touch {unsafe_marker}")
-    commands: list[tuple[list[str], dict[str, object]]] = []
-    real_run = subprocess.run
-
-    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        commands.append((args, kwargs))
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote
-    )
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", recording_run
-    )
-
-    with _controller_refresh_source(control, revision) as source:
-        assert _git(source, "rev-parse", "HEAD") == revision
-
-    fetches = [args for args, _kwargs in commands if "fetch" in args]
-    assert fetches == [
-        [
-            "git",
-            "-C",
-            str(control),
-            "fetch",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "origin",
-            "refs/heads/main:refs/remotes/origin/main",
-        ]
-    ]
-    fetch_env = next(kwargs["env"] for args, kwargs in commands if "fetch" in args)
-    assert isinstance(fetch_env, dict)
-    assert fetch_env["GIT_NO_REPLACE_OBJECTS"] == "1"
-    assert fetch_env["GIT_CONFIG_GLOBAL"] == "/dev/null"
-    assert fetch_env["HOME"] == "/root"
-    assert fetch_env["GIT_CONFIG_COUNT"] == "3"
-    assert fetch_env["GIT_CONFIG_KEY_0"] == "credential.helper"
-    assert fetch_env["GIT_CONFIG_VALUE_0"] == ""
-    assert fetch_env["GIT_CONFIG_KEY_1"] == "credential.helper"
-    assert fetch_env["GIT_CONFIG_VALUE_1"] == "store"
-    assert fetch_env["GIT_CONFIG_KEY_2"] == "credential.useHttpPath"
-    assert fetch_env["GIT_CONFIG_VALUE_2"] == "true"
-
-    credential_home = tmp_path / "credentials"
-    credential_home.mkdir()
-    (credential_home / ".git-credentials").write_text(
-        "https://x-access-token:test-token@github.com/relax-dot-gg/infra-management.git\n",
-        encoding="utf-8",
-    )
-    credential = subprocess.run(
-        ["git", "-C", str(control), "credential", "fill"],
-        input=(
-            "protocol=https\n"
-            "host=github.com\n"
-            "path=relax-dot-gg/infra-management.git\n"
-            "username=x-access-token\n\n"
-        ),
-        text=True,
-        capture_output=True,
-        check=False,
-        env={**fetch_env, "HOME": str(credential_home), "GIT_TERMINAL_PROMPT": "0"},
-    )
-    assert credential.returncode == 0
-    assert "password=test-token" in credential.stdout
-    assert not unsafe_marker.exists()
-
-
-def test_controller_refresh_does_not_fetch_a_raw_selected_revision(
-    monkeypatch, tmp_path: Path
-) -> None:
-    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
-    commands: list[list[str]] = []
-    real_run = subprocess.run
-
-    def reject_raw_revision_fetch(
-        args: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        commands.append(args)
-        if "fetch" in args and revision in args:
-            return subprocess.CompletedProcess(
-                args=args, returncode=1, stdout="", stderr="rejected"
-            )
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote
-    )
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", reject_raw_revision_fetch
-    )
-
-    with _controller_refresh_source(control, revision) as source:
-        assert _git(source, "rev-parse", "HEAD") == revision
-
-    fetches = [args for args in commands if "fetch" in args]
-    assert fetches
-    assert all(revision not in args for args in fetches)
-
-
-def test_controller_refresh_rejects_selected_revision_missing_from_expected_main(
-    monkeypatch, tmp_path: Path
-) -> None:
-    control, remote, _revision = _controller_clone_missing_selected_revision(tmp_path)
-    missing_revision = "a" * 40
-    commands: list[list[str]] = []
-    real_run = subprocess.run
-
-    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        commands.append(args)
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote
-    )
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", recording_run
-    )
-
-    with pytest.raises(CliFailure) as failed:
-        with _controller_refresh_source(control, missing_revision):
-            pass
-
-    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
-    assert not any("worktree" in args for args in commands)
-
-
-def test_controller_refresh_rejects_wrong_remote_without_leaking_credentials(
-    monkeypatch, tmp_path: Path
-) -> None:
-    control, _remote, revision = _controller_clone_missing_selected_revision(tmp_path)
-    secret = "top-secret-token"
-    _git(
-        control, "remote", "set-url", "origin", f"https://operator:{secret}@wrong.example.invalid/x"
-    )
-    commands: list[list[str]] = []
-    real_run = subprocess.run
-
-    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        commands.append(args)
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE",
-        "https://github.com/relax-dot-gg/infra-management.git",
-    )
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", recording_run
-    )
-
-    with pytest.raises(CliFailure) as failed:
-        with _controller_refresh_source(control, revision):
-            pass
-
-    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
-    assert secret not in failed.value.message
-    assert secret not in failed.value.fix
-    assert secret not in json.dumps(failed.value.details)
-    assert not any("fetch" in args for args in commands)
-    assert not any("worktree" in args for args in commands)
-
-
-def test_controller_refresh_fetch_failure_does_not_materialize_or_leak_remote_output(
-    monkeypatch, tmp_path: Path
-) -> None:
-    control, remote, revision = _controller_clone_missing_selected_revision(tmp_path)
-    secret = "top-secret-token"
-    commands: list[list[str]] = []
-    real_run = subprocess.run
-
-    def failing_fetch(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        commands.append(args)
-        if "fetch" in args:
-            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr=secret)
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote
-    )
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", failing_fetch
-    )
-
-    with pytest.raises(CliFailure) as failed:
-        with _controller_refresh_source(control, revision):
-            pass
-
-    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
-    assert secret not in failed.value.message
-    assert secret not in failed.value.fix
-    assert secret not in json.dumps(failed.value.details)
-    assert not any("worktree" in args for args in commands)
-
-
-def test_controller_refresh_fetch_failure_does_not_start_ansible(
-    monkeypatch, tmp_path: Path
-) -> None:
-    control, remote, revision = _controller_clone_with_selected_revision_missing_from_main(tmp_path)
-    commands: list[list[str]] = []
-    real_run = subprocess.run
-
-    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        commands.append(args)
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    context = Context()
-    context.registry_path = tmp_path
-    target = type("Target", (), {"uuid": HOST_ID})()
-    monkeypatch.setattr("infralink.operator_operations.host_bootstrap._CONTROL_ROOT", control)
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._CONTROLLER_REFRESH_SOURCE_REMOTE", remote
-    )
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap._controller_refresh_extra_vars",
-        lambda *_args: (revision, {}),
-    )
-    monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: object())
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", recording_run
-    )
-
-    with pytest.raises(CliFailure) as failed:
-        _apply_controller_refresh(context, target, revision)
-
-    assert failed.value.code == ErrorCode.PROVIDER_UNAVAILABLE
-    assert not any(args[0] == "ansible-playbook" for args in commands)
-
-
-def test_controller_refresh_ignores_a_git_replacement_ref(monkeypatch, tmp_path: Path) -> None:
-    repository, revision = _controller_source_repository(tmp_path)
-    _configure_self_remote(monkeypatch, repository)
-    playbook = repository / "ansible/playbooks/infralink_controller_refresh.yml"
-    playbook.write_text("unsafe replacement\n", encoding="utf-8")
-    _git(repository, "add", ".")
-    _git(repository, "commit", "--quiet", "-m", "replacement")
-    replacement = _git(repository, "rev-parse", "HEAD")
-    _git(repository, "replace", revision, replacement)
-
-    with _controller_refresh_source(repository, revision) as source:
-        assert (source / "ansible/playbooks/infralink_controller_refresh.yml").read_text(
-            encoding="utf-8"
-        ) == "---\n- hosts: all\n"
-
-
-def test_controller_refresh_reports_failed_temporary_worktree_cleanup(
-    monkeypatch, tmp_path: Path
-) -> None:
-    repository, revision = _controller_source_repository(tmp_path)
-    _configure_self_remote(monkeypatch, repository)
-    real_run = subprocess.run
-
-    def failing_cleanup(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        if args[-4:-1] == ["worktree", "remove", "--force"]:
-            return subprocess.CompletedProcess(
-                args=args, returncode=1, stdout="", stderr="cleanup failed"
-            )
-        return real_run(args, **kwargs)  # type: ignore[arg-type, no-any-return]
-
-    monkeypatch.setattr(
-        "infralink.operator_operations.host_bootstrap.subprocess.run", failing_cleanup
-    )
-
-    with pytest.raises(CliFailure) as cleanup:
-        with _controller_refresh_source(repository, revision):
-            pass
-    assert cleanup.value.code == ErrorCode.ARTIFACT_IO_FAILED
-
-
 def test_cli_readiness_enforces_declared_v2_registry_layout_migration() -> None:
     probe = HostReadinessProbe(
         reachable=True,
@@ -1535,52 +1485,3 @@ def test_cli_readiness_enforces_declared_v2_registry_layout_migration() -> None:
     assert readiness.requires_v2_registry_layout is True
     assert layout.passed is False
     assert layout.detail == "legacy_nested"
-
-
-def test_controller_refresh_prefers_the_explicit_host_runtime_over_global_lock(
-    tmp_path: Path,
-) -> None:
-    """A host declaration may advance without changing the fleet-wide fallback."""
-    from infralink.operator_operations.host_bootstrap import _controller_refresh_extra_vars
-
-    registry_root = tmp_path / "registry"
-    registry = registry_root / "hosts"
-    manifest = registry / HOST_ID / "manifest.yml"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(
-        "hosts:\n"
-        f"  {HOST_ID}:\n"
-        f"    canonical_name: {HOST_NAME}\n"
-        "    self_deploy_v2_reconcile_enabled: true\n"
-        "    self_deploy_v2_reconcile_packaged: true\n"
-        "    self_deploy_v2_promotion_policy_enabled: true\n"
-        "    self_deploy_legacy_cron_enabled: false\n"
-        "    self_deploy_v2_promotion_registry_remote: ssh://git@gitea.example.invalid:2222/relaxgg/infra-registry.git\n"
-        "    self_deploy_v2_promotion_bws_project_id: 11111111-1111-4111-8111-111111111111\n"
-        "    self_deploy_v2_registry_read_identity_secret_uuid: 22222222-2222-4222-8222-222222222222\n"
-        f"    self_deploy_v2_promotion_host_fingerprint: ssh-rsa {HOST_FINGERPRINT}\n"
-        "    self_deploy_v2_promotion_allowed_signers: infra ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEjV/Mqc501uHt3OiM0aYthhtAHO1htXrDuEYh4UQOXI\n"
-        "    self_deploy_v2_promotion_channel: core-v2\n"
-        "    self_deploy_registry_origin: http://100.64.68.83:3000/relaxgg/infra-registry.git\n",
-        encoding="utf-8",
-    )
-    explicit_revision = "b" * 40
-    deployment = registry / HOST_ID / "operations" / "deployment.yml"
-    deployment.parent.mkdir()
-    deployment.write_text(f"infra_management:\n  revision: {explicit_revision}\n", encoding="utf-8")
-    lock = registry_root / "operations" / "infra-management.lock"
-    lock.parent.mkdir()
-    lock.write_text("a" * 40 + "\n", encoding="utf-8")
-    target = type("Target", (), {"uuid": HOST_ID, "canonical_name": HOST_NAME})()
-
-    runtime_revision, _ = _controller_refresh_extra_vars(registry, target)
-
-    assert runtime_revision == explicit_revision
-
-    deployment.unlink()
-    deployment.mkdir()
-    with pytest.raises(CliFailure) as malformed:
-        _controller_refresh_extra_vars(registry, target)
-
-    assert malformed.value.code == ErrorCode.CONFIGURATION_REQUIRED
-    assert malformed.value.details == {"path": str(deployment)}

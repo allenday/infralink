@@ -1,7 +1,0 @@
-{
-  "schema_version": "infralink.release-pointer.v2",
-  "channel": "core-v2",
-  "registry_commit": "e503cface4a057505f0a7052ab9435989feb1963",
-  "candidate": "candidate.json",
-  "signature": "ssh-ed25519 fixture-pointer-signature"
-}

@@ -14,12 +14,10 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
@@ -41,10 +39,7 @@ if TYPE_CHECKING:
     from infralink.cli.main import Context
 
 
-_CONTROL_ROOT = Path(os.environ.get("INFRALINK_CONTROL_ROOT", "/opt/infra"))
 _BOOTSTRAP_EXECUTOR_ROOT = Path("/app")
-_CONTROLLER_REFRESH_PLAYBOOK = "ansible/playbooks/infralink_controller_refresh.yml"
-_CONTROLLER_REFRESH_SOURCE_REMOTE = "https://github.com/relax-dot-gg/infra-management.git"
 
 
 def execute_bootstrap(ctx: Any, request: Any) -> tuple[Any, list[Action], bool]:
@@ -124,39 +119,6 @@ def _registry_checkout_root(path: Path | None) -> Path | None:
 
 def _action_argv_prefix() -> list[str]:
     return ["infralink"]
-
-
-def _isolated_git_environment() -> dict[str, str]:
-    """Run controller Git with only the managed root credential store enabled."""
-    return {
-        "PATH": "/usr/bin:/bin",
-        "HOME": "/root",
-        "LANG": "C",
-        "LC_ALL": "C",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_COUNT": "3",
-        "GIT_CONFIG_KEY_0": "credential.helper",
-        "GIT_CONFIG_VALUE_0": "",
-        "GIT_CONFIG_KEY_1": "credential.helper",
-        "GIT_CONFIG_VALUE_1": "store",
-        "GIT_CONFIG_KEY_2": "credential.useHttpPath",
-        "GIT_CONFIG_VALUE_2": "true",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_NO_LAZY_FETCH": "1",
-        "GIT_OPTIONAL_LOCKS": "0",
-    }
-
-
-def _controller_remote_identity(remote: str) -> str:
-    """Compare HTTPS controller remotes without retaining embedded credentials."""
-    parsed = urlsplit(remote)
-    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-        return remote
-    host = parsed.hostname
-    if parsed.port is not None:
-        host = f"{host}:{parsed.port}"
-    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
 
 def _bootstrap_plan_actions(
@@ -753,7 +715,7 @@ def _bootstrap_apply_request(
             code=ErrorCode.CONFIGURATION_REQUIRED,
             message="Selected host declaration is incomplete for bootstrap",
             exit_code=ExitCode.INPUT_ERROR,
-            fix="Declare complete V2 bootstrap state and rerun host bootstrap --plan",
+            fix="Declare complete controller_bootstrap state and rerun host bootstrap --plan",
             details={"host": target.uuid},
         ) from None
 
@@ -928,306 +890,3 @@ def _sanitize_bootstrap_diagnostic(value: str, token: str | None) -> str:
     if len(value) > maximum_length:
         return "[truncated]\n" + value[-maximum_length:]
     return value
-
-
-def _apply_controller_refresh(ctx: Context, target: Any, runtime_revision: str | None) -> None:
-    """Run only the pinned controller refresh playbook over declared SSH."""
-    from infralink.cli.operations import _pinned_known_hosts, resolve_apply_request
-
-    if ctx.hosts_path is None or not ctx.hosts_path.is_dir():
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Controller refresh requires a directory registry checkout",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Provide the selected registry hosts directory",
-            details={"host": target.uuid},
-        )
-    request = resolve_apply_request(ctx.hosts_path, target)
-    resolved_runtime_revision, extra_vars = _controller_refresh_extra_vars(ctx.hosts_path, target)
-    if runtime_revision is not None and runtime_revision != resolved_runtime_revision:
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Selected controller runtime revision changed during bootstrap",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Re-run host bootstrap --plan and apply the newly selected controller revision",
-            details={"host": target.uuid},
-        )
-    runtime_revision = resolved_runtime_revision
-    control_root = _CONTROL_ROOT
-    ssh_args = "-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes "
-    try:
-        with _controller_refresh_source(control_root, runtime_revision) as source:
-            with _pinned_known_hosts(request) as known_hosts:
-                completed = subprocess.run(
-                    [
-                        "ansible-playbook",
-                        "-i",
-                        f"{request.address},",
-                        "-u",
-                        "root",
-                        "--ssh-common-args",
-                        ssh_args + f"-o UserKnownHostsFile={known_hosts}",
-                        str(source / _CONTROLLER_REFRESH_PLAYBOOK),
-                        "-e",
-                        json.dumps(extra_vars, sort_keys=True),
-                    ],
-                    cwd=source,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-    except (OSError, subprocess.TimeoutExpired):
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Declared host controller refresh is unavailable",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Verify the declared SSH transport and rerun host bootstrap --apply",
-            details={"host": target.uuid, "runtime_revision": runtime_revision},
-        ) from None
-    if completed.returncode != 0:
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Host controller refresh failed",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Inspect Bastion Ansible logs and rerun host bootstrap --apply",
-            details={"host": target.uuid, "runtime_revision": runtime_revision},
-        )
-
-
-@contextmanager
-def _controller_refresh_source(
-    control_root: Path,
-    revision: str | None,
-    *,
-    required_path: str | None = None,
-    capability: str = "controller_refresh",
-) -> Iterator[Path]:
-    """Materialize an immutable management tree, never the live checkout."""
-    required_path = required_path or _CONTROLLER_REFRESH_PLAYBOOK
-    status = subprocess.run(
-        ["git", "-C", str(control_root), "status", "--porcelain"],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=_isolated_git_environment(),
-    )
-    if status.returncode != 0 or status.stdout:
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot materialize the selected immutable management source",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Clean and refresh the Bastion infra-management checkout at the selected revision",
-            details={"capability": capability, "required_revision": revision},
-        )
-    remote = subprocess.run(
-        ["git", "-C", str(control_root), "remote", "get-url", "origin"],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=_isolated_git_environment(),
-    )
-    if remote.returncode != 0 or _controller_remote_identity(
-        remote.stdout.strip()
-    ) != _controller_remote_identity(_CONTROLLER_REFRESH_SOURCE_REMOTE):
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot fetch the selected immutable management source",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Configure the expected infra-management origin and rerun host bootstrap --apply",
-            details={"capability": capability, "required_revision": revision},
-        )
-    # `main` is transport only: the candidate-selected revision remains the
-    # sole executable identity and must be reachable from the expected remote.
-    fetched = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(control_root),
-            "fetch",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "origin",
-            "refs/heads/main:refs/remotes/origin/main",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=_isolated_git_environment(),
-    )
-    if revision is None and fetched.returncode == 0:
-        resolved = subprocess.run(
-            ["git", "-C", str(control_root), "rev-parse", "origin/main"],
-            text=True,
-            capture_output=True,
-            check=False,
-            env=_isolated_git_environment(),
-        )
-        revision = resolved.stdout.strip() if resolved.returncode == 0 else ""
-    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot resolve the immutable management source",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
-            details={"capability": capability},
-        )
-    present = subprocess.run(
-        ["git", "-C", str(control_root), "cat-file", "-e", f"{revision}^{{commit}}"],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=_isolated_git_environment(),
-    )
-    selected_from_main = subprocess.run(
-        ["git", "-C", str(control_root), "merge-base", "--is-ancestor", revision, "origin/main"],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=_isolated_git_environment(),
-    )
-    if fetched.returncode != 0 or present.returncode != 0 or selected_from_main.returncode != 0:
-        raise CliFailure(
-            code=ErrorCode.PROVIDER_UNAVAILABLE,
-            message="Bastion cannot fetch the selected immutable management source",
-            exit_code=ExitCode.PROVIDER_ERROR,
-            fix="Verify Bastion can read the expected infra-management origin and rerun host bootstrap --apply",
-            details={"capability": capability, "required_revision": revision},
-        )
-    with tempfile.TemporaryDirectory(prefix="infralink-controller-refresh-") as temporary:
-        source = Path(temporary) / "source"
-        created = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(control_root),
-                "worktree",
-                "add",
-                "--detach",
-                str(source),
-                revision,
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-            env=_isolated_git_environment(),
-        )
-        head = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            text=True,
-            capture_output=True,
-            check=False,
-            env=_isolated_git_environment(),
-        )
-        required = source / required_path
-        if (
-            created.returncode != 0
-            or head.returncode != 0
-            or head.stdout.strip() != revision
-            or not required.is_file()
-        ):
-            raise CliFailure(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message="Bastion could not materialize the selected immutable management source",
-                exit_code=ExitCode.PROVIDER_ERROR,
-                fix="Refresh the Bastion infra-management clone with the selected controller revision",
-                details={"capability": capability, "required_revision": revision},
-            )
-        completed = False
-        try:
-            yield source
-            completed = True
-        finally:
-            removed = subprocess.run(
-                ["git", "-C", str(control_root), "worktree", "remove", "--force", str(source)],
-                text=True,
-                capture_output=True,
-                check=False,
-                env=_isolated_git_environment(),
-            )
-            if completed and removed.returncode != 0:
-                raise CliFailure(
-                    code=ErrorCode.ARTIFACT_IO_FAILED,
-                    message="Bastion could not remove the temporary management source",
-                    exit_code=ExitCode.ARTIFACT_IO_ERROR,
-                    fix="Remove the temporary controller worktree and rerun host bootstrap --apply",
-                    details={"capability": capability, "required_revision": revision},
-                )
-
-
-def _controller_refresh_extra_vars(registry_path: Path, target: Any) -> tuple[str, dict[str, Any]]:
-    """Read the host controller revision, falling back to the fleet lock."""
-    manifest_path = registry_path / target.uuid / "manifest.yml"
-    try:
-        document = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        declaration = document["hosts"][target.uuid]
-    except (OSError, KeyError, TypeError, yaml.YAMLError):
-        declaration = None
-    deployment_path = registry_path / target.uuid / "operations" / "deployment.yml"
-    if os.path.lexists(deployment_path):
-        if deployment_path.is_file():
-            try:
-                deployment = yaml.safe_load(deployment_path.read_text(encoding="utf-8"))
-                runtime_revision = deployment["infra_management"]["revision"]
-            except (OSError, KeyError, TypeError, yaml.YAMLError):
-                runtime_revision = ""
-        else:
-            runtime_revision = ""
-        revision_source = deployment_path
-    else:
-        lock = registry_path.parent / "operations" / "infra-management.lock"
-        try:
-            runtime_revision = lock.read_text(encoding="utf-8").strip()
-        except OSError:
-            runtime_revision = ""
-        revision_source = lock
-    if (
-        not isinstance(runtime_revision, str)
-        or re.fullmatch(r"[0-9a-f]{40}", runtime_revision) is None
-    ):
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Selected host does not bind an exact controller runtime revision",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Declare infra_management.revision in the host deployment or publish a valid fleet fallback lock",
-            details={"path": str(revision_source)},
-        )
-    required_true = (
-        "self_deploy_v2_reconcile_enabled",
-        "self_deploy_v2_reconcile_packaged",
-        "self_deploy_v2_promotion_policy_enabled",
-    )
-    required_strings = (
-        "self_deploy_v2_promotion_registry_remote",
-        "self_deploy_v2_promotion_bws_project_id",
-        "self_deploy_v2_registry_read_identity_secret_uuid",
-        "self_deploy_v2_promotion_host_fingerprint",
-        "self_deploy_v2_promotion_allowed_signers",
-        "self_deploy_v2_promotion_channel",
-        "self_deploy_registry_origin",
-    )
-    if (
-        not isinstance(declaration, dict)
-        or any(declaration.get(name) is not True for name in required_true)
-        or declaration.get("self_deploy_legacy_cron_enabled") is not False
-        or any(
-            not isinstance(declaration.get(name), str) or not declaration[name]
-            for name in required_strings
-        )
-    ):
-        raise CliFailure(
-            code=ErrorCode.CONFIGURATION_REQUIRED,
-            message="Selected host declaration is incomplete for controller refresh",
-            exit_code=ExitCode.INPUT_ERROR,
-            fix="Declare the complete V2 controller inputs in the selected host manifest",
-            details={"host": target.uuid},
-        )
-    return runtime_revision, {
-        "uuid": target.uuid,
-        "canonical_name": target.canonical_name,
-        "self_deploy_v2_runtime_revision": runtime_revision,
-        "self_deploy_v2_reconcile_enabled": True,
-        "self_deploy_v2_reconcile_packaged": True,
-        "self_deploy_v2_promotion_policy_enabled": True,
-        "self_deploy_legacy_cron_enabled": False,
-        **{name: declaration[name] for name in required_strings},
-    }
