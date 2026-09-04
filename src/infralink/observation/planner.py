@@ -60,7 +60,7 @@ class PlannedHost(PlanModel):
     id: str
     display_name: Annotated[str, Field(min_length=1)] | None = None
     baseline_capabilities: tuple[HostBaselineCapability, ...] = ()
-    self_deploy_v2_reconcile_enabled: bool = False
+    controller_managed: bool = False
     host_bridge_ingress: tuple[HostBridgeIngress, ...] = ()
     source_refs: tuple[SourceRef, ...]
 
@@ -512,8 +512,8 @@ def resolve_observation_documents(
         host_source_refs: tuple[SourceRef, ...] = (ref,)
         if "baseline_capabilities" in host.model_fields_set:
             host_source_refs += (_child(ref, "baseline_capabilities"),)
-        if "self_deploy_v2_reconcile_enabled" in host.model_fields_set:
-            host_source_refs += (_child(ref, "self_deploy_v2_reconcile_enabled"),)
+        if "controller_managed" in host.model_fields_set:
+            host_source_refs += (_child(ref, "controller_managed"),)
         if "host_bridge_ingress" in host.model_fields_set:
             host_source_refs += (_child(ref, "host_bridge_ingress"),)
         planned_hosts.append(
@@ -523,7 +523,7 @@ def resolve_observation_documents(
                 baseline_capabilities=tuple(
                     sorted(host.baseline_capabilities, key=lambda item: item.value)
                 ),
-                self_deploy_v2_reconcile_enabled=host.self_deploy_v2_reconcile_enabled,
+                controller_managed=host.controller_managed,
                 host_bridge_ingress=tuple(
                     sorted(
                         host.host_bridge_ingress,
@@ -1154,7 +1154,7 @@ def resolve_observation_documents(
                     host_ids=tuple(
                         host.id
                         for host in sorted(planned_hosts, key=lambda item: item.id)
-                        if host.self_deploy_v2_reconcile_enabled
+                        if host.controller_managed
                     ),
                     freshness_seconds=view.freshness_seconds,
                     datasource_binding_id=view.datasource_binding_id,
@@ -1628,7 +1628,7 @@ _SCOPED_COMPATIBILITY_DEFAULT_FIELDS = frozenset(
     {
         "baseline_capabilities",
         "required_host_baseline_capabilities",
-        "self_deploy_v2_reconcile_enabled",
+        "controller_managed",
     }
 )
 

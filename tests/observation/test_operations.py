@@ -86,8 +86,8 @@ def test_resolves_views_and_suites_with_stable_derived_signal_identity() -> None
 def test_resolves_typed_fleet_convergence_view_without_query_members() -> None:
     data = deepcopy(operational_data())
     data["hosts"].append({"id": "33333333-3333-4333-8333-333333333333"})  # type: ignore[union-attr]
-    data["hosts"][0]["self_deploy_v2_reconcile_enabled"] = True  # type: ignore[index]
-    data["hosts"][1]["self_deploy_v2_reconcile_enabled"] = True  # type: ignore[index]
+    data["hosts"][0]["controller_managed"] = True  # type: ignore[index]
+    data["hosts"][1]["controller_managed"] = True  # type: ignore[index]
     data["operations_views"] = [
         {
             "id": "self-deploy",
@@ -110,6 +110,31 @@ def test_resolves_typed_fleet_convergence_view_without_query_members() -> None:
     assert view.freshness_seconds == 900
     assert view.datasource_binding_id == "primary-metrics"
     assert view.sections == ()
+
+
+def test_fleet_convergence_rejects_legacy_reconcile_flag_and_tracks_controller_management() -> None:
+    legacy = deepcopy(operational_data())
+    legacy["hosts"][0]["self_deploy_v2_reconcile_enabled"] = True  # type: ignore[index]
+    legacy["readiness_suites"] = []
+
+    with pytest.raises(PlanValidationError) as caught:
+        resolve_observation_documents([document(legacy)], as_of=AS_OF)
+
+    assert "invalid-document-record" in {item.code for item in caught.value.report.diagnostics}
+
+    baseline = deepcopy(operational_data())
+    baseline["readiness_suites"] = []
+    explicit_default = deepcopy(baseline)
+    explicit_default["hosts"][0]["controller_managed"] = False  # type: ignore[index]
+    managed = deepcopy(baseline)
+    managed["hosts"][0]["controller_managed"] = True  # type: ignore[index]
+
+    baseline_plan = resolve_observation_documents([document(baseline)], as_of=AS_OF)
+    explicit_default_plan = resolve_observation_documents([document(explicit_default)], as_of=AS_OF)
+    managed_plan = resolve_observation_documents([document(managed)], as_of=AS_OF)
+
+    assert explicit_default_plan.plan_digest == baseline_plan.plan_digest
+    assert managed_plan.plan_digest != baseline_plan.plan_digest
 
 
 def test_fleet_convergence_rejects_declarative_host_membership() -> None:
