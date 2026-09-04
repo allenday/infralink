@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import yaml
@@ -172,6 +173,24 @@ def test_release_validate_candidate_preserves_manual_image_tag_sha_workflow(tmp_
     }
     assert [item["rel"] for item in payload["next_actions"]] == ["render-publisher-request"]
     action = payload["next_actions"][0]
+    admission = _admission(
+        tmp_path / "admission.yml",
+        {
+            "schema_version": "infralink.release-admission.v1",
+            "selection": {
+                "mode": "release-channel",
+                "channel": "core-v2",
+                "recent_window": 20,
+                "maximum_candidates": 5,
+            },
+            "publisher": {"state": "eligible", "provider": "woodpecker"},
+        },
+    )
+    assert action["command"] == (
+        "infralink release render-publisher-request "
+        f"--candidate {candidate} --admission '{{admission}}'"
+    )
+    assert action["safe"] is True
     assert action["templated"] is True
     assert action["bindings"] == {
         "admission": {
@@ -180,6 +199,15 @@ def test_release_validate_candidate_preserves_manual_image_tag_sha_workflow(tmp_
             "source": "local release admission policy path",
         }
     }
+    replay = CliRunner().invoke(
+        cli,
+        shlex.split(action["command"].replace("{admission}", str(admission)))[1:],
+    )
+    assert replay.exit_code == 0, replay.output
+    assert _payload(replay)["command"]["parsed"]["path"] == [
+        "release",
+        "render-publisher-request",
+    ]
 
 
 def test_release_render_publisher_request_binds_only_immutable_candidate_inputs(
@@ -227,6 +255,11 @@ def test_release_render_publisher_request_binds_only_immutable_candidate_inputs(
     assert "ref" not in request
     assert [item["rel"] for item in payload["next_actions"]] == ["inspect-attestation"]
     action = payload["next_actions"][0]
+    attestation = _attestation(tmp_path / "attestation.json")
+    assert (
+        action["command"] == "infralink release inspect-attestation --attestation '{attestation}'"
+    )
+    assert action["safe"] is True
     assert action["templated"] is True
     assert action["bindings"] == {
         "attestation": {
@@ -235,6 +268,15 @@ def test_release_render_publisher_request_binds_only_immutable_candidate_inputs(
             "source": "trusted publisher completion record path",
         }
     }
+    replay = CliRunner().invoke(
+        cli,
+        shlex.split(action["command"].replace("{attestation}", str(attestation)))[1:],
+    )
+    assert replay.exit_code == 0, replay.output
+    assert _payload(replay)["command"]["parsed"]["path"] == [
+        "release",
+        "inspect-attestation",
+    ]
 
 
 def test_release_render_publisher_request_accepts_the_registry_rendered_v2_request(
@@ -329,7 +371,7 @@ def test_release_render_publisher_request_is_clear_no_go_when_publisher_is_unava
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = _payload(result)
     assert payload["error"]["code"] == "release_publisher_unavailable"
     assert "protected publisher" in payload["fix"].casefold()
@@ -512,6 +554,15 @@ def test_release_inspect_reports_admitted_release_and_publisher_unavailable(tmp_
     }
     assert payload["result"]["publisher"]["state"] == "unavailable"
     assert [action["rel"] for action in payload["next_actions"]] == ["inspect"]
+    action = payload["next_actions"][0]
+    assert action["command"] == (
+        f"infralink release inspect --release-validation {validation} --admission {admission}"
+    )
+    assert action["safe"] is True
+    assert "templated" not in action
+    replay = CliRunner().invoke(cli, shlex.split(action["command"])[1:])
+    assert replay.exit_code == 0, replay.output
+    assert _payload(replay)["command"]["parsed"]["path"] == ["release", "inspect"]
 
 
 def test_release_inspect_reports_provider_eligibility_without_advertising_mutation(

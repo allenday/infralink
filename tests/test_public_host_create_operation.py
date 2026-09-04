@@ -24,10 +24,10 @@ def test_host_create_dry_run_outputs_a_schema_valid_scaffold_without_writing(
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(registry_root),
             "host",
             "create",
+            "--registry",
+            str(registry_root),
             "--name",
             "new-node",
             "--address",
@@ -63,10 +63,10 @@ def test_host_create_write_materializes_a_valid_directory_manifest(tmp_path: Pat
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(registry_root),
             "host",
             "create",
+            "--registry",
+            str(registry_root),
             "--name",
             "new-node.internal",
             "--address",
@@ -97,7 +97,7 @@ def test_host_create_write_materializes_a_valid_directory_manifest(tmp_path: Pat
     assert payload["next_actions"] == [
         {
             "rel": "show",
-            "command": f"infralink --registry {registry_root} host show {payload['result']['host_id']}",
+            "command": f"infralink host show {payload['result']['host_id']} --registry {registry_root}",
             "description": "Show the created host declaration",
             "safe": True,
         }
@@ -113,10 +113,10 @@ def test_host_create_action_preserves_a_literal_redacted_registry_name() -> None
         result = runner.invoke(
             cli,
             [
-                "--registry",
-                str(registry_root),
                 "host",
                 "create",
+                "--registry",
+                str(registry_root),
                 "--name",
                 "new-node",
                 "--address",
@@ -129,11 +129,11 @@ def test_host_create_action_preserves_a_literal_redacted_registry_name() -> None
     assert result.exit_code == 0
     assert shlex.split(payload["next_actions"][0]["command"]) == [
         "infralink",
-        "--registry",
-        "<redacted>",
         "host",
         "show",
         payload["result"]["host_id"],
+        "--registry",
+        "<redacted>",
     ]
 
 
@@ -144,10 +144,10 @@ def test_host_create_rejects_non_directory_registry_and_invalid_address(tmp_path
     non_directory = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(registry_file),
             "host",
             "create",
+            "--registry",
+            str(registry_file),
             "--name",
             "new-node",
             "--address",
@@ -158,10 +158,10 @@ def test_host_create_rejects_non_directory_registry_and_invalid_address(tmp_path
     invalid_address = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(_registry_root(tmp_path)),
             "host",
             "create",
+            "--registry",
+            str(_registry_root(tmp_path)),
             "--name",
             "new-node",
             "--address",
@@ -170,7 +170,7 @@ def test_host_create_rejects_non_directory_registry_and_invalid_address(tmp_path
     )
 
     assert non_directory.exit_code == 3
-    assert yaml.safe_load(non_directory.output)["error"]["code"] == "source_invalid"
+    assert yaml.safe_load(non_directory.output)["error"]["code"] == "input_load_failed"
     assert invalid_address.exit_code == 2
     assert yaml.safe_load(invalid_address.output)["error"]["code"] == "usage_error"
 
@@ -189,10 +189,10 @@ def test_host_create_write_refuses_the_managed_runtime_checkout_before_mutation(
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(registry_root),
             "host",
             "create",
+            "--registry",
+            str(registry_root),
             "--name",
             "new-node",
             "--address",
@@ -209,14 +209,14 @@ def test_host_create_write_refuses_the_managed_runtime_checkout_before_mutation(
 
 
 def test_host_create_is_discoverable_from_generated_host_help() -> None:
-    result = CliRunner().invoke(cli, ["help", "host"])
+    result = CliRunner().invoke(cli, ["help", "--path", "host"])
 
     payload = yaml.safe_load(result.output)
     assert result.exit_code == 0
     children = {item["name"]: item for item in payload["result"]["children"]}
     assert children["create"]["action"] == {
         "rel": "help",
-        "command": "infralink help host create",
+        "command": "infralink help --path host.create",
     }
 
 
@@ -231,10 +231,10 @@ def test_host_create_refuses_an_existing_generated_uuid_directory(
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(registry_root),
             "host",
             "create",
+            "--registry",
+            str(registry_root),
             "--name",
             "new-node",
             "--address",

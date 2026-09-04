@@ -275,6 +275,18 @@
     "OptionDescriptor": {
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
         "name": {
           "title": "Name",
           "type": "string"

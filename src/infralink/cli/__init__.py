@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from click import Group
@@ -14,5 +14,5 @@ def __getattr__(name: str) -> Group:
     if name == "cli":
         from infralink.cli.main import cli
 
-        return cast("Group", cli)
+        return cli
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -10,8 +10,8 @@ from infralink.cli.main import cli
 
 
 def _registry_root(tmp_path: Path) -> Path:
-    root = tmp_path / "hosts"
-    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    root = tmp_path
+    manifest = root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
         """
@@ -38,13 +38,13 @@ def _payload(result) -> dict:
 def test_registry_host_get_returns_the_authoritative_manifest_location(tmp_path: Path) -> None:
     root = _registry_root(tmp_path)
 
-    result = CliRunner().invoke(cli, ["--registry", str(root), "registry", "host", "get", "alpha"])
+    result = CliRunner().invoke(cli, ["registry", "host", "get", "alpha", "--registry", str(root)])
 
     payload = _payload(result)
     assert result.exit_code == 0, result.output
     assert payload["result"]["host"]["id"] == "11111111-1111-4111-8111-111111111111"
     assert payload["result"]["manifest_path"] == str(
-        root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+        root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     )
     assert payload["result"]["declaration"]["controller_bootstrap"]["controller_image"] == (
         "ghcr.io/example/controller:main"
@@ -53,26 +53,23 @@ def test_registry_host_get_returns_the_authoritative_manifest_location(tmp_path:
     patch = next(item for item in payload["next_actions"] if item["rel"] == "patch")
     assert patch["templated"] is True
     assert patch["bindings"] == {
-        "path": {"type": "string", "required": True, "source": "operator.input"},
-        "value": {
+        "assignment": {
             "type": "string",
             "required": True,
             "source": "operator.input",
-            "syntax": "YAML_VALUE | @text:FILE | @yaml:FILE",
-            "examples": ["ghcr.io/example/controller:v0.5.5", "@text:FILE", "@yaml:FILE"],
         },
     }
 
 
 def test_registry_host_get_redacts_secret_shaped_declaration_values(tmp_path: Path) -> None:
     root = _registry_root(tmp_path)
-    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    manifest = root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     manifest.write_text(
         f"{manifest.read_text(encoding='utf-8')}    provider_metadata:\n      password_value: do-not-expose\n",
         encoding="utf-8",
     )
 
-    result = CliRunner().invoke(cli, ["--registry", str(root), "registry", "host", "get", "alpha"])
+    result = CliRunner().invoke(cli, ["registry", "host", "get", "alpha", "--registry", str(root)])
 
     payload = _payload(result)
     assert result.exit_code == 0, result.output
@@ -85,12 +82,12 @@ def test_registry_host_patch_previews_then_writes_a_typed_dot_addressed_mutation
 ) -> None:
     root = _registry_root(tmp_path)
     command = [
-        "--registry",
-        str(root),
         "registry",
         "host",
         "patch",
         "alpha",
+        "--registry",
+        str(root),
         "--set",
         "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
     ]
@@ -108,7 +105,7 @@ def test_registry_host_patch_previews_then_writes_a_typed_dot_addressed_mutation
     ]
     assert (
         yaml.safe_load(
-            (root / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
+            (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
                 encoding="utf-8"
             )
         )["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
@@ -124,7 +121,7 @@ def test_registry_host_patch_previews_then_writes_a_typed_dot_addressed_mutation
     assert applied_payload["result"]["mode"] == "written"
     assert (
         yaml.safe_load(
-            (root / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
+            (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
                 encoding="utf-8"
             )
         )["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
@@ -141,12 +138,12 @@ def test_registry_host_patch_reads_literal_multiline_text_from_an_explicit_file_
     source = tmp_path / "bootstrap-note.txt"
     source.write_text("first line\nsecond line\n", encoding="utf-8")
     command = [
-        "--registry",
-        str(root),
         "registry",
         "host",
         "patch",
         "alpha",
+        "--registry",
+        str(root),
         "--set",
         f"controller_bootstrap.bootstrap_note=@text:{source}",
     ]
@@ -159,7 +156,9 @@ def test_registry_host_patch_reads_literal_multiline_text_from_an_explicit_file_
     applied = CliRunner().invoke(cli, [*command, "--write"])
     assert applied.exit_code == 0, applied.output
     document = yaml.safe_load(
-        (root / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(encoding="utf-8")
+        (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
+            encoding="utf-8"
+        )
     )
     assert (
         document["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
@@ -170,12 +169,14 @@ def test_registry_host_patch_reads_literal_multiline_text_from_an_explicit_file_
 
 
 def test_registry_host_patch_help_documents_explicit_file_source_grammars() -> None:
-    result = CliRunner().invoke(cli, ["help", "registry", "host", "patch"])
+    result = CliRunner().invoke(cli, ["help", "--path", "registry.host.patch"])
 
     payload = _payload(result)
     assert result.exit_code == 0, result.output
-    assert "@text:FILE" in payload["result"]["examples"][0]
-    assert "@yaml:FILE" in payload["result"]["examples"][1]
+    options = {item["name"]: item for item in payload["result"]["options"]}
+    assert options["assignments"]["description"] == (
+        "Repeat --set with PATH=YAML_VALUE, PATH=@text:FILE, or PATH=@yaml:FILE."
+    )
 
 
 def test_registry_host_patch_reads_a_typed_yaml_value_from_an_explicit_file_source(
@@ -185,12 +186,12 @@ def test_registry_host_patch_reads_a_typed_yaml_value_from_an_explicit_file_sour
     source = tmp_path / "pull-enabled.yml"
     source.write_text("true\n", encoding="utf-8")
     command = [
-        "--registry",
-        str(root),
         "registry",
         "host",
         "patch",
         "alpha",
+        "--registry",
+        str(root),
         "--set",
         f"controller_bootstrap.pull_enabled=@yaml:{source}",
     ]
@@ -203,7 +204,9 @@ def test_registry_host_patch_reads_a_typed_yaml_value_from_an_explicit_file_sour
     applied = CliRunner().invoke(cli, [*command, "--write"])
     assert applied.exit_code == 0, applied.output
     document = yaml.safe_load(
-        (root / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(encoding="utf-8")
+        (root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml").read_text(
+            encoding="utf-8"
+        )
     )
     assert (
         document["hosts"]["11111111-1111-4111-8111-111111111111"]["controller_bootstrap"][
@@ -217,18 +220,18 @@ def test_registry_host_patch_rejects_an_unreadable_explicit_file_source_without_
     tmp_path: Path,
 ) -> None:
     root = _registry_root(tmp_path)
-    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    manifest = root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     original = manifest.read_text(encoding="utf-8")
 
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(root),
             "registry",
             "host",
             "patch",
             "alpha",
+            "--registry",
+            str(root),
             "--set",
             f"controller_bootstrap.bootstrap_note=@text:{tmp_path / 'missing.txt'}",
             "--write",
@@ -244,18 +247,18 @@ def test_registry_host_patch_rejects_an_unreadable_explicit_file_source_without_
 
 def test_registry_host_patch_rejects_unknown_parent_paths_without_writing(tmp_path: Path) -> None:
     root = _registry_root(tmp_path)
-    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    manifest = root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     original = manifest.read_text(encoding="utf-8")
 
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(root),
             "registry",
             "host",
             "patch",
             "alpha",
+            "--registry",
+            str(root),
             "--set",
             "controller_bootstrap.controller_imgae=ghcr.io/example/controller:v0.5.5",
             "--write",
@@ -272,7 +275,7 @@ def test_registry_host_patch_preserves_unrelated_yaml_comments_and_flow_style(
     tmp_path: Path,
 ) -> None:
     root = _registry_root(tmp_path)
-    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    manifest = root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     manifest.write_text(
         """
 # operator note
@@ -289,12 +292,12 @@ hosts:
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(root),
             "registry",
             "host",
             "patch",
             "alpha",
+            "--registry",
+            str(root),
             "--set",
             "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
             "--write",
@@ -318,12 +321,12 @@ def test_registry_host_patch_refuses_a_managed_runtime_checkout(
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(root),
             "registry",
             "host",
             "patch",
             "alpha",
+            "--registry",
+            str(root),
             "--set",
             "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
             "--write",
@@ -338,7 +341,7 @@ def test_registry_host_patch_refuses_a_managed_runtime_checkout(
 
 def test_registry_host_patch_rejects_alias_backed_fields_without_writing(tmp_path: Path) -> None:
     root = _registry_root(tmp_path)
-    manifest = root / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
+    manifest = root / "hosts" / "11111111-1111-4111-8111-111111111111" / "manifest.yml"
     manifest.write_text(
         """
 controller_default: &controller ghcr.io/example/controller:main
@@ -357,12 +360,12 @@ hosts:
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(root),
             "registry",
             "host",
             "patch",
             "alpha",
+            "--registry",
+            str(root),
             "--set",
             "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
             "--write",
@@ -382,12 +385,12 @@ def test_registry_host_patch_rejects_duplicate_paths_during_preview(tmp_path: Pa
     result = CliRunner().invoke(
         cli,
         [
-            "--registry",
-            str(root),
             "registry",
             "host",
             "patch",
             "alpha",
+            "--registry",
+            str(root),
             "--set",
             "controller_bootstrap.controller_image=ghcr.io/example/controller:v0.5.5",
             "--set",

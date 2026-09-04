@@ -1,369 +1,49 @@
+"""MCP is the native projection of the public Infralink operation registry."""
+
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
+import tomllib
 from pathlib import Path
 
-import agent_surface
-import pytest
-import yaml
-from click.testing import CliRunner
-from mcp import Client, ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp import Client
 
-from infralink import __version__
-from infralink.cli import command_plugins
-from infralink.cli.main import cli
-from infralink.health.checks import HealthCheckResult
-from infralink.mcp_server import (
-    _arguments,
-    _native_argv,
-    _native_paths,
-    _native_tool,
-    _parameter_schema,
-    create_server,
-    invoke_cli,
-)
+from infralink.mcp_server import create_server
+from infralink.operator_surface import operator_surface
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _example_checkout(tmp_path: Path) -> tuple[Path, Path]:
-    root = Path(__file__).resolve().parents[1]
-    checkout = tmp_path / "registry"
-    registry = yaml.safe_load((root / "examples" / "registry.yml").read_text(encoding="utf-8"))
-    for host_id, manifest in registry["hosts"].items():
-        path = checkout / "hosts" / host_id / "manifest.yml"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            yaml.safe_dump({"hosts": {host_id: manifest}}, sort_keys=False), encoding="utf-8"
-        )
-    edges = checkout / "network" / "main-dev" / "edges" / "edges.yml"
-    edges.parent.mkdir(parents=True, exist_ok=True)
-    edges.write_text(
-        (root / "examples" / "edges.yml").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    return checkout, edges
+def test_mcp_transport_has_a_dedicated_entrypoint_and_the_public_server_identity() -> None:
+    """The transport launcher cannot introduce a second command registry."""
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert project["project"]["scripts"]["infralink-mcp"] == "infralink.mcp_server:run"
+    assert create_server().name == "infralink"
 
 
-def test_mcp_allows_command_local_artifact_output_without_root_format_override() -> None:
-    argv, stdin = _arguments({"argv": ["analyze", "--output", "artifacts"], "stdin": None})
+def test_mcp_has_no_generic_argv_bridge_and_lists_all_registered_operations() -> None:
+    async def exercise() -> set[str]:
+        async with Client(create_server()) as client:
+            page = await client.list_tools()
+            names = {tool.name for tool in page.tools}
+            while page.next_cursor is not None:
+                page = await client.list_tools(cursor=page.next_cursor)
+                names.update(tool.name for tool in page.tools)
+        return names
 
-    assert argv == ["analyze", "--output", "artifacts"]
-    assert stdin is None
-
-
-def test_help_discovers_native_mcp_server_command() -> None:
-    result = CliRunner().invoke(cli, ["help", "mcp"])
-
-    assert result.exit_code == 0
-    payload = yaml.safe_load(result.output)
-    assert payload["ok"] is True
-    assert payload["result"]["path"] == ["mcp"]
-    assert [child["name"] for child in payload["result"]["children"]] == ["serve"]
+    names = asyncio.run(exercise())
+    assert "infralink_command" not in names
+    assert names == {operation.name for operation in operator_surface.operations.list()}
 
 
-def test_mcp_invokes_existing_cli_and_preserves_hateoas_envelope() -> None:
-    payload = invoke_cli(["version"])
+def test_mcp_returns_the_canonical_typed_version_envelope() -> None:
+    async def exercise() -> dict[str, object]:
+        async with Client(create_server()) as client:
+            result = await client.call_tool("version", {})
+        assert result.is_error is False
+        return result.structured_content
 
+    payload = asyncio.run(exercise())
     assert payload["schema_version"] == "infralink.cli/v1"
-    assert payload["ok"] is True
     assert payload["command"]["parsed"]["path"] == ["version"]
-    assert isinstance(payload["next_actions"], list)
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["--output", "yaml", "version"],
-        ["--output=yaml", "version"],
-        ["-o", "yaml", "version"],
-        ["-r", "/registry", "-o", "yaml", "analyze", "--output", "artifacts"],
-        ["-e", "/edges.yml", "--output", "yaml", "analyze", "--output", "artifacts"],
-        ["mcp", "serve"],
-        ["-v", "mcp", "serve"],
-        ["--registry", "/tmp/registry", "mcp", "serve"],
-    ],
-)
-def test_mcp_rejects_transport_recursive_or_output_overriding_argv(argv: list[str]) -> None:
-    with pytest.raises(ValueError):
-        invoke_cli(argv)
-
-
-def test_mcp_protocol_discovers_and_calls_infralink_command() -> None:
-    async def exercise_protocol() -> None:
-        async with Client(create_server()) as client:
-            tools = await client.list_tools()
-            names = {tool.name for tool in tools.tools}
-            assert "infralink_command" in names
-            assert {"infralink_help", "infralink_doctor", "infralink_host_apply"} <= names
-            assert "infralink_mcp_serve" not in names
-
-            result = await client.call_tool("infralink_command", {"argv": ["version"]})
-            assert result.is_error is False
-            assert result.structured_content["schema_version"] == "infralink.cli/v1"
-            assert result.structured_content["command"]["parsed"]["path"] == ["version"]
-
-            version = await client.call_tool("infralink_version", {})
-            assert version.is_error is False
-            assert version.structured_content["result"] == {
-                "version": __version__,
-                "cli_schema_version": "infralink.cli/v1",
-            }
-
-            help_result = await client.call_tool("infralink_help", {"path": ["host"]})
-            assert help_result.is_error is False
-            assert help_result.structured_content["command"]["parsed"]["path"] == ["host"]
-            assert help_result.structured_content["result"]["path"] == ["host"]
-
-            bad_doctor = await client.call_tool("infralink_doctor", {"target_type": "host"})
-            assert bad_doctor.is_error is True
-            assert bad_doctor.structured_content["schema_version"] == "infralink.cli/v1"
-
-    asyncio.run(exercise_protocol())
-
-
-def test_native_mcp_preserves_bounded_integer_option_types() -> None:
-    async def exercise_protocol() -> None:
-        async with Client(create_server()) as client:
-            tools = await client.list_tools()
-            apply = next(tool for tool in tools.tools if tool.name == "infralink_host_apply")
-
-            timeout = apply.input_schema["properties"]["timeout"]
-            assert timeout == {"type": "integer", "minimum": 1, "maximum": 3600}
-
-    asyncio.run(exercise_protocol())
-
-
-def test_native_mcp_projects_generated_edge_operations_and_their_outcomes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    checkout, edges = _example_checkout(tmp_path)
-    edge_id = "058e29ff-57b9-47c8-b6fa-0914ac03e25c"
-    monkeypatch.setattr(
-        "infralink.operator_operations.edge_health.check_edge_health",
-        lambda edge, resolver, timeout: HealthCheckResult(
-            edge_id=edge.id,
-            edge_type=edge.type.value,
-            target_endpoint="redacted",
-            healthy=False,
-            latency_ms=None,
-            message=None,
-            criticality=edge.criticality.value,
-            check_type="tcp",
-            timestamp=0.0,
-            error_code="timeout",
-        ),
-    )
-
-    async def exercise_protocol() -> None:
-        async with Client(create_server()) as client:
-            tools = await client.list_tools()
-            by_name = {tool.name: tool for tool in tools.tools}
-            assert by_name["infralink_check"].input_schema["properties"]["edge"] == {
-                "type": "array",
-                "items": {"type": "string"},
-            }
-            assert by_name["infralink_resolve"].input_schema["required"] == ["edge_id"]
-
-            check = await client.call_tool(
-                "infralink_check",
-                {"registry": str(checkout), "edges": str(edges), "edge": [edge_id]},
-            )
-            missing = await client.call_tool(
-                "infralink_resolve",
-                {"registry": str(checkout), "edges": str(edges), "edge_id": "missing"},
-            )
-
-            assert check.is_error is False
-            assert check.structured_content["ok"] is True
-            assert check.structured_content["result"]["healthy"] is False
-            assert check.structured_content["next_actions"][0]["rel"] == "show"
-            assert missing.is_error is True
-            assert missing.structured_content["error"]["code"] == "entity_not_found"
-            assert missing.structured_content["next_actions"][0]["rel"] == "list"
-
-    asyncio.run(exercise_protocol())
-
-
-def test_native_mcp_projects_root_topology_sources_before_the_command_path() -> None:
-    tool = _native_tool("infralink_version", ("version",))
-
-    assert {"registry", "edges"} <= set(tool.input_schema["properties"])
-    assert tool.input_schema["properties"]["registry"]["description"] == "Registry checkout root."
-    assert _native_argv(
-        "infralink_version",
-        {"registry": "/registry", "edges": "/edges.yml"},
-    ) == ["--registry", "/registry", "--edges", "/edges.yml", "version"]
-
-
-def test_native_mcp_keeps_analyze_artifact_options_distinct_from_root_sources() -> None:
-    tool = _native_tool("infralink_analyze", ("analyze",))
-
-    assert tool.input_schema["properties"]["registry"]["type"] == "string"
-    assert tool.input_schema["properties"]["edges"]["type"] == "string"
-    assert tool.input_schema["properties"]["include_edges"] == {"type": "boolean"}
-    assert _native_argv(
-        "infralink_analyze",
-        {
-            "registry": "/registry",
-            "edges": "/edges.yml",
-            "output": "artifacts",
-            "include_edges": False,
-        },
-    ) == [
-        "--registry",
-        "/registry",
-        "--edges",
-        "/edges.yml",
-        "analyze",
-        "--output",
-        "artifacts",
-        "--no-include-edges",
-    ]
-
-
-def test_mcp_analyze_uses_a_root_checkout_and_rejects_local_registry_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    checkout = tmp_path / "registry"
-    manifest = checkout / "hosts/11111111-1111-4111-8111-111111111111/manifest.yml"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(
-        """hosts:
-  11111111-1111-4111-8111-111111111111:
-    canonical_name: alpha
-    status: active
-    roles: [api]
-""",
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-
-    async def exercise_protocol() -> None:
-        async with Client(create_server()) as client:
-            native = await client.call_tool(
-                "infralink_analyze",
-                {"registry": str(checkout), "output": "artifacts", "include_edges": False},
-            )
-            legacy = await client.call_tool(
-                "infralink_command",
-                {
-                    "argv": [
-                        "--registry",
-                        str(checkout),
-                        "analyze",
-                        "--registry",
-                        str(checkout),
-                        "--output",
-                        "rejected",
-                    ]
-                },
-            )
-
-            assert native.is_error is False
-            assert native.structured_content["command"]["resolved"]["registry"] == str(checkout)
-            assert legacy.is_error is True
-            assert legacy.structured_content["error"]["code"] == "usage_error"
-
-    asyncio.run(exercise_protocol())
-
-
-def test_native_mcp_help_retains_root_topology_sources() -> None:
-    tool = _native_tool("infralink_help", ("help",))
-
-    assert {"path", "registry", "edges"} <= set(tool.input_schema["properties"])
-    assert _native_argv("infralink_help", {"registry": "/registry", "path": ["host"]}) == [
-        "--registry",
-        "/registry",
-        "help",
-        "host",
-    ]
-
-
-def test_native_mcp_never_overloads_root_topology_source_fields() -> None:
-    for name, path in _native_paths().items():
-        properties = _native_tool(name, path).input_schema["properties"]
-        if path == ("diagram", "project"):
-            assert "registry" not in properties
-            assert "edges" not in properties
-            continue
-        assert properties["registry"]["type"] == "string"
-        assert properties["edges"]["type"] == "string"
-
-
-def test_native_mcp_preserves_every_click_integer_parameter_type() -> None:
-    from click.types import IntParamType
-
-    from infralink.cli.main import _command_for_path
-
-    with command_plugins.discovery_scope():
-        for path in _native_paths().values():
-            if command_plugins.operation(path) is not None:
-                # External Agent Surface operations are schema-projected from
-                # their wheel manifest and intentionally are not imported here.
-                continue
-            command = _command_for_path(path)
-            assert command is not None
-            for parameter in command.params:
-                if isinstance(parameter.type, IntParamType):
-                    assert _parameter_schema(parameter)["type"] == "integer"
-
-
-def test_native_mcp_returns_a_canonical_usage_envelope_for_invalid_bounded_integer() -> None:
-    async def exercise_protocol() -> None:
-        async with Client(create_server()) as client:
-            result = await client.call_tool(
-                "infralink_host_apply",
-                {"host_ref": "relayos-staging", "dry_run": True, "timeout": "60s"},
-            )
-
-            assert result.is_error is True
-            assert result.structured_content["schema_version"] == "infralink.cli/v1"
-            assert result.structured_content["error"]["code"] == "usage_error"
-            assert result.structured_content["next_actions"] == [
-                {
-                    "rel": "help",
-                    "command": "infralink --output json help host apply",
-                    "description": "Show command usage",
-                    "safe": True,
-                }
-            ]
-
-    asyncio.run(exercise_protocol())
-
-
-def test_native_mcp_serve_command_speaks_stdio_protocol() -> None:
-    async def exercise_stdio() -> None:
-        agent_surface_source = Path(agent_surface.__file__).resolve().parents[1]
-        parameters = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "infralink", "mcp", "serve"],
-            env={
-                **os.environ,
-                "PYTHONPATH": os.pathsep.join(
-                    (
-                        str(agent_surface_source),
-                        str(Path(__file__).resolve().parents[1] / "src"),
-                    )
-                ),
-            },
-        )
-        async with stdio_client(parameters) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as client:
-                initialized = await client.initialize()
-                assert initialized.server_info.name == "infralink"
-
-                tools = await client.list_tools()
-                names = {tool.name for tool in tools.tools}
-                assert "infralink_command" in names
-                assert {"infralink_help", "infralink_doctor", "infralink_host_apply"} <= names
-                assert "infralink_mcp_serve" not in names
-
-                status = await client.call_tool(
-                    "infralink_host_status", {"host_ref": "missing-host"}
-                )
-                assert status.is_error is True
-                assert status.structured_content["schema_version"] == "infralink.cli/v1"
-                assert status.structured_content["error"]["code"] == "configuration_required"
-
-    asyncio.run(exercise_stdio())

@@ -120,7 +120,7 @@ identifier lookup.
 ## CLI Contract
 
 Every invocation writes exactly one structured envelope to stdout. YAML is the
-default for topology and offline observation commands; use `--output json` for
+default for topology and offline observation commands; use `--format json` for
 explicit compact JSON. Envelopes include `ok`, a shallow parsed command view, a
 typed `result` or redacted `error`, and bounded next actions. Lists use explicit
 limits and opaque cursors.
@@ -130,32 +130,29 @@ Topology commands use `infralink.cli/v1`. Offline observation commands use
 
 ## MCP
 
-The same installed executable can serve typed operator tools to an MCP client:
+The package's transport-only executable serves the same typed operator tools to
+an MCP client:
 
 ```toml
 [mcp_servers.infralink]
-command = "/usr/local/bin/infralink"
-args = ["mcp", "serve"]
+command = "/usr/local/bin/infralink-mcp"
 
 [mcp_servers.infralink.env]
 INFRALINK_REGISTRY = "/var/lib/infralink/registry"
 ```
 
-The server exposes `infralink_command` plus native typed tools for every public
-operation. Pass an argv array such as `["doctor", "host",
-"cyberstorm-watchtower"]`; its structured result is the same
-`infralink.cli/v1` envelope returned by the CLI. It accepts no shell syntax,
-while existing explicit `--write` and `--apply` gates remain in force. Installed
-typed operation packages are listed in root help and native MCP from their
-build-generated Agent Surface manifests, then verified when invoked.
+The server exposes one native typed tool for every public operation. Its
+structured result is the same `infralink.cli/v1` envelope returned by the CLI.
+It has no generic argv or shell bridge; explicit `--write` and `--apply` gates
+remain fields on their owning typed operations.
 
 Useful discovery commands:
 
 ```bash
 infralink capabilities
 infralink help
-infralink help resolve
-infralink --output json help resolve
+infralink help --path resolve
+infralink host apply HOST_ID --registry REGISTRY_ROOT --dry-run --format json
 infralink explain schema-version-unsupported
 ```
 

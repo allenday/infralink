@@ -155,6 +155,10 @@ def operation_error_exit_code(code: str) -> int:
     same ``configuration_required`` label for both categories are not part of
     this adapter boundary.
     """
+    if code == "app_configuration_required":
+        return int(ExitCode.USAGE_ERROR)
+    if code == "invalid_input":
+        return int(ExitCode.USAGE_ERROR)
     if code in {
         "configuration_required",
         "input_load_failed",
@@ -276,6 +280,35 @@ class AppEnvelopeRenderer(InfralinkEnvelopeRenderer):
         return True
 
 
+class PublicEnvelopeRenderer(InfralinkEnvelopeRenderer):
+    """Preserve family-specific legacy envelope behavior in one projection."""
+
+    @staticmethod
+    def _error_code(invocation: Invocation) -> str:
+        assert invocation.error is not None
+        if invocation.operation.name.startswith("app."):
+            if invocation.error.code == "app_configuration_required":
+                return ErrorCode.CONFIGURATION_REQUIRED.value
+            return AppEnvelopeRenderer._error_code(invocation)
+        return _canonical_error_code(invocation.error.code)
+
+    @staticmethod
+    def _error_details(invocation: Invocation) -> dict[str, Any]:
+        if invocation.operation.name.startswith("app."):
+            return AppEnvelopeRenderer._error_details(invocation)
+        return _canonical_error_details(invocation)
+
+    @staticmethod
+    def _action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        if request is None:
+            return None
+        return _effective_source_values(request)
+
+    @staticmethod
+    def _allow_action_templates() -> bool:
+        return True
+
+
 class OperatorEnvelopeRenderer(InfralinkEnvelopeRenderer):
     """Allow source-bound list navigation for public operator operations."""
 
@@ -364,12 +397,11 @@ def _canonical_mcp_command(
     request: dict[str, Any],
     source_fields: tuple[str, ...],
 ) -> tuple[str, ...]:
-    tokens = ["infralink"]
+    tokens = ["infralink", *path]
     for name in source_fields:
         value = request.get(name)
         if value is not None:
             tokens.extend((f"--{name.replace('_', '-')}", str(value)))
-    tokens.extend(path)
     return tuple(tokens)
 
 
@@ -406,6 +438,10 @@ def _error_details(details: tuple[dict[str, Any], ...]) -> dict[str, Any]:
 
 def _canonical_error_code(code: str) -> str:
     """Keep typed source failures within the established CLI error taxonomy."""
+    if code == "invalid_input":
+        return ErrorCode.USAGE_ERROR.value
+    if code == "invalid_output":
+        return ErrorCode.INTERNAL_ERROR.value
     if code in {"source_not_found", "source_invalid"}:
         return ErrorCode.INPUT_LOAD_FAILED.value
     return code
@@ -444,8 +480,11 @@ def _project_actions(
             raise ValueError("Infralink action has no command")
         command = _inherit_declared_sources(list(source_command), request)
         _validate_action_operation(action_value.operation, command)
-        output_argv = ["--output", "json"] if output == "json" else []
-        argv = ["infralink", *output_argv, *_declared_source_argv(request), *command]
+        # Generated Agent Surface leaves own their source and formatter
+        # options.  Keep action argv in that executable normal form rather
+        # than preserving the retired root-global selector grammar.
+        output_argv = ["--format", "json"] if output == "json" else []
+        argv = ["infralink", *command, *_declared_source_argv(request), *output_argv]
         bindings = _project_action_bindings(action_value.slots) if template else {}
         projected.append(
             Action(
@@ -555,12 +594,8 @@ def _effective_source_values(request: Mapping[str, Any] | None) -> dict[str, Any
 
 
 def _info_action_sources(request: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
-    """Keep legacy YAML info actions replayable without inventing an edge path."""
-    if request is None or (registry := request.get("registry")) is None:
-        return _effective_source_values(request)
-    if Path(str(registry)).expanduser().is_dir():
-        return _effective_source_values(request)
-    return request
+    """Resolve info actions from the same checkout-root contract as peers."""
+    return _effective_source_values(request)
 
 
 def _project_action_bindings(slots: Mapping[str, Any]) -> dict[str, Binding]:
@@ -598,14 +633,13 @@ def _action_is_read_only(operation: str | None) -> bool:
         return False
     from agent_surface.operations import UnknownOperationError
 
-    from infralink.operator_surface import app_surface, operator_surface
+    from infralink.operator_surface import operator_surface
 
-    for surface in (app_surface, operator_surface):
-        try:
-            return bool(surface.operations.describe(operation).read_only)
-        except UnknownOperationError:
-            continue
+    try:
+        return bool(operator_surface.operations.describe(operation).read_only)
+    except UnknownOperationError:
+        pass
     return False
 
 
-__all__ = ["InfralinkEnvelopeRenderer"]
+__all__ = ["InfralinkEnvelopeRenderer", "PublicEnvelopeRenderer"]

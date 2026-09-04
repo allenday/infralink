@@ -323,13 +323,13 @@ def test_host_bootstrap_apply_requires_stdin_token_before_any_probe(
     result = CliRunner().invoke(
         cli,
         [
-            "--output",
-            "json",
-            "--registry",
-            str(registry),
             "host",
             "bootstrap",
             HOST_ID,
+            "--registry",
+            str(registry),
+            "--format",
+            "json",
             "--ssh-host",
             "100.64.68.83",
             "--apply",
@@ -496,15 +496,15 @@ def test_bootstrap_cli_plan_advertises_apply_for_blank_host_executor_prerequisit
 
     result = CliRunner().invoke(
         cli,
-        ["--registry", str(registry), "host", "bootstrap", HOST_ID, "--ssh-host", "100.64.68.83"],
+        ["host", "bootstrap", HOST_ID, "--registry", str(registry), "--ssh-host", "100.64.68.83"],
     )
 
     assert result.exit_code == 1
     payload = yaml.safe_load(result.output)
     apply = next(item for item in payload["next_actions"] if item["rel"] == "apply")
     assert apply["command"] == (
-        f"infralink --registry {registry} host bootstrap {HOST_ID} "
-        "--ssh-host 100.64.68.83 --bws-token-stdin --apply"
+        f"infralink host bootstrap {HOST_ID} --ssh-host 100.64.68.83 "
+        f"--bws-token-stdin --apply --registry {registry}"
     )
     assert apply["safe"] is False
 
@@ -941,7 +941,7 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
 
     result = CliRunner().invoke(
         cli,
-        ["--registry", str(registry), "host", "bootstrap", HOST_ID, "--ssh-host", "100.64.68.83"],
+        ["host", "bootstrap", HOST_ID, "--registry", str(registry), "--ssh-host", "100.64.68.83"],
     )
 
     assert result.exit_code == 3
@@ -970,7 +970,7 @@ def test_bootstrap_reports_missing_controller_declaration_with_inspection_action
     assert payload["next_actions"] == [
         {
             "rel": "inspect",
-            "command": f"infralink --registry {registry} host show {HOST_ID}",
+            "command": f"infralink host show {HOST_ID} --registry {registry}",
             "description": "Inspect the target host declaration",
             "safe": True,
         }

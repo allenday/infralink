@@ -70,13 +70,11 @@ limited next actions.
 
 ## MCP Transport
 
-`infralink mcp serve` is the native stdio Model Context Protocol transport. It
-does not serialize CLI output as MCP: MCP owns its JSON-RPC handshake and tool
-discovery. Its `infralink_command` tool accepts a tokenized Infralink argv array
-and optional stdin, invokes the same typed CLI contract without shell
-interpretation, and returns the resulting CLI envelope as MCP structured
-content. The text content is the compact JSON serialization of that same
-envelope for MCP clients that do not consume structured content.
+`infralink-mcp` is the native stdio Model Context Protocol transport. It does
+not serialize CLI output as MCP: MCP owns its JSON-RPC handshake and tool
+discovery. Every MCP tool is the native projection of the same registered
+Pydantic operation that generates the `infralink` CLI. There is no generic argv
+bridge and no shell interpretation.
 
 The MCP transport exposes the existing operator surface, including explicit
 registry authoring writes. It does not add generic shell execution, a second
@@ -94,8 +92,7 @@ For Codex, configure the native executable and the registry checkout root:
 
 ```toml
 [mcp_servers.infralink]
-command = "/usr/local/bin/infralink"
-args = ["mcp", "serve"]
+command = "/usr/local/bin/infralink-mcp"
 
 [mcp_servers.infralink.env]
 INFRALINK_REGISTRY = "/var/lib/infralink/registry"

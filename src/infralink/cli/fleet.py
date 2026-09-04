@@ -1,7 +1,16 @@
-"""Generated public projection for declared fleet validation."""
+"""Private compatibility import for the generated fleet command.
 
-from infralink.operator_surface import fleet_click_command as _fleet_click_command
+The public entrypoint is ``infralink fleet validate`` from the single
+``operator_surface`` projection.  This module remains import-safe for callers
+that use the historical Python module path; it does not define a second tree.
+"""
 
-# The public root owns --registry/--edges and output selection. This mounted
-# command is generated from the one registered fleet.validate operation.
-fleet = _fleet_click_command()
+from __future__ import annotations
+
+import click
+
+from infralink.operator_surface import operator_click_adapter
+
+_root = operator_click_adapter().command()
+fleet = _root.get_command(click.Context(_root), "fleet")
+assert isinstance(fleet, click.Group)

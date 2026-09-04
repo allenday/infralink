@@ -8,6 +8,7 @@ from agent_surface.contracts import Action, ActionCollection
 from agent_surface.outcomes import ActionProvider
 from pydantic import BaseModel
 
+from infralink.app_actions import AppActionProvider
 from infralink.cli.contracts import (
     Action as DoctorAction,
 )
@@ -45,6 +46,9 @@ from infralink.operator_surface import (
     RegistryHostGetRequest,
     RegistryHostPatchOperationResult,
     RegistryHostPatchRequest,
+    ReleaseCandidateRequest,
+    ReleaseInspectRequest,
+    ReleasePublisherRequest,
     SecretsInspectRequest,
 )
 
@@ -143,7 +147,20 @@ class OperatorActionProvider(ActionProvider):
                     Action(
                         rel="help",
                         description="Show command usage",
-                        command=("help", *operation.split(".")),
+                        command=("help", "--path", operation),
+                        operation="help",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if error is not None and operation.startswith("release."):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="help",
+                        description="Show release command usage",
+                        command=("help", "--path", operation),
                         operation="help",
                     ),
                 ),
@@ -152,6 +169,82 @@ class OperatorActionProvider(ActionProvider):
             )
         if error is not None:
             return ActionCollection()
+        if operation == "release.inspect" and isinstance(request, ReleaseInspectRequest):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="inspect",
+                        description="Reinspect this immutable release handoff",
+                        command=(
+                            "release",
+                            "inspect",
+                            "--release-validation",
+                            str(request.release_validation),
+                            "--admission",
+                            str(request.admission),
+                        ),
+                        operation="release.inspect",
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if operation == "release.validate-candidate" and isinstance(
+            request, ReleaseCandidateRequest
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="render-publisher-request",
+                        description="Render the explicit trusted-publisher handoff after selecting local admission policy",
+                        command_template=(
+                            "release",
+                            "render-publisher-request",
+                            "--candidate",
+                            str(request.candidate),
+                            "--admission",
+                            "{admission}",
+                        ),
+                        operation="release.render-publisher-request",
+                        slots={
+                            "admission": {
+                                "type": "string",
+                                "required": True,
+                                "source": "local release admission policy path",
+                            }
+                        },
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
+        if operation == "release.render-publisher-request" and isinstance(
+            request, ReleasePublisherRequest
+        ):
+            return ActionCollection(
+                items=(
+                    Action(
+                        rel="inspect-attestation",
+                        description="Inspect the immutable publisher attestation after the trusted publisher completes",
+                        command_template=(
+                            "release",
+                            "inspect-attestation",
+                            "--attestation",
+                            "{attestation}",
+                        ),
+                        operation="release.inspect-attestation",
+                        slots={
+                            "attestation": {
+                                "type": "string",
+                                "required": True,
+                                "source": "trusted publisher completion record path",
+                            }
+                        },
+                    ),
+                ),
+                total=1,
+                returned=1,
+            )
         if (
             operation == "analyze"
             and isinstance(request, AnalyzeRequest)
@@ -193,12 +286,12 @@ class OperatorActionProvider(ActionProvider):
                         rel="patch",
                         description="Preview a typed host declaration mutation",
                         command_template=(
-                            "--registry",
-                            str(result._checkout),
                             "registry",
                             "host",
                             "patch",
                             result.host.id,
+                            "--registry",
+                            str(result._checkout),
                             "--set",
                             "{assignment}",
                         ),
@@ -208,7 +301,6 @@ class OperatorActionProvider(ActionProvider):
                                 "type": "string",
                                 "required": True,
                                 "source": "operator.input",
-                                "syntax": "PATH=YAML_VALUE | PATH=@text:FILE | PATH=@yaml:FILE",
                             }
                         },
                     ),
@@ -228,12 +320,12 @@ class OperatorActionProvider(ActionProvider):
                         rel="write",
                         description="Write this reviewed host declaration mutation",
                         command=(
-                            "--registry",
-                            str(result._checkout),
                             "registry",
                             "host",
                             "patch",
                             result.host.id,
+                            "--registry",
+                            str(result._checkout),
                             *sum((("--set", assignment) for assignment in request.assignments), ()),
                             "--write",
                         ),
@@ -412,7 +504,7 @@ def _doctor_error_actions(error: Any) -> ActionCollection:
         item = Action(
             rel="help",
             description="Show doctor usage",
-            command=("help", "doctor"),
+            command=("help", "--path", "doctor"),
             operation="help",
         )
     return ActionCollection(items=(item,), total=1, returned=1)
@@ -755,3 +847,42 @@ def _host_status_and_logs_actions(target_id: str) -> ActionCollection:
         total=2,
         returned=2,
     )
+
+
+class InfralinkActionProvider(ActionProvider):
+    """Route actions from the one public operation registry.
+
+    The application read family retains its bounded navigation semantics;
+    every other operation uses the established operator action catalog.  This
+    is action policy only, not another App or transport surface.
+    """
+
+    def __init__(self) -> None:
+        self._operator = OperatorActionProvider()
+        self._app = AppActionProvider()
+
+    def actions_for(
+        self,
+        *,
+        operation: str,
+        request: BaseModel | None = None,
+        result: object | None = None,
+        error: Any = None,
+    ) -> ActionCollection:
+        provider = self._app if operation.startswith("app.") else self._operator
+        return provider.actions_for(
+            operation=operation,
+            request=request,
+            result=result,
+            error=error,
+        )
+
+    def list_actions(
+        self, *, cursor: str | None = None, budget: object | None = None
+    ) -> ActionCollection:
+        del cursor, budget
+        return ActionCollection()
+
+    def explain(self, operation: str) -> Action | None:
+        del operation
+        return None
