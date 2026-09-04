@@ -11,7 +11,6 @@ import asyncio
 import json
 from typing import Any
 
-import pytest
 import yaml
 from click.testing import CliRunner
 from mcp import Client
@@ -103,10 +102,6 @@ def test_retired_aliases_are_rejected_by_the_generated_root() -> None:
         assert _click_payload(result.output)["error"]["code"] == "usage_error"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="agent-surface#43: direct root option parse errors still bypass its canonical renderer",
-)
 def test_retired_root_global_selector_grammar_is_rejected_as_a_canonical_envelope() -> None:
     runner = CliRunner()
     for argv in (
