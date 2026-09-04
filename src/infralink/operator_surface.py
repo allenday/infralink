@@ -211,8 +211,15 @@ class DoctorRequest(SourceRequest):
     gatus_url: str | None = Field(default=None, min_length=1)
     # This is an environment variable name, never the token value itself.
     gatus_token_env: str = Field(default="INFRALINK_GATUS_TOKEN", min_length=1)
-    target_type: Literal["host", "service", "edge", "profile"] | None = None
-    target_ref: str | None = Field(default=None, min_length=1)
+    target_type: Literal["host", "service", "edge", "profile"] | None = Field(
+        default=None,
+        json_schema_extra={"cli": {"kind": "argument"}},
+    )
+    target_ref: str | None = Field(
+        default=None,
+        min_length=1,
+        json_schema_extra={"cli": {"kind": "argument"}},
+    )
 
     @model_validator(mode="after")
     def require_complete_target(self) -> DoctorRequest:
