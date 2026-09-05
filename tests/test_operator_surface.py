@@ -43,6 +43,7 @@ from infralink.operator_surface import (
     registry_host_get_operation,
     registry_host_patch_operation,
 )
+from infralink.secrets import SecretAudit
 
 
 def test_release_inspect_uses_a_source_independent_typed_surface(tmp_path: Path) -> None:
@@ -221,6 +222,133 @@ def test_secrets_inspect_preserves_bounded_navigation_and_repair_actions(
     assert missing["next_actions"][0]["rel"] == "inspect"
     assert "--registry" in missing["next_actions"][0]["command"]
     assert "infralink secrets inspect" in missing["next_actions"][0]["command"]
+
+
+def test_secrets_audit_projects_one_provider_result_through_click_and_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Provider audit has no Click-only public transport path."""
+    from infralink.cli import secrets
+
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    bws_projects: [core]\n",
+        encoding="utf-8",
+    )
+    edges = registry / "edges.yml"
+    edges.write_text(
+        "edges:\n"
+        "  - id: 22222222-2222-4222-8222-222222222222\n"
+        "    type: database\n"
+        "    from: {hosts: [], service: app}\n"
+        f"    to: {{host: {host_id}, service: postgres, port: 5432}}\n"
+        "    auth: {type: password, secret_ref: database-password}\n"
+        "  - id: 33333333-3333-4333-8333-333333333333\n"
+        "    type: database\n"
+        "    from: {hosts: [], service: app}\n"
+        f"    to: {{host: {host_id}, service: postgres, port: 5432}}\n"
+        "    auth: {type: password, secret_ref: cache-password}\n",
+        encoding="utf-8",
+    )
+
+    def audit(references: list[object]) -> tuple[list[object], list[SecretAudit]]:
+        return list(references), [
+            SecretAudit(
+                ref=reference.ref,  # type: ignore[attr-defined]
+                project="core",
+                present=True,
+                accessible=True,
+            )
+            for reference in references
+        ]
+
+    monkeypatch.setattr(secrets, "_audit_with_bws", audit)
+    click_result = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "secrets",
+            "audit",
+            "--registry",
+            str(registry),
+            "--edges",
+            str(edges),
+            "--limit",
+            "1",
+            "--format",
+            "json",
+        ],
+    )
+
+    async def exercise_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            page = await client.list_tools()
+            tools = list(page.tools)
+            while page.next_cursor is not None:
+                page = await client.list_tools(cursor=page.next_cursor)
+                tools.extend(page.tools)
+            assert "secrets.audit" in {tool.name for tool in tools}
+            result = await client.call_tool(
+                "secrets.audit",
+                {"registry": str(registry), "edges": str(edges), "limit": 1},
+            )
+        assert result.is_error is False
+        return result.structured_content
+
+    assert click_result.exit_code == 0, click_result.output
+    click_payload = json.loads(click_result.output)
+    mcp_payload = asyncio.run(exercise_mcp())
+    for payload in (click_payload, mcp_payload):
+        assert payload["result"]["provider"] == "bws"
+        assert payload["result"]["references"]["items"][0]["project"] == "core"
+        assert payload["next_actions"][0]["rel"] == "continue"
+        assert "infralink secrets audit" in payload["next_actions"][0]["command"]
+
+    def unavailable(references: list[object]) -> tuple[list[object], list[SecretAudit]]:
+        return list(references), [
+            SecretAudit(
+                ref=reference.ref,  # type: ignore[attr-defined]
+                project="core",
+                present=False,
+                accessible=True,
+            )
+            for reference in references
+        ]
+
+    monkeypatch.setattr(secrets, "_audit_with_bws", unavailable)
+    negative_click = CliRunner().invoke(
+        operator_click_adapter().command(),
+        [
+            "secrets",
+            "audit",
+            "--registry",
+            str(registry),
+            "--edges",
+            str(edges),
+            "--format",
+            "json",
+        ],
+    )
+
+    async def exercise_negative_mcp() -> bool:
+        async with Client(operator_mcp_adapter().server) as client:
+            page = await client.list_tools()
+            tools = list(page.tools)
+            while page.next_cursor is not None:
+                page = await client.list_tools(cursor=page.next_cursor)
+                tools.extend(page.tools)
+            assert "secrets.audit" in {tool.name for tool in tools}
+            result = await client.call_tool(
+                "secrets.audit",
+                {"registry": str(registry), "edges": str(edges)},
+            )
+        return result.is_error
+
+    assert negative_click.exit_code == 1, negative_click.output
+    assert json.loads(negative_click.output)["ok"] is True
+    assert asyncio.run(exercise_negative_mcp()) is False
 
 
 def test_release_validate_candidate_uses_the_retained_immutable_contract(tmp_path: Path) -> None:

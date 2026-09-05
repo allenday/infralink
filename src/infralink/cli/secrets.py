@@ -282,6 +282,53 @@ def _audit_with_bws(
     return canonical_references, audits
 
 
+def _audit_result(
+    ctx: Context,
+    *,
+    provider: str,
+    requested_ref: str | None,
+    limit: int,
+    cursor: str | None,
+    collection: str | None,
+) -> tuple[SecretsAuditResult, list[SecretReferenceStatus]]:
+    """Build provider-backed audit output shared by every public transport."""
+    provider = provider.casefold()
+    selected_collection = _active_collection(collection, cursor, ("references",))
+    fingerprint = _fingerprint(ctx, requested_ref=requested_ref, provider=provider)
+    offset = _page_offset(
+        command="secrets audit",
+        collection=selected_collection,
+        cursor=cursor,
+        fingerprint=fingerprint,
+    )
+    references = _select_references(ctx, requested_ref)
+    references, audits = _audit_with_bws(references) if references else ([], [])
+    statuses = [
+        _status(reference, audit, include_preview=True)
+        for reference, audit in zip(references, audits, strict=True)
+    ]
+    result = SecretsAuditResult(
+        provider=provider,
+        references=page_items(
+            statuses,
+            limit=limit,
+            offset=offset,
+            next_cursor=None,
+        ),
+        summary=_summary(statuses),
+    )
+    _attach_next_cursors(
+        result,
+        command="secrets audit",
+        collections=("references",),
+        selected=selected_collection,
+        offset=offset,
+        limit=limit,
+        fingerprint=fingerprint,
+    )
+    return result, statuses
+
+
 @click.group()
 def secrets() -> None:
     """Inspect and audit secret-reference metadata."""
@@ -357,38 +404,13 @@ def audit_secrets(
 ) -> None:
     """Audit declared secret references using provider metadata only."""
     provider = provider.casefold()
-    selected_collection = _active_collection(collection, cursor, ("references",))
-    fingerprint = _fingerprint(ctx, requested_ref=requested_ref, provider=provider)
-    offset = _page_offset(
-        command="secrets audit",
-        collection=selected_collection,
-        cursor=cursor,
-        fingerprint=fingerprint,
-    )
-    references = _select_references(ctx, requested_ref)
-    references, audits = _audit_with_bws(references) if references else ([], [])
-    statuses = [
-        _status(reference, audit, include_preview=True)
-        for reference, audit in zip(references, audits, strict=True)
-    ]
-    result = SecretsAuditResult(
+    result, statuses = _audit_result(
+        ctx,
         provider=provider,
-        references=page_items(
-            statuses,
-            limit=limit,
-            offset=offset,
-            next_cursor=None,
-        ),
-        summary=_summary(statuses),
-    )
-    _attach_next_cursors(
-        result,
-        command="secrets audit",
-        collections=("references",),
-        selected=selected_collection,
-        offset=offset,
+        requested_ref=requested_ref,
         limit=limit,
-        fingerprint=fingerprint,
+        cursor=cursor,
+        collection=collection,
     )
     command_argv = ["secrets", "audit", "--provider", provider]
     if requested_ref is not None:

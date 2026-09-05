@@ -63,6 +63,7 @@ from infralink.cli.contracts import (
     ReleaseCandidateResult,
     ReleaseInspectResult,
     ResolveResult,
+    SecretsAuditResult,
     SecretsInspectResult,
     ServiceListResult,
     ServiceShowResult,
@@ -461,6 +462,12 @@ class SecretsInspectRequest(SourceRequest):
     collection: str | None = None
 
 
+class SecretsAuditRequest(SecretsInspectRequest):
+    """Select bounded BWS secret-reference availability metadata."""
+
+    provider: Literal["bws"] = "bws"
+
+
 class HostCreateAddress(_OperationModel):
     field: Literal["tailscale_ip", "tailscale_name"]
     value: str
@@ -838,6 +845,35 @@ def secrets_inspect_operation(request: SecretsInspectRequest) -> SecretsInspectR
             collection=request.collection,
         )
         return result
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
+@operator_surface.operation(  # type: ignore[type-var]
+    "secrets.audit", summary="Audit declared secret references through BWS metadata", read_only=True
+)
+def secrets_audit_operation(request: SecretsAuditRequest) -> OperationOutcome[SecretsAuditResult]:
+    """Use the same provider audit implementation as the generated Click command."""
+    from infralink.cli import secrets
+    from infralink.cli.main import Context
+
+    sources = load_sources(request)
+    context = Context()
+    context.registry_path = sources.registry_path
+    context.edges_path = sources.edges_path
+    context._registry = sources.registry
+    context._edges = sources.edges
+    try:
+        result, statuses = secrets._audit_result(
+            context,
+            provider=request.provider,
+            requested_ref=request.requested_ref,
+            limit=request.limit,
+            cursor=request.cursor,
+            collection=request.collection,
+        )
+        succeeded = all(item.present is True and item.accessible is True for item in statuses)
+        return OperationOutcome(result, exit_code=0 if succeeded else 1)
     except Exception as error:
         _raise_operation_failure(error)
 

@@ -19,6 +19,7 @@ from infralink.cli.contracts import (
     HostListResult,
     InfoResult,
     ResolveResult,
+    SecretsAuditResult,
     SecretsInspectResult,
 )
 from infralink.cli.operation_contracts import (
@@ -50,6 +51,7 @@ from infralink.operator_surface import (
     ReleaseCandidateRequest,
     ReleaseInspectRequest,
     ReleasePublisherRequest,
+    SecretsAuditRequest,
     SecretsInspectRequest,
 )
 
@@ -107,8 +109,8 @@ class OperatorActionProvider(ActionProvider):
             )
         if (
             error is not None
-            and operation == "secrets.inspect"
-            and isinstance(request, SecretsInspectRequest)
+            and operation in {"secrets.inspect", "secrets.audit"}
+            and isinstance(request, (SecretsInspectRequest, SecretsAuditRequest))
             and getattr(error, "code", None) == "entity_not_found"
             and _error_entity_type(error) == "secret_reference"
         ):
@@ -348,6 +350,12 @@ class OperatorActionProvider(ActionProvider):
             and isinstance(result, SecretsInspectResult)
         ):
             return _secrets_inspect_actions(request, result)
+        if (
+            operation == "secrets.audit"
+            and isinstance(request, SecretsAuditRequest)
+            and isinstance(result, SecretsAuditResult)
+        ):
+            return _secrets_audit_actions(request, result)
         if operation == "host.list" and isinstance(result, HostListResult) and result.items:
             return ActionCollection(
                 items=(
@@ -589,6 +597,39 @@ def _secrets_inspect_actions(
             )
         )
     return ActionCollection(items=tuple(actions), total=len(actions), returned=len(actions))
+
+
+def _secrets_audit_actions(
+    request: SecretsAuditRequest,
+    result: SecretsAuditResult,
+) -> ActionCollection:
+    """Continue the one bounded audit collection through the same operation."""
+    page = result.references.page
+    if page.next_cursor is None:
+        return ActionCollection(items=(), total=0, returned=0)
+    command = ["secrets", "audit", "--provider", request.provider]
+    if request.requested_ref is not None:
+        command.extend(("--ref", request.requested_ref))
+    command.extend(("--cursor", "{cursor}", "--limit", str(request.limit)))
+    return ActionCollection(
+        items=(
+            Action(
+                rel="continue",
+                description="Continue secret audit references",
+                command_template=tuple(command),
+                operation="secrets.audit",
+                slots={
+                    "cursor": {
+                        "type": "string",
+                        "required": True,
+                        "source": "result.references.page.next_cursor",
+                    }
+                },
+            ),
+        ),
+        total=1,
+        returned=1,
+    )
 
 
 def _analyze_actions(request: AnalyzeRequest, result: AnalyzeResult) -> ActionCollection:
