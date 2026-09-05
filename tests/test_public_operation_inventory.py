@@ -19,7 +19,7 @@ RETAINED_OPERATIONS = frozenset(
         "app.show",
         "capabilities",
         "check",
-        "diagram.project",
+        "diagram",
         "doctor",
         "docs",
         "edge.list",
@@ -52,6 +52,7 @@ RETAINED_OPERATIONS = frozenset(
         "service.list",
         "service.show",
         "version",
+        "topology.diagram",
     }
 )
 

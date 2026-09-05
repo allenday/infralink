@@ -109,7 +109,8 @@ def test_safe_cli_workflow_is_discoverable_and_preserves_deployment_boundary() -
         "## Inspect Release Evidence",
         "infralink --registry registry.yml --edges edges.yml info",
         "infralink --registry registry.yml --edges edges.yml validate --strict --check-resolution",
-        "infralink --registry registry.yml --edges edges.yml diagram --output ./artifacts",
+        "infralink --registry /srv/infra-registry",
+        "diagram --output ./artifacts --diagram-format all",
         "infralink release inspect",
         "does not select a registry revision, render secrets, or activate services",
     ]:

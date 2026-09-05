@@ -1182,7 +1182,6 @@ _BUILTIN_COMMAND_NAMES = frozenset(
         "check",
         "doctor",
         "mcp",
-        "diagram",
         "docs",
         "resolve",
         "validate",
@@ -1226,10 +1225,6 @@ def _load_command(
         return doctor
     if name == "mcp":
         return mcp
-    if name == "diagram":
-        from infralink.cli.diagram import diagram
-
-        return diagram
     if name == "validate":
         from infralink.cli.validate import validate
 
@@ -1572,40 +1567,19 @@ def legacy_cli(
     """
     click_ctx = click.get_current_context()
     source_independent = {None, "help", "version", "capabilities", "explain"}
-    # ``diagram project`` consumes only explicit V2 observation sources. It
-    # must ignore ambient root defaults but retain an explicitly supplied root
-    # source so the child can reject it as unsupported input.
-    incoming = _INVOCATION_ARGS.get() or []
-    diagram_project = any(
-        incoming[index : index + 2] == ["diagram", "project"] for index in range(len(incoming) - 1)
-    )
-    if diagram_project:
-        source_independent.add("diagram")
-    if diagram_project:
-        selected_registry = (
-            registry
-            if click_ctx.get_parameter_source("registry") is click.core.ParameterSource.COMMANDLINE
-            else None
-        )
-        selected_edges = (
-            edges
-            if click_ctx.get_parameter_source("edges") is click.core.ParameterSource.COMMANDLINE
-            else None
-        )
-    else:
-        selected_registry = registry
-        if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
-            selected_registry = _configured_registry()
-        selected_edges = edges
-        if selected_edges is None:
-            registry_root = registry_checkout_root(selected_registry)
-            if registry_root is not None:
-                try:
-                    selected_edges = resolve_registry_companion(registry_root, filename="edges.yml")
-                except OperationError:
-                    # Operations that require edges report the typed source error.
-                    # Read-only registry-only commands remain usable without them.
-                    pass
+    selected_registry = registry
+    if selected_registry is None and click_ctx.invoked_subcommand not in source_independent:
+        selected_registry = _configured_registry()
+    selected_edges = edges
+    if selected_edges is None:
+        registry_root = registry_checkout_root(selected_registry)
+        if registry_root is not None:
+            try:
+                selected_edges = resolve_registry_companion(registry_root, filename="edges.yml")
+            except OperationError:
+                # Operations that require edges report the typed source error.
+                # Read-only registry-only commands remain usable without them.
+                pass
     ctx.registry_path = selected_registry
     ctx.hosts_path = None
     ctx.edges_path = selected_edges
