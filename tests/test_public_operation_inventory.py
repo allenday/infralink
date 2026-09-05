@@ -49,6 +49,7 @@ RETAINED_OPERATIONS = frozenset(
         "release.validate-candidate",
         "resolve",
         "secrets.inspect",
+        "secrets.audit",
         "service.list",
         "service.show",
         "version",
