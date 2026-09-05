@@ -108,7 +108,7 @@ def test_secrets_inspect_uses_the_typed_registry_source_boundary(tmp_path: Path)
     manifest = registry / "hosts" / host_id / "manifest.yml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
-        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    bws_project: {project}\n",
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    bws_projects: [{project}]\n",
         encoding="utf-8",
     )
     edges = registry / "edges.yml"
@@ -128,7 +128,8 @@ def test_secrets_inspect_uses_the_typed_registry_source_boundary(tmp_path: Path)
 
     assert result.summary.total == 1
     assert result.references.items[0].ref == "database-password"
-    assert result.references.items[0].project == project
+    assert result.references.items[0].projects == [project]
+    assert result.references.items[0].project is None
     assert result.references.items[0].present is None
 
 
@@ -142,7 +143,7 @@ def test_secrets_inspect_preserves_bounded_navigation_and_repair_actions(
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
         f"hosts:\n  {host_id}:\n    canonical_name: host-1\n"
-        "    bws_project: 33333333-3333-4333-8333-333333333333\n",
+        "    bws_projects: [33333333-3333-4333-8333-333333333333]\n",
         encoding="utf-8",
     )
     edges = [

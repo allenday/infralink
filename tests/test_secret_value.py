@@ -140,8 +140,8 @@ def test_secret_value_rejects_non_string_inputs_without_rendering_them() -> None
 
 
 def test_secret_reference_is_frozen_with_isolated_defaults() -> None:
-    first = SecretReference(ref="db-password", project=None, locations=())
-    second = SecretReference(ref="api-token", project="production", locations=("edge:a",))
+    first = SecretReference(ref="db-password", projects=(), locations=())
+    second = SecretReference(ref="api-token", projects=("production",), locations=("edge:a",))
 
     assert first.required is True
     assert second.required is True
@@ -169,7 +169,7 @@ def test_secret_contract_annotations_are_typed() -> None:
 
     assert reference_hints == {
         "ref": str,
-        "project": str | None,
+        "projects": tuple[str, ...],
         "locations": tuple[str, ...],
         "required": bool,
     }
@@ -191,14 +191,14 @@ def test_secret_resolver_protocol_accepts_structural_implementation() -> None:
             return [
                 SecretAudit(
                     ref=reference.ref,
-                    project=reference.project,
+                    project=reference.projects[0] if reference.projects else None,
                     present=True,
                     accessible=True,
                 )
                 for reference in references
             ]
 
-    reference = SecretReference(ref="db-password", project=None, locations=())
+    reference = SecretReference(ref="db-password", projects=(), locations=())
     resolver: SecretResolver = FakeResolver()
 
     assert isinstance(resolver, SecretResolver)

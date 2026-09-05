@@ -263,6 +263,11 @@ class HostSchema(NodeSchema):
     @classmethod
     def migrate_group_to_projects(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            legacy_bws_fields = {"bws_project", "bws_extra_projects"}.intersection(data)
+            if legacy_bws_fields:
+                raise ValueError(
+                    "legacy BWS selectors are unsupported; declare ordered bws_projects"
+                )
             group = data.pop("group", None)
             projects = data.get("projects", [])
             if group and group not in projects:
@@ -334,9 +339,7 @@ class HostSchema(NodeSchema):
         return v
 
     # Secrets
-    bws_project: str | None = None
     bws_machine_account: str | None = None
-    bws_extra_projects: list[str] = Field(default_factory=list)
     bws_projects: list[str] = Field(default_factory=list)
     controller_bootstrap: dict[str, Any] | None = None
     bootstrap_executor: HostBootstrapExecutorSchema | None = None

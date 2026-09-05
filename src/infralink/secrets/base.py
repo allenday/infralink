@@ -57,7 +57,7 @@ class SecretReference:
     """A provider-neutral secret reference and its declaration locations."""
 
     ref: str
-    project: str | None
+    projects: tuple[str, ...]
     locations: tuple[str, ...]
     required: bool = True
 

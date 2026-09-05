@@ -209,7 +209,7 @@ def _default_sdk_factory(config: BwsConfig) -> _SdkClient:
 
 
 class BwsSecretResolver:
-    """Read declared project-scoped references through the Bitwarden SDK."""
+    """Read ordered declared project-name references through the Bitwarden SDK."""
 
     __slots__ = ("_client", "_config")
 
@@ -282,31 +282,23 @@ class BwsSecretResolver:
                 pass
         raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE) from None
 
-    @staticmethod
-    def _normalize_declared_project(project_id: str) -> str:
-        try:
-            return str(UUID(project_id))
-        except (AttributeError, TypeError, ValueError):
-            raise BwsConfigurationError("Bitwarden project identity must be a UUID") from None
-
-    def _accessible_projects(self, configured_projects: set[str]) -> set[str]:
+    def _accessible_projects(self, configured_projects: set[str]) -> dict[str, str]:
         response = self._call(
             lambda: self._client.projects().list(self._config.organization_id),
             BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,
         )
         items = self._list_payload(response, BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
-        project_ids: set[str] = set()
+        accessible: dict[str, str] = {}
         for item in items:
             project_id = self._normalize_id(_safe_attr(item, "id"))
             organization_id = self._normalize_id(_safe_attr(item, "organization_id"))
-            if organization_id != self._config.organization_id:
+            name = _safe_attr(item, "name")
+            if organization_id != self._config.organization_id or type(name) is not str or not name:
                 raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
-            if project_id in project_ids:
+            if name in accessible or project_id in accessible.values():
                 raise BwsProviderError(BwsErrorCode.PROVIDER_UNAVAILABLE)
-            project_ids.add(project_id)
-        accessible = configured_projects.intersection(project_ids)
-        if not accessible:
-            raise BwsProviderError(BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
+            if name in configured_projects:
+                accessible[name] = project_id
         return accessible
 
     def _identifier_index(self) -> dict[tuple[str, str], str]:
@@ -339,9 +331,10 @@ class BwsSecretResolver:
     def _configured_projects(references: list[SecretReference]) -> set[str]:
         projects: set[str] = set()
         for reference in references:
-            if reference.project is None:
-                raise BwsConfigurationError("Bitwarden references require an explicit project")
-            projects.add(BwsSecretResolver._normalize_declared_project(reference.project))
+            for project in reference.projects:
+                if type(project) is not str or not project:
+                    raise BwsConfigurationError("Bitwarden references require nonempty projects")
+                projects.add(project)
         return projects
 
     def audit(self, references: list[SecretReference]) -> list[SecretAudit]:
@@ -350,37 +343,45 @@ class BwsSecretResolver:
             return []
         configured_projects = self._configured_projects(references)
         accessible_projects = self._accessible_projects(configured_projects)
-        identifiers = self._identifier_index()
+        identifiers = self._identifier_index() if accessible_projects else {}
         audits: list[SecretAudit] = []
         for reference in references:
-            project_id = self._normalize_declared_project(cast(str, reference.project))
-            if project_id not in accessible_projects:
+            selected_project = next(
+                (
+                    project
+                    for project in reference.projects
+                    if (project_id := accessible_projects.get(project)) is not None
+                    and (project_id, reference.ref) in identifiers
+                ),
+                None,
+            )
+            if selected_project is not None:
                 audits.append(
                     SecretAudit(
                         ref=reference.ref,
-                        project=project_id,
+                        project=selected_project,
+                        present=True,
+                        accessible=True,
+                    )
+                )
+            elif not any(project in accessible_projects for project in reference.projects):
+                audits.append(
+                    SecretAudit(
+                        ref=reference.ref,
+                        project=None,
                         present=None,
                         accessible=False,
                         error_code="project_unavailable",
-                    )
-                )
-            elif (project_id, reference.ref) not in identifiers:
-                audits.append(
-                    SecretAudit(
-                        ref=reference.ref,
-                        project=project_id,
-                        present=None,
-                        accessible=False,
-                        error_code="unavailable_or_missing",
                     )
                 )
             else:
                 audits.append(
                     SecretAudit(
                         ref=reference.ref,
-                        project=project_id,
-                        present=True,
-                        accessible=True,
+                        project=None,
+                        present=None,
+                        accessible=False,
+                        error_code="unavailable_or_missing",
                     )
                 )
         return audits
@@ -388,12 +389,22 @@ class BwsSecretResolver:
     def resolve(self, reference: SecretReference) -> SecretValue:
         """Resolve one declared project-scoped reference to an opaque value."""
         configured_projects = self._configured_projects([reference])
-        self._accessible_projects(configured_projects)
+        if not configured_projects:
+            raise BwsConfigurationError("Bitwarden references require nonempty projects")
+        accessible_projects = self._accessible_projects(configured_projects)
         identifiers = self._identifier_index()
-        project_id = self._normalize_declared_project(cast(str, reference.project))
-        secret_id = identifiers.get((project_id, reference.ref))
-        if secret_id is None:
+        selected = next(
+            (
+                (project, project_id, identifiers[(project_id, reference.ref)])
+                for project in reference.projects
+                if (project_id := accessible_projects.get(project)) is not None
+                and (project_id, reference.ref) in identifiers
+            ),
+            None,
+        )
+        if selected is None:
             raise BwsProviderError(BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED)
+        _project, project_id, secret_id = selected
         response = self._call(
             lambda: self._client.secrets().get(secret_id),
             BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED,

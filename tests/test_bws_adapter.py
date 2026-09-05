@@ -237,8 +237,12 @@ class FakeClient:
             success=True,
             data=SimpleNamespace(
                 data=[
-                    SimpleNamespace(id=PROJECT_A, organization_id=UUID(ORGANIZATION_ID)),
-                    SimpleNamespace(id=PROJECT_B, organization_id=UUID(ORGANIZATION_ID)),
+                    SimpleNamespace(
+                        id=PROJECT_A, name=str(PROJECT_A), organization_id=UUID(ORGANIZATION_ID)
+                    ),
+                    SimpleNamespace(
+                        id=PROJECT_B, name=str(PROJECT_B), organization_id=UUID(ORGANIZATION_ID)
+                    ),
                 ]
             ),
         ),
@@ -290,8 +294,14 @@ def response(data: object, *, success: bool = True) -> SimpleNamespace:
     return SimpleNamespace(success=success, data=SimpleNamespace(data=data))
 
 
-def project(project_id: object, organization_id: object = UUID(ORGANIZATION_ID)) -> SimpleNamespace:
-    return SimpleNamespace(id=project_id, organization_id=organization_id)
+def project(
+    project_id: object,
+    organization_id: object = UUID(ORGANIZATION_ID),
+    name: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=project_id, name=name or str(project_id), organization_id=organization_id
+    )
 
 
 def identifier(
@@ -311,7 +321,7 @@ def identifier(
 def reference(ref: str = "db_password", project_id: UUID | None = PROJECT_A) -> SecretReference:
     return SecretReference(
         ref=ref,
-        project=None if project_id is None else str(project_id),
+        projects=() if project_id is None else (str(project_id),),
         locations=("apps.api.secrets",),
     )
 
@@ -670,28 +680,84 @@ def test_audit_reports_accessible_match_without_getting_value() -> None:
     assert client.secrets_client.get_calls == []
 
 
-def test_declared_project_uuid_is_canonicalized_in_audit_result() -> None:
+def test_audit_uses_the_first_declared_project_with_a_matching_secret() -> None:
+    """Project declaration order is the single collision-precedence rule."""
+    client = FakeClient(
+        projects=response(
+            [
+                project(PROJECT_A, name="primary"),
+                project(PROJECT_B, name="shared"),
+            ]
+        ),
+        identifiers=response(
+            [
+                identifier(SECRET_A, "db_password", [PROJECT_A]),
+                identifier(SECRET_B, "db_password", [PROJECT_B]),
+            ]
+        ),
+    )
+    declared = SecretReference(
+        ref="db_password",
+        projects=("primary", "shared"),
+        locations=("apps.api.secrets",),
+    )
+
+    audit = make_resolver(client).audit([declared])
+
+    assert audit == [
+        SecretAudit(
+            ref="db_password",
+            project="primary",
+            present=True,
+            accessible=True,
+        )
+    ]
+
+
+def test_audit_falls_through_to_the_next_declared_project() -> None:
+    client = FakeClient(
+        projects=response(
+            [
+                project(PROJECT_A, name="primary"),
+                project(PROJECT_B, name="shared"),
+            ]
+        ),
+        identifiers=response([identifier(SECRET_B, "db_password", [PROJECT_B])]),
+    )
+    declared = SecretReference(
+        ref="db_password",
+        projects=("primary", "shared"),
+        locations=("apps.api.secrets",),
+    )
+
+    audit = make_resolver(client).audit([declared])
+
+    assert audit[0].project == "shared"
+    assert audit[0].present is True
+
+
+def test_declared_project_name_is_returned_in_audit_result() -> None:
     project_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
     client = FakeClient(
-        projects=response([project(project_id)]),
+        projects=response([project(project_id, name="archive")]),
         identifiers=response([identifier(SECRET_A, "db_password", [project_id])]),
     )
     declared = SecretReference(
         ref="db_password",
-        project=str(project_id).upper(),
+        projects=("archive",),
         locations=("apps.api.secrets",),
     )
 
     result = make_resolver(client).audit([declared])
 
-    assert result[0].project == str(project_id)
+    assert result[0].project == "archive"
 
 
-def test_invalid_declared_project_fails_before_provider_listing() -> None:
+def test_empty_declared_project_fails_before_provider_listing() -> None:
     client = FakeClient()
     declared = SecretReference(
         ref="db_password",
-        project="not-a-uuid",
+        projects=("",),
         locations=("apps.api.secrets",),
     )
 
@@ -796,6 +862,7 @@ def test_sdk_string_ids_are_normalized_without_leaking_secret_id() -> None:
             [
                 SimpleNamespace(
                     id=str(PROJECT_A),
+                    name=str(PROJECT_A),
                     organization_id=ORGANIZATION_ID,
                 )
             ]
@@ -834,7 +901,7 @@ def test_audit_reports_partial_project_visibility_per_reference() -> None:
         ),
         SecretAudit(
             ref="api_key",
-            project=str(PROJECT_B),
+            project=None,
             present=None,
             accessible=False,
             error_code="project_unavailable",
@@ -851,7 +918,7 @@ def test_audit_reports_absent_identifier_honestly() -> None:
     assert result == [
         SecretAudit(
             ref="db_password",
-            project=str(PROJECT_A),
+            project=None,
             present=None,
             accessible=False,
             error_code="unavailable_or_missing",
@@ -859,23 +926,34 @@ def test_audit_reports_absent_identifier_honestly() -> None:
     ]
 
 
-def test_zero_accessible_configured_projects_is_provider_wide_failure() -> None:
+def test_zero_accessible_declared_projects_is_typed_per_reference_result() -> None:
     client = FakeClient(projects=response([project(PROJECT_B)]))
 
-    with pytest.raises(BwsProviderError) as caught:
-        make_resolver(client).audit([reference()])
-
-    assert caught.value.code is BwsErrorCode.PROVIDER_AUTHORIZATION_FAILED
+    assert make_resolver(client).audit([reference()]) == [
+        SecretAudit(
+            ref="db_password",
+            project=None,
+            present=None,
+            accessible=False,
+            error_code="project_unavailable",
+        )
+    ]
     assert client.secrets_client.organizations == []
 
 
-def test_unscoped_reference_fails_without_listing_organization() -> None:
+def test_unscoped_reference_is_a_typed_unavailable_result() -> None:
     client = FakeClient()
 
-    with pytest.raises(BwsConfigurationError, match="project"):
-        make_resolver(client).audit([reference(project_id=None)])
-
-    assert client.projects_client.organizations == []
+    assert make_resolver(client).audit([reference(project_id=None)]) == [
+        SecretAudit(
+            ref="db_password",
+            project=None,
+            present=None,
+            accessible=False,
+            error_code="project_unavailable",
+        )
+    ]
+    assert client.projects_client.organizations == [ORGANIZATION_ID]
     assert client.secrets_client.organizations == []
 
 

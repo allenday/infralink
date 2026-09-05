@@ -17,12 +17,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_hosted_bws_audit_reads_metadata_only() -> None:
-    project = os.environ.get("INFRALINK_LIVE_BWS_PROJECT_ID")
+    project = os.environ.get("INFRALINK_LIVE_BWS_PROJECT")
     reference = os.environ.get("INFRALINK_LIVE_BWS_SECRET_REF")
     required = {
         "BWS_ACCESS_TOKEN": os.environ.get("BWS_ACCESS_TOKEN"),
         "BWS_ORGANIZATION_ID": os.environ.get("BWS_ORGANIZATION_ID"),
-        "INFRALINK_LIVE_BWS_PROJECT_ID": project,
+        "INFRALINK_LIVE_BWS_PROJECT": project,
         "INFRALINK_LIVE_BWS_SECRET_REF": reference,
     }
     if not all(required.values()):
@@ -33,7 +33,7 @@ def test_hosted_bws_audit_reads_metadata_only() -> None:
         [
             SecretReference(
                 ref=str(reference),
-                project=str(project),
+                projects=(str(project),),
                 locations=("live.opt_in",),
             )
         ]

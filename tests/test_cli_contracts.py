@@ -174,6 +174,7 @@ def secret() -> SecretReferenceStatus:
         location_count=1,
         location_preview=[SourceLocation(source="edges", path="edges.edge-1.auth.secret_ref")],
         locations_truncated=False,
+        projects=["core"],
         project="core",
         present=True,
         accessible=True,

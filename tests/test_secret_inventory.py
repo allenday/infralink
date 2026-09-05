@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 import infralink
 from infralink.core.edges import EdgeSet
 from infralink.core.registry import Registry
@@ -41,15 +43,14 @@ def test_top_level_package_exports_provider_neutral_secret_contracts() -> None:
     assert infralink.SecretResolver is SecretResolver
 
 
-def test_host_exposes_read_only_bws_configuration_with_defensive_tuple() -> None:
+def test_host_exposes_read_only_ordered_bws_configuration_with_defensive_tuple() -> None:
     registry = Registry.from_dict(
         {
             "hosts": {
                 "host-a": {
                     "canonical_name": "database",
-                    "bws_project": "primary",
+                    "bws_projects": ["primary", "shared", "archive"],
                     "bws_machine_account": "machine-account",
-                    "bws_extra_projects": ["shared", "archive"],
                 }
             }
         }
@@ -58,10 +59,24 @@ def test_host_exposes_read_only_bws_configuration_with_defensive_tuple() -> None
     host = registry.get_by_uuid("host-a")
 
     assert host is not None
-    assert host.bws_project == "primary"
+    assert host.bws_projects == ("primary", "shared", "archive")
     assert host.bws_machine_account == "machine-account"
-    assert host.bws_extra_projects == ("shared", "archive")
-    assert type(host).bws_project.fset is None
+    assert type(host).bws_projects.fset is None
+
+
+@pytest.mark.parametrize("legacy_field", ["bws_project", "bws_extra_projects"])
+def test_host_rejects_legacy_bws_selectors(legacy_field: str) -> None:
+    with pytest.raises(ValueError, match="legacy BWS selectors"):
+        Registry.from_dict(
+            {
+                "hosts": {
+                    "host-a": {
+                        "canonical_name": "database",
+                        legacy_field: "project-a",
+                    }
+                }
+            }
+        )
 
 
 def test_collect_secret_references_groups_deduplicates_and_sorts() -> None:
@@ -72,11 +87,11 @@ def test_collect_secret_references_groups_deduplicates_and_sorts() -> None:
             "hosts": {
                 "host-a": {
                     "canonical_name": "database-a",
-                    "bws_project": "project-a",
+                    "bws_projects": ["project-a", "shared"],
                 },
                 "host-b": {
                     "canonical_name": "database-b",
-                    "bws_project": "project-b",
+                    "bws_projects": ["project-b"],
                 },
                 "host-c": {"canonical_name": "database-c"},
             }
@@ -105,27 +120,27 @@ def test_collect_secret_references_groups_deduplicates_and_sorts() -> None:
     assert references == [
         SecretReference(
             ref="alpha-ref",
-            project=None,
+            projects=(),
             locations=(f"edges.{EDGE_NO_PROJECT}.auth.secret_ref",),
         ),
         SecretReference(
             ref="missing-ref",
-            project=None,
+            projects=(),
             locations=(f"edges.{EDGE_MISSING_HOST}.auth.secret_ref",),
         ),
         SecretReference(
             ref="production/db-password",
-            project="project-a",
+            projects=("project-a", "shared"),
             locations=(f"edges.{EDGE_HIERARCHICAL}.auth.secret_ref",),
         ),
         SecretReference(
             ref="shared-ref",
-            project=None,
+            projects=(),
             locations=(f"edges.{EDGE_SHARED_NO_PROJECT}.auth.secret_ref",),
         ),
         SecretReference(
             ref="shared-ref",
-            project="project-a",
+            projects=("project-a", "shared"),
             locations=(
                 f"edges.{EDGE_A}.auth.secret_ref",
                 f"edges.{EDGE_Z}.auth.secret_ref",
@@ -133,7 +148,7 @@ def test_collect_secret_references_groups_deduplicates_and_sorts() -> None:
         ),
         SecretReference(
             ref="shared-ref",
-            project="project-b",
+            projects=("project-b",),
             locations=(f"edges.{EDGE_PROJECT_B}.auth.secret_ref",),
         ),
     ]
@@ -160,14 +175,14 @@ def test_collect_secret_references_accepts_jinja_safe_reference() -> None:
 
     secret_ref = "_9157ddeb_postgresql_rw_password_woodpecker"
     registry = Registry.from_dict(
-        {"hosts": {"host-a": {"canonical_name": "database", "bws_project": "core"}}}
+        {"hosts": {"host-a": {"canonical_name": "database", "bws_projects": ["core"]}}}
     )
     edges = EdgeSet.from_dict({"edges": [_edge(EDGE_A, "host-a", secret_ref)]})
 
     assert collect_secret_references(registry, edges) == [
         SecretReference(
             ref=secret_ref,
-            project="core",
+            projects=("core",),
             locations=(f"edges.{EDGE_A}.auth.secret_ref",),
         )
     ]
@@ -177,7 +192,7 @@ def test_inventory_reports_token_and_certificate_references() -> None:
     from infralink.secrets.inventory import collect_secret_references
 
     registry = Registry.from_dict(
-        {"hosts": {"host-a": {"canonical_name": "target", "bws_project": "project-a"}}}
+        {"hosts": {"host-a": {"canonical_name": "target", "bws_projects": ["project-a"]}}}
     )
     edges = EdgeSet.from_dict(
         {
