@@ -346,6 +346,7 @@ class SecretReferenceStatus(ContractModel):
     location_count: int
     location_preview: list[SourceLocation] = Field(max_length=16)
     locations_truncated: bool
+    projects: list[str] = Field(max_length=32)
     project: str | None
     present: bool | None
     accessible: bool | None

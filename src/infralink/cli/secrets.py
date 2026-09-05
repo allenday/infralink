@@ -7,7 +7,6 @@ import os
 import shlex
 from collections.abc import Sequence
 from typing import Any
-from uuid import UUID
 
 import click
 
@@ -68,7 +67,8 @@ def _status(
         location_count=len(locations),
         location_preview=locations[:16] if include_preview else [],
         locations_truncated=include_preview and len(locations) > 16,
-        project=reference.project if audit is None else audit.project,
+        projects=list(reference.projects),
+        project=None if audit is None else audit.project,
         present=None if audit is None else audit.present,
         accessible=None if audit is None else audit.accessible,
         error_code=None if audit is None else audit.error_code,
@@ -210,12 +210,12 @@ def _provider_failure(code: ErrorCode, *, missing_sdk: bool = False) -> CliFailu
 
 
 def _canonical_references(references: list[SecretReference]) -> list[SecretReference]:
-    grouped: dict[tuple[str, str], tuple[set[str], bool]] = {}
+    grouped: dict[tuple[str, tuple[str, ...]], tuple[set[str], bool]] = {}
     try:
         for reference in references:
-            if reference.project is None:
-                raise ValueError("project required")
-            identity = (reference.ref, str(UUID(reference.project)))
+            if any(type(project) is not str or not project for project in reference.projects):
+                raise ValueError("projects required")
+            identity = (reference.ref, reference.projects)
             locations, required = grouped.setdefault(identity, (set(), False))
             locations.update(reference.locations)
             grouped[identity] = (locations, required or reference.required)
@@ -224,11 +224,11 @@ def _canonical_references(references: list[SecretReference]) -> list[SecretRefer
     return [
         SecretReference(
             ref=ref,
-            project=project,
+            projects=projects,
             locations=tuple(sorted(locations)),
             required=required,
         )
-        for (ref, project), (locations, required) in sorted(grouped.items())
+        for (ref, projects), (locations, required) in sorted(grouped.items())
     ]
 
 
@@ -272,19 +272,14 @@ def _audit_with_bws(
             raise _provider_failure(mapping[exc.code]) from None
         raise
 
-    expected = {(item.ref, item.project) for item in canonical_references}
-    indexed: dict[tuple[str, str | None], SecretAudit] = {}
-    for audit in audits:
-        identity = (audit.ref, audit.project)
-        if identity not in expected or identity in indexed:
-            raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
-        indexed[identity] = audit
-    if len(indexed) != len(canonical_references):
+    if len(audits) != len(canonical_references):
         raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
-    return (
-        canonical_references,
-        [indexed[(item.ref, item.project)] for item in canonical_references],
-    )
+    for reference, audit in zip(canonical_references, audits, strict=True):
+        if audit.ref != reference.ref or (
+            audit.project is not None and audit.project not in reference.projects
+        ):
+            raise _provider_failure(ErrorCode.PROVIDER_UNAVAILABLE)
+    return canonical_references, audits
 
 
 @click.group()

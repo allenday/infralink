@@ -100,19 +100,9 @@ class Host:
         return self._schema.public_ip
 
     @property
-    def bws_project(self) -> str | None:
-        """Primary secret project declared for this host."""
-        return self._schema.bws_project
-
-    @property
     def bws_machine_account(self) -> str | None:
         """Machine account declared for this host."""
         return self._schema.bws_machine_account
-
-    @property
-    def bws_extra_projects(self) -> tuple[str, ...]:
-        """Additional secret projects declared for this host."""
-        return tuple(self._schema.bws_extra_projects)
 
     @property
     def bws_projects(self) -> tuple[str, ...]:
