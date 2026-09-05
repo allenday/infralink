@@ -538,8 +538,10 @@ def host_bootstrap_operation(
 def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
     """Execute the one typed target-log query shared by all public transports."""
     from infralink.cli.operations import (
+        inspect_local_target_logs,
         inspect_target_diagnostic,
         inspect_target_logs,
+        is_local_target,
         resolve_apply_request,
     )
 
@@ -548,12 +550,15 @@ def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
     if target is None:
         _raise_operation_failure(entity_not_found("host", request.host_ref))
     try:
-        apply_request = resolve_apply_request(sources.registry_path / "hosts", target)
-        lines = (
-            inspect_target_diagnostic(apply_request)
-            if request.diagnostic
-            else inspect_target_logs(apply_request)
-        )
+        if not request.diagnostic and is_local_target(target.uuid):
+            lines = inspect_local_target_logs(target.uuid)
+        else:
+            apply_request = resolve_apply_request(sources.registry_path / "hosts", target)
+            lines = (
+                inspect_target_diagnostic(apply_request)
+                if request.diagnostic
+                else inspect_target_logs(apply_request)
+            )
     except Exception as error:
         _raise_operation_failure(error)
     return HostLogsResult(
@@ -566,17 +571,24 @@ def host_logs_operation(request: HostLogsRequest) -> HostLogsResult:
     "host.status", summary="Read a host timer and latest reconcile status", read_only=True
 )
 def host_status_operation(request: HostTargetRequest) -> HostStatusResult:
-    """Read the declared target's status through the sole SSH provider."""
-    from infralink.cli.operations import inspect_target_status, resolve_apply_request
+    """Read a matching local snapshot or the declared remote target provider."""
+    from infralink.cli.operations import (
+        inspect_local_target_status,
+        inspect_target_status,
+        is_local_target,
+        resolve_apply_request,
+    )
 
     sources = load_registry(request)
     target = sources.registry.get(request.host_ref)
     if target is None:
         _raise_operation_failure(entity_not_found("host", request.host_ref))
     try:
-        values = inspect_target_status(
-            resolve_apply_request(sources.registry_path / "hosts", target)
-        )
+        if is_local_target(target.uuid):
+            values = inspect_local_target_status(target.uuid)
+        else:
+            apply_request = resolve_apply_request(sources.registry_path / "hosts", target)
+            values = inspect_target_status(apply_request)
     except Exception as error:
         _raise_operation_failure(error)
     return HostStatusResult(

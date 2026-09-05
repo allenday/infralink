@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ipaddress
+import json
+import os
 import re
 import subprocess
 import tempfile
@@ -10,6 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
@@ -36,6 +39,8 @@ _JOURNAL_SEPARATOR = "__INFRALINK_JOURNAL__"
 _DIAGNOSTIC_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _DIAGNOSTIC_STAGES = frozenset({"inspect", "validate", "plan", "apply", "verify", "record"})
 _MAX_FAILURE_JOURNAL_LINES = 6
+_MAX_LOCAL_EVIDENCE_BYTES = 64 * 1024
+LOCAL_EVIDENCE_DIR = Path("/var/run/infralink-local-evidence")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SIGNER_PRINCIPAL = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -520,6 +525,112 @@ def inspect_target_logs(request: ApplyRequest) -> list[str]:
 
 def inspect_target_diagnostic(request: ApplyRequest) -> list[str]:
     return SshOperationProvider().target_diagnostic(request)
+
+
+def is_local_target(host_uuid: str) -> bool:
+    """Whether this public invocation names its host's fixed evidence snapshot."""
+
+    return os.environ.get("INFRALINK_HOST_UUID") == host_uuid and os.environ.get(
+        "INFRALINK_LOCAL_EVIDENCE_DIR"
+    ) == str(LOCAL_EVIDENCE_DIR)
+
+
+def inspect_local_target_status(host_uuid: str) -> dict[str, str]:
+    """Read the bounded status snapshot mounted by the canonical host wrapper."""
+
+    _validate_local_evidence_host(host_uuid)
+    timer = _local_properties("systemd-timer.properties", {"ActiveState", "NextElapseUSecRealtime"})
+    service = _local_properties(
+        "systemd-service.properties", {"ActiveState", "Result", "ExecMainStatus"}
+    )
+    evidence = _local_reconcile_evidence(host_uuid)
+    return {
+        "timer_active": timer.get("ActiveState", ""),
+        "timer_next": _systemd_timestamp(timer.get("NextElapseUSecRealtime", "")),
+        "unit_active": service.get("ActiveState", ""),
+        "unit_result": service.get("Result", ""),
+        "unit_status": service.get("ExecMainStatus", ""),
+        "registry_sha": evidence.get("registry_sha", ""),
+        "finished_at": evidence.get("finished_at", ""),
+    }
+
+
+def inspect_local_target_logs(host_uuid: str) -> list[str]:
+    """Read the bounded public journal snapshot mounted by the host wrapper."""
+
+    _validate_local_evidence_host(host_uuid)
+    records: list[dict[str, Any]] = []
+    for line in _read_local_evidence("journal.jsonl").splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return _sanitize_journal(records)
+
+
+def _validate_local_evidence_host(host_uuid: str) -> None:
+    if not is_local_target(host_uuid):
+        raise _provider_failure("Local evidence does not belong to the declared host")
+    if _read_local_evidence("host_uuid").strip() != host_uuid:
+        raise _provider_failure("Local evidence host identity is unavailable")
+
+
+def _read_local_evidence(name: str) -> str:
+    path = LOCAL_EVIDENCE_DIR / name
+    try:
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_size > _MAX_LOCAL_EVIDENCE_BYTES
+        ):
+            raise ValueError
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise _provider_failure("Bounded local host evidence is unavailable") from error
+
+
+def _local_properties(name: str, allowed: set[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in _read_local_evidence(name).splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key not in allowed:
+            continue
+        if key in values:
+            raise _provider_failure("Bounded local host evidence is invalid")
+        values[key] = value
+    return values
+
+
+def _local_reconcile_evidence(host_uuid: str) -> dict[str, str]:
+    path = LOCAL_EVIDENCE_DIR / "reconcile-result.yml"
+    if not path.exists():
+        return {}
+    try:
+        value = yaml.safe_load(_read_local_evidence("reconcile-result.yml"))
+    except yaml.YAMLError as error:
+        raise _provider_failure("Bounded local host evidence is invalid") from error
+    if not isinstance(value, dict) or value.get("host_uuid") != host_uuid:
+        raise _provider_failure("Bounded local host evidence is invalid")
+    result: dict[str, str] = {}
+    sha = value.get("registry_head")
+    if isinstance(sha, str) and _GIT_SHA.fullmatch(sha):
+        result["registry_sha"] = sha
+    finished = value.get("observed_at")
+    if isinstance(finished, str) and re.fullmatch(r"[0-9T:Z-]{20}", finished):
+        result["finished_at"] = finished
+    return result
+
+
+def _systemd_timestamp(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.strptime(value, "%a %Y-%m-%d %H:%M:%S %Z")
+    except ValueError:
+        return ""
+    return parsed.replace(tzinfo=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def resolve_apply_request(registry_path: Path, host: Any) -> ApplyRequest:

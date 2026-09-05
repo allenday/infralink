@@ -16,6 +16,7 @@ from typing import Any
 from click.testing import CliRunner
 from mcp import Client
 
+from infralink.cli import operations
 from infralink.cli.main import cli
 from infralink.cli.operations import ApplyRequest, OperationRecord
 from infralink.mcp_server import create_server
@@ -184,3 +185,125 @@ def test_host_logs_selects_bounded_public_or_diagnostic_evidence_on_both_transpo
     for document in (click_document, diagnostic_document):
         assert document["command"]["parsed"]["path"] == ["host", "logs"]
         assert document["result"]["target"]["id"] == HOST_ID
+
+
+def test_local_host_status_and_logs_use_the_bounded_local_evidence_transport(
+    tmp_path: Path, monkeypatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    values = {
+        "timer_active": "active",
+        "timer_next": "2026-09-06T00:00:00Z",
+        "unit_active": "inactive",
+        "unit_result": "success",
+        "registry_sha": "a" * 40,
+        "finished_at": "2026-09-05T04:00:00Z",
+    }
+    monkeypatch.setenv("INFRALINK_HOST_UUID", HOST_ID)
+    monkeypatch.setenv("INFRALINK_LOCAL_EVIDENCE_DIR", str(operations.LOCAL_EVIDENCE_DIR))
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_local_target_status", lambda _host_uuid: values
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_local_target_logs", lambda _host_uuid: ["local line"]
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_target_status",
+        lambda _request: (_ for _ in ()).throw(AssertionError("must not self-SSH")),
+    )
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_target_logs",
+        lambda _request: (_ for _ in ()).throw(AssertionError("must not self-SSH")),
+    )
+
+    status_result = CliRunner().invoke(
+        cli,
+        ["host", "status", HOST_ID, "--registry", str(registry), "--format", "json"],
+    )
+    assert status_result.exit_code == 0, status_result.output
+    status_document = json.loads(status_result.output)
+    logs_document = asyncio.run(
+        _mcp_call(
+            "host.logs",
+            {"host_ref": HOST_ID, "last_run": True, "registry": str(registry)},
+        )
+    )
+
+    assert status_document["result"]["timer"]["active"] is True
+    assert status_document["result"]["last_reconcile"]["registry_sha"] == "a" * 40
+    assert logs_document["result"]["lines"] == ["local line"]
+
+
+def test_local_evidence_reader_requires_matching_bounded_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    snapshot = tmp_path / "local-evidence"
+    snapshot.mkdir()
+    (snapshot / "host_uuid").write_text(f"{HOST_ID}\n", encoding="utf-8")
+    (snapshot / "systemd-timer.properties").write_text(
+        "ActiveState=active\nNextElapseUSecRealtime=Sat 2026-09-06 00:00:00 UTC\n",
+        encoding="utf-8",
+    )
+    (snapshot / "systemd-service.properties").write_text(
+        "ActiveState=inactive\nResult=success\nExecMainStatus=0\n", encoding="utf-8"
+    )
+    (snapshot / "reconcile-result.yml").write_text(
+        "status: success\n"
+        f"host_uuid: {HOST_ID}\n"
+        f"registry_head: {'a' * 40}\n"
+        "observed_at: '2026-09-05T04:00:00Z'\n",
+        encoding="utf-8",
+    )
+    (snapshot / "journal.jsonl").write_text(
+        '{"ok":false,"error_code":"render_failed","error_stage":"apply","retryable":false}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(operations, "LOCAL_EVIDENCE_DIR", snapshot)
+    monkeypatch.setenv("INFRALINK_HOST_UUID", HOST_ID)
+    monkeypatch.setenv("INFRALINK_LOCAL_EVIDENCE_DIR", str(snapshot))
+
+    request = _apply_request()
+
+    assert operations.inspect_local_target_status(request.host_uuid) == {
+        "timer_active": "active",
+        "timer_next": "2026-09-06T00:00:00Z",
+        "unit_active": "inactive",
+        "unit_result": "success",
+        "unit_status": "0",
+        "registry_sha": "a" * 40,
+        "finished_at": "2026-09-05T04:00:00Z",
+    }
+    assert operations.inspect_local_target_logs(request.host_uuid) == [
+        "code: render_failed",
+        "stage: apply",
+        "retryable: false",
+    ]
+
+
+def test_matching_host_identity_without_local_evidence_uses_the_remote_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    registry = _registry_checkout(tmp_path)
+    request = _apply_request()
+    monkeypatch.setenv("INFRALINK_HOST_UUID", HOST_ID)
+    monkeypatch.setattr("infralink.cli.operations.resolve_apply_request", lambda *_args: request)
+    monkeypatch.setattr(
+        "infralink.cli.operations.inspect_target_status",
+        lambda _request: {
+            "timer_active": "active",
+            "timer_next": "",
+            "unit_active": "inactive",
+            "unit_result": "success",
+            "unit_status": "0",
+            "registry_sha": "a" * 40,
+            "finished_at": "2026-09-05T04:00:00Z",
+        },
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["host", "status", HOST_ID, "--registry", str(registry), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["result"]["last_reconcile"]["registry_sha"] == "a" * 40
