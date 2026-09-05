@@ -301,6 +301,78 @@ def test_docs_is_a_typed_explicit_artifact_write_operation() -> None:
     assert schema["properties"]["registry"]["default"] is None
 
 
+def test_diagram_is_a_typed_explicit_artifact_write_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Diagram generation has one Click/MCP operation and no legacy callback."""
+    definition = operator_surface.operations.describe("diagram")
+
+    assert definition.read_only is False
+    assert definition.input_model.model_fields["output"].is_required()
+    assert {"diagram_format", "group", "include_terminated"} <= set(
+        definition.input_model.model_fields
+    )
+
+    host_id = "11111111-1111-4111-8111-111111111111"
+    registry = tmp_path / "registry"
+    manifest = registry / "hosts" / host_id / "manifest.yml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        f"hosts:\n  {host_id}:\n    canonical_name: host-1\n    status: active\n",
+        encoding="utf-8",
+    )
+    edges = registry / "edges.yml"
+    edges.write_text("edges: []\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    click_result = CliRunner().invoke(
+        cli,
+        [
+            "diagram",
+            "--registry",
+            str(registry),
+            "--edges",
+            str(edges),
+            "--output",
+            "artifacts",
+            "--diagram-format",
+            "all",
+            "--limit",
+            "1",
+            "--format",
+            "json",
+        ],
+    )
+
+    async def call_mcp() -> dict[str, object]:
+        async with Client(operator_mcp_adapter().server) as client:
+            result = await client.call_tool(
+                "diagram",
+                {
+                    "registry": str(registry),
+                    "edges": str(edges),
+                    "output": "artifacts",
+                    "diagram_format": "all",
+                    "limit": 1,
+                },
+            )
+        assert result.is_error is False
+        return result.structured_content
+
+    assert click_result.exit_code == 0, click_result.output
+    click_document = json.loads(click_result.output)
+    mcp_document = asyncio.run(call_mcp())
+    assert click_document["result"] == mcp_document["result"]
+    assert [item["path"] for item in click_document["result"]["artifacts"]["items"]] == [
+        "artifacts/infrastructure.d2"
+    ]
+    continuation = click_document["next_actions"][0]
+    assert continuation["rel"] == "continue"
+    assert continuation["command"].startswith(
+        f"infralink diagram --output artifacts --diagram-format all --collection artifacts --cursor '{{cursor}}' --limit 1 --registry {registry} --edges {edges}"
+    )
+
+
 def test_renderer_projects_concrete_hateoas_actions_into_the_v1_normal_form() -> None:
     definition = operator_surface.operations.describe("host.list")
     renderer = InfralinkEnvelopeRenderer()

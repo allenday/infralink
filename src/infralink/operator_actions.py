@@ -29,6 +29,7 @@ from infralink.cli.operation_contracts import (
 )
 from infralink.fleet.validation import FleetValidationResult
 from infralink.operator_operations.analyze import AnalyzeRequest
+from infralink.operator_operations.diagram import DiagramRequest
 from infralink.operator_operations.docs import DocsRequest
 from infralink.operator_operations.edge_health import EdgeCheckRequest, EdgeResolveRequest
 from infralink.operator_surface import (
@@ -257,6 +258,12 @@ class OperatorActionProvider(ActionProvider):
             and isinstance(result, ArtifactResult)
         ):
             return _docs_actions(request, result)
+        if (
+            operation == "diagram"
+            and isinstance(request, DiagramRequest)
+            and isinstance(result, ArtifactResult)
+        ):
+            return _diagram_actions(request, result)
         if (
             operation == "host.create"
             and isinstance(request, HostCreateRequest)
@@ -651,6 +658,45 @@ def _docs_actions(request: DocsRequest, result: ArtifactResult) -> ActionCollect
                 description="Continue docs artifacts",
                 command_template=tuple(command),
                 operation="docs",
+                slots={
+                    "cursor": {
+                        "type": "string",
+                        "required": True,
+                        "source": "result.artifacts.page.next_cursor",
+                    }
+                },
+            ),
+        ),
+        total=1,
+        returned=1,
+    )
+
+
+def _diagram_actions(request: DiagramRequest, result: ArtifactResult) -> ActionCollection:
+    """Continue a bounded artifact listing without changing its declared render."""
+    if result.artifacts.page.next_cursor is None:
+        return ActionCollection()
+    command = [
+        "diagram",
+        "--output",
+        request.output.as_posix(),
+        "--diagram-format",
+        request.diagram_format,
+    ]
+    if request.group is not None:
+        command.extend(("--group", request.group))
+    if request.include_terminated:
+        command.append("--include-terminated")
+    command.extend(
+        ("--collection", "artifacts", "--cursor", "{cursor}", "--limit", str(request.limit))
+    )
+    return ActionCollection(
+        items=(
+            Action(
+                rel="continue",
+                description="Continue diagram artifacts",
+                command_template=tuple(command),
+                operation="diagram",
                 slots={
                     "cursor": {
                         "type": "string",

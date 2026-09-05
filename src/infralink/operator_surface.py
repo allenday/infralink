@@ -104,6 +104,7 @@ from infralink.observation.topology_diagrams import (
 )
 from infralink.operator_config import OperatorConfigError, configured_registry
 from infralink.operator_operations.analyze import AnalyzeRequest, analyze_declared_registry
+from infralink.operator_operations.diagram import DiagramRequest, generate_declared_diagrams
 from infralink.operator_operations.docs import DocsRequest, generate_declared_docs
 from infralink.operator_operations.doctor import (
     doctor_host_bootstrap_plan as _doctor_host_bootstrap_plan,
@@ -1382,10 +1383,30 @@ def fleet_validate(request: FleetValidateRequest) -> OperationOutcome[FleetValid
     return OperationOutcome(result, exit_code=0 if result.valid else 1)
 
 
+@operator_surface.operation("diagram", summary="Generate declared topology diagrams")  # type: ignore[type-var]
+def diagram(request: DiagramRequest) -> ArtifactResult:
+    """Write deterministic topology diagrams from the selected Registry checkout."""
+    try:
+        return generate_declared_diagrams(request)
+    except OperationError as error:
+        if error.code in {"source_not_found", "source_invalid"}:
+            details = dict(error.details[0]) if error.details else {}
+            details.setdefault("reason", "checkout_root_required")
+            raise OperationError(
+                "input_load_failed",
+                error.message,
+                details=(details,),
+                fix=error.fix,
+            ) from None
+        raise
+    except Exception as error:
+        _raise_operation_failure(error)
+
+
 @operator_surface.operation(  # type: ignore[type-var]
-    "diagram.project", summary="Project a declared V2 topology diagram", read_only=True
+    "topology.diagram", summary="Project a declared V2 topology diagram", read_only=True
 )
-def diagram_project(request: DiagramProjectRequest) -> DiagramProjectResult:
+def topology_diagram(request: DiagramProjectRequest) -> DiagramProjectResult:
     """Render declared V2 topology inline without selecting or changing host state."""
     try:
         projection_result = project_v2_topology_diagram(

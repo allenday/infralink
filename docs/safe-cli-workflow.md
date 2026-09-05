@@ -61,7 +61,9 @@ does not modify the declared source files.
 
 ```sh
 mkdir -p ./artifacts
-infralink --registry registry.yml --edges edges.yml diagram --output ./artifacts --format all
+infralink --registry /srv/infra-registry \
+  --edges /srv/infra-registry/network/main-dev/edges/edges.yml \
+  diagram --output ./artifacts --diagram-format all
 ```
 
 Use `--group GROUP` to limit output to one declared host group. Add

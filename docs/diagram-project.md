@@ -1,14 +1,15 @@
 # V2 Diagram Projection
 
-`infralink diagram project` renders declared
+`infralink topology diagram` renders declared
 `infralink.observation/v2` topology as bounded inline Mermaid or Graphviz DOT
-source. It is the read-only diagram path for agents and operators. The legacy
-`infralink diagram --output ...` artifact writer remains unchanged.
+source. It is the read-only diagram path for agents and operators. The sibling
+`infralink diagram --output ...` command writes legacy Registry-derived
+artifacts.
 
 ```bash
-infralink diagram project --source ./observation
-infralink diagram project --source ./observation --scope host --host HOST_UUID
-infralink diagram project --source ./observation --scope service \
+infralink topology diagram --source ./observation
+infralink topology diagram --source ./observation --scope host --host HOST_UUID
+infralink topology diagram --source ./observation --scope service \
   --service HOST_UUID/SERVICE_INSTANCE_ID --syntax dot
 ```
 
@@ -38,6 +39,6 @@ node and edge counts, and the bounded source string. Rendering uses the shared
 V2 topology projection and `render_v2_mermaid` or `render_v2_dot`; it never
 uses legacy generators or writes files.
 
-Native MCP exposes the equivalent `infralink_diagram_project` tool. Its only
+Native MCP exposes the equivalent `infralink_topology_diagram` tool. Its only
 inputs are `source`, `scope`, `host`, `service`, and `syntax`; it returns the
 same typed envelope as the CLI.

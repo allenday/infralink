@@ -13,7 +13,7 @@ from infralink.cli.main import cli
 from infralink.mcp_server import create_server
 
 
-def test_diagram_project_has_click_and_mcp_parity(tmp_path: Path) -> None:
+def test_topology_diagram_has_click_and_mcp_parity(tmp_path: Path) -> None:
     source = tmp_path / "topology.yml"
     source.write_text(
         "schema_version: infralink.observation/v2\n"
@@ -22,13 +22,13 @@ def test_diagram_project_has_click_and_mcp_parity(tmp_path: Path) -> None:
     )
     cli_result = CliRunner().invoke(
         cli,
-        ["diagram", "project", "--source", str(source), "--format", "json"],
+        ["topology", "diagram", "--source", str(source), "--format", "json"],
     )
     assert cli_result.exit_code == 0, cli_result.output
 
     async def exercise() -> dict[str, object]:
         async with Client(create_server()) as client:
-            result = await client.call_tool("diagram.project", {"source": [str(source)]})
+            result = await client.call_tool("topology.diagram", {"source": [str(source)]})
         assert result.is_error is False
         return result.structured_content
 
